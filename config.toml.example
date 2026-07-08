@@ -1,0 +1,95 @@
+# Scardice Story Painter 配置示例
+# 环境变量会覆盖本文件中的同名配置。生产环境建议复制到
+# /etc/scardice-story-painter/config.toml 后按实际域名和存储路径修改。
+
+[server]
+# HTTP 服务监听地址。
+# "0.0.0.0" 表示监听所有网卡，适合容器或服务器部署；"127.0.0.1" 只允许本机访问，适合反向代理后端或本地开发。
+host = "0.0.0.0"
+
+# HTTP 服务监听端口。
+# 改为 80/443 通常需要额外权限；反向代理部署时一般保持 3000，并由 Nginx/Caddy 转发。
+port = 3000
+
+# 是否信任 X-Forwarded-*、X-Real-IP、CF-Connecting-IP 等代理头。
+# false 时客户端 IP 和外部协议/域名取自直连请求，能避免伪造代理头；true 时必须确保前面只有可信反向代理会设置这些头。
+trust_proxy = false
+
+# 允许访问后端的 Host 头白名单。
+# 列表外 Host 会返回 400，可防止 Host header poisoning 影响 CORS 和分享链接生成；生产环境必须加入你的真实域名。
+allowed_hosts = ["localhost", "127.0.0.1", "::1"]
+
+[storage]
+# SQLite 数据库路径。
+# 相对路径会以项目根目录为基准；系统服务部署建议使用 /var/lib/scardice-story-painter/scardice.db，避免工作目录变化导致新建空库。
+sqlite_path = "./data/scardice.db"
+
+[app]
+# 生成日志查看链接时使用的前端地址。
+# 留空时使用当前请求来源，适合前后端一体部署；跨域部署或反向代理多域名时应固定为公开前端 URL，避免分享链接域名不稳定。
+frontend_url = ""
+
+# 日志保留天数。
+# 上传后的后台清理和管理端手动清理都会按这个天数删除更旧记录；数值越小，存储占用越低但历史日志更早失效。
+log_retention_days = 60
+
+# 单次上传请求大小限制，单位 MB。
+# 数值越大越能容纳大型日志，但也会提高内存、磁盘和带宽消耗；超过限制会直接返回 413。
+max_upload_mb = 5
+
+# 服务启动时是否立即清理一次过期日志。
+# true 适合长期运行服务重启后快速回收空间；false 可避免启动阶段执行额外数据库写操作。
+cleanup_on_start = false
+
+# 每次上传成功后是否后台清理过期日志。
+# true 可持续控制数据库体积；false 会减少上传后的后台任务，但需要管理员定期在后台手动清理。
+cleanup_after_upload = true
+
+# 备用上传 API 地址。
+# 主库写入失败时会把日志转发到该地址；留空则主库失败时直接返回错误。多台服务可配置成级联备用链路。
+backup_upload_api = ""
+
+[admin]
+# 管理后台密码。
+# 留空时服务启动会生成一次性 UUID 并打印在启动日志中；设置固定值后重启不变，但需要自行保护配置文件权限。
+password = ""
+
+[metrics]
+# 是否开启 /metrics。
+# false 时 /metrics 返回 404；true 时输出 Prometheus 文本指标，建议只对内网或监控系统开放。
+enabled = false
+
+# /metrics Bearer token。
+# 留空且 enabled=true 时 metrics 公开可读；设置后必须带 Authorization: Bearer <token> 才能读取。
+token = ""
+
+[security]
+# 上传内容注入拦截开关。
+# true 时会扫描 API 和前端上传的日志，命中 XSS/SQLi/SSTI/命令注入等危险片段会拒绝写库并记录审计日志；false 时仅保留基础上传校验。
+injection_guard_enabled = true
+
+# 安全审计日志路径。
+# 注入拦截命中后会按 JSON Lines 追加记录 IP、接口、日志名、uniform_id、内容哈希、命中语句和上下文；相对路径以项目根目录为基准。
+audit_log_path = "./data/security-audit.log"
+
+# 安全拦截警告中的调笑语句数组。
+# 命中拦截时会随机抽一条，并以“某人”为来源展示；留空时使用内置默认句。
+warning_quotes = [
+  "Hey bro, what the fuck are you doing? Stop dreaming about being a hacker, you low-tech noob! 👎👎👎 Wake up, the floor is freezing!",
+]
+
+# 管理后台疑似爆破临时封禁开关。
+# true 时登录失败达到阈值会封禁来源 IP，并重定向到安全拦截页；false 时只按普通登录失败处理。
+admin_bruteforce_block_enabled = true
+
+# 爆破判定阈值，窗口期内失败次数达到该值后触发封禁。
+# 数值越小越敏感，误封概率更高；数值越大越宽松。
+admin_bruteforce_max_attempts = 8
+
+# 爆破统计窗口，单位秒。
+# 超过该时间未达到阈值会重置失败计数和凭据列表。
+admin_bruteforce_window_seconds = 60
+
+# 爆破触发后的临时封禁时长，单位秒。
+# 封禁期间该 IP 访问普通页面/API 会被重定向到安全拦截页。
+admin_bruteforce_block_seconds = 60

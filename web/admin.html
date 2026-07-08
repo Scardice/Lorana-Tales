@@ -1,0 +1,833 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="referrer" content="never" />
+    <title>Scardice Log Admin</title>
+    <link rel="icon" type="image/png" href="/icon.png" />
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #17202a;
+        --muted: #66717f;
+        --line: #d8dde5;
+        --paper: #f7f7f3;
+        --panel: #ffffff;
+        --soft: #eef2f5;
+        --blue: #225da8;
+        --green: #147157;
+        --amber: #986515;
+        --red: #b12b3a;
+        --grid-blue: rgba(34, 93, 168, 0.055);
+        --grid-green: rgba(20, 113, 87, 0.055);
+        --button-bg: rgba(255, 255, 255, 0.82);
+        --input-bg: #ffffff;
+        --login-bg: rgba(255, 255, 255, 0.9);
+        --pill-bg: rgba(255, 255, 255, 0.74);
+        --row-hover: #f9fafb;
+        --drawer-backdrop: rgba(17, 24, 39, 0.34);
+        --drawer-panel: #fcfcfa;
+        --meta-panel: #ffffff;
+        --pre-ink: #dce6f4;
+        --pre-bg: #111820;
+        --pre-line: #263241;
+        --toast-shadow: 0 10px 26px rgba(0, 0, 0, 0.12);
+        --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+        --sans:
+          ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          "PingFang SC", "Microsoft YaHei", sans-serif;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          color-scheme: dark;
+          --ink: #e6edf3;
+          --muted: #9aa8b7;
+          --line: #2c3846;
+          --paper: #0e1215;
+          --panel: #151b20;
+          --soft: #1d252b;
+          --blue: #2f6fcb;
+          --green: #22845f;
+          --amber: #d8ad5b;
+          --red: #ff7b8a;
+          --grid-blue: rgba(47, 111, 203, 0.1);
+          --grid-green: rgba(34, 132, 95, 0.08);
+          --button-bg: rgba(21, 27, 32, 0.86);
+          --input-bg: #10161b;
+          --login-bg: rgba(21, 27, 32, 0.92);
+          --pill-bg: rgba(21, 27, 32, 0.8);
+          --row-hover: #1a232b;
+          --drawer-backdrop: rgba(0, 0, 0, 0.62);
+          --drawer-panel: #10161b;
+          --meta-panel: #151b20;
+          --pre-ink: #dcecff;
+          --pre-bg: #080d12;
+          --pre-line: #263646;
+          --toast-shadow: 0 12px 32px rgba(0, 0, 0, 0.38);
+        }
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-width: 320px;
+        min-height: 100vh;
+        color: var(--ink);
+        font-family: var(--sans);
+        background:
+          linear-gradient(90deg, var(--grid-blue) 1px, transparent 1px),
+          linear-gradient(var(--grid-green) 1px, transparent 1px),
+          var(--paper);
+        background-size: 40px 40px;
+      }
+
+      button,
+      input,
+      select {
+        font: inherit;
+      }
+
+      button {
+        cursor: pointer;
+      }
+
+      code,
+      pre {
+        font-family: var(--mono);
+      }
+
+      .shell {
+        width: min(1240px, calc(100% - 28px));
+        margin: 0 auto;
+        padding: 22px 0 44px;
+      }
+
+      .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+        min-height: 54px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 11px;
+        min-width: 0;
+      }
+
+      .brand img {
+        width: 30px;
+        height: 30px;
+      }
+
+      .brand strong {
+        display: block;
+        font-size: 15px;
+        line-height: 1.2;
+      }
+
+      .brand span {
+        display: block;
+        color: var(--muted);
+        font-size: 12px;
+        margin-top: 2px;
+      }
+
+      .nav {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+      }
+
+      .button,
+      .nav a {
+        min-height: 34px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--button-bg);
+        color: var(--ink);
+        padding: 8px 12px;
+        text-decoration: none;
+        font-weight: 700;
+        font-size: 12px;
+        line-height: 1;
+      }
+
+      .button.primary {
+        color: #fff;
+        border-color: var(--blue);
+        background: var(--blue);
+      }
+
+      .button.danger {
+        color: var(--red);
+      }
+
+      .button.warning {
+        color: var(--amber);
+      }
+
+      .button:disabled {
+        cursor: not-allowed;
+        opacity: 0.52;
+      }
+
+      .hero {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 360px;
+        gap: 20px;
+        align-items: end;
+        padding: 32px 0 20px;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: clamp(28px, 4vw, 52px);
+        line-height: 1;
+        letter-spacing: 0;
+      }
+
+      .subtle {
+        color: var(--muted);
+        margin: 12px 0 0;
+        line-height: 1.65;
+        font-size: 14px;
+      }
+
+      .stat-strip {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        border: 1px solid var(--line);
+        background: var(--panel);
+      }
+
+      .stat {
+        padding: 14px 16px;
+        border-left: 1px solid var(--line);
+      }
+
+      .stat:first-child {
+        border-left: 0;
+      }
+
+      .stat span {
+        display: block;
+        color: var(--muted);
+        font-size: 11px;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+
+      .stat strong {
+        display: block;
+        margin-top: 7px;
+        font-size: 20px;
+        line-height: 1;
+      }
+
+      .login {
+        width: min(440px, 100%);
+        margin: 70px auto 0;
+        border: 1px solid var(--line);
+        background: var(--login-bg);
+        padding: 22px;
+      }
+
+      .login h1 {
+        font-size: 26px;
+      }
+
+      .field {
+        display: grid;
+        gap: 7px;
+        margin-top: 18px;
+      }
+
+      .field label {
+        color: var(--muted);
+        font-weight: 700;
+        font-size: 12px;
+      }
+
+      .field input,
+      .toolbar input,
+      .toolbar select {
+        width: 100%;
+        min-height: 38px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--input-bg);
+        color: var(--ink);
+        padding: 8px 10px;
+      }
+
+      .error {
+        color: var(--red);
+        min-height: 20px;
+        margin: 12px 0 0;
+        font-size: 13px;
+      }
+
+      .toolbar {
+        display: grid;
+        grid-template-columns: minmax(220px, 1fr) 132px auto auto auto;
+        gap: 10px;
+        align-items: center;
+        margin: 18px 0 12px;
+      }
+
+      .ops {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin: 0 0 12px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .ops-left,
+      .ops-right {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        min-height: 28px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: var(--pill-bg);
+        color: var(--ink);
+        padding: 5px 10px;
+        font-weight: 700;
+      }
+
+      .log-list {
+        border: 1px solid var(--line);
+        background: var(--panel);
+      }
+
+      .log-row {
+        display: grid;
+        grid-template-columns: 28px minmax(0, 1fr) 118px 122px 168px 132px auto;
+        gap: 12px;
+        align-items: center;
+        min-height: 70px;
+        padding: 14px;
+        border-top: 1px solid var(--line);
+      }
+
+      .log-row:first-child {
+        border-top: 0;
+      }
+
+      .log-row:hover {
+        background: var(--row-hover);
+      }
+
+      .check-cell {
+        display: grid;
+        place-items: center;
+      }
+
+      .check-cell input {
+        width: 16px;
+        height: 16px;
+        accent-color: var(--blue);
+      }
+
+      .log-name {
+        min-width: 0;
+      }
+
+      .log-name strong {
+        display: block;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 15px;
+      }
+
+      .log-name code {
+        display: block;
+        color: var(--muted);
+        overflow-wrap: anywhere;
+        margin-top: 4px;
+        font-size: 11px;
+      }
+
+      .metric > span,
+      .time > span,
+      .ip > span {
+        display: block;
+        color: var(--muted);
+        font-size: 11px;
+        margin-bottom: 4px;
+      }
+
+      .metric > strong,
+      .time > strong,
+      .ip > strong {
+        display: block;
+        overflow-wrap: anywhere;
+        font-size: 13px;
+      }
+
+      .metric-size-lines {
+        display: grid;
+        gap: 2px;
+        line-height: 1.35;
+      }
+
+      .metric-size-lines span {
+        display: block;
+        white-space: nowrap;
+      }
+
+      .row-actions,
+      .drawer-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .empty {
+        padding: 42px 18px;
+        color: var(--muted);
+        text-align: center;
+      }
+
+      .pager {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 8px;
+        margin-top: 12px;
+      }
+
+      .pager span {
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .hidden {
+        display: none;
+      }
+
+      .drawer {
+        position: fixed;
+        inset: 0;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(360px, 760px);
+        background: var(--drawer-backdrop);
+        z-index: 20;
+      }
+
+      .drawer.hidden {
+        display: none;
+      }
+
+      .drawer-panel {
+        grid-column: 2;
+        background: var(--drawer-panel);
+        border-left: 1px solid var(--line);
+        min-height: 100vh;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .drawer-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 12px;
+        padding: 18px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .drawer-title {
+        min-width: 0;
+      }
+
+      .drawer-title strong {
+        display: block;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 18px;
+      }
+
+      .drawer-title code {
+        display: block;
+        color: var(--muted);
+        overflow-wrap: anywhere;
+        margin-top: 5px;
+        font-size: 12px;
+      }
+
+      .drawer-meta {
+        display: grid;
+        grid-template-columns: repeat(6, minmax(0, 1fr));
+        gap: 1px;
+        background: var(--line);
+        border-bottom: 1px solid var(--line);
+      }
+
+      .drawer-meta div {
+        background: var(--meta-panel);
+        padding: 12px 14px;
+      }
+
+      .drawer-meta span {
+        display: block;
+        color: var(--muted);
+        font-size: 11px;
+        margin-bottom: 5px;
+      }
+
+      .drawer-meta strong {
+        display: block;
+        overflow-wrap: anywhere;
+        font-size: 13px;
+      }
+
+      .content-wrap {
+        min-height: 0;
+        overflow: auto;
+        padding: 16px;
+      }
+
+      pre {
+        margin: 0;
+        min-height: 100%;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        color: var(--pre-ink);
+        background: var(--pre-bg);
+        border: 1px solid var(--pre-line);
+        padding: 16px;
+        font-size: 12px;
+        line-height: 1.65;
+      }
+
+      .loading {
+        color: var(--muted);
+        padding: 24px 0;
+        text-align: center;
+      }
+
+      @media (max-width: 1080px) {
+        .hero,
+        .toolbar,
+        .log-row {
+          grid-template-columns: 1fr;
+        }
+
+        .check-cell {
+          justify-content: flex-start;
+        }
+
+        .stat-strip {
+          grid-template-columns: 1fr;
+        }
+
+        .stat,
+        .stat:first-child {
+          border-left: 0;
+          border-top: 1px solid var(--line);
+        }
+
+        .stat:first-child {
+          border-top: 0;
+        }
+
+        .drawer {
+          grid-template-columns: 1fr;
+        }
+
+        .drawer-panel {
+          grid-column: 1;
+        }
+      }
+
+      @media (max-width: 620px) {
+        .shell {
+          width: min(100% - 20px, 1240px);
+          padding-top: 14px;
+        }
+
+        .topbar {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+
+        .drawer-meta {
+          grid-template-columns: 1fr;
+        }
+      }
+      /* ---- toast stack ---- */
+      #toast-host {
+        position: fixed;
+        top: 22px;
+        left: 50%;
+        z-index: 100;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 8px;
+        pointer-events: none;
+        width: min(460px, calc(100vw - 32px));
+        transform: translateX(-50%);
+      }
+
+      .toast {
+        pointer-events: auto;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        width: fit-content;
+        max-width: 100%;
+        padding: 12px 18px;
+        border-radius: 8px;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-left-width: 3px;
+        box-shadow: var(--toast-shadow);
+        font-size: 14px;
+        line-height: 1.4;
+        color: var(--ink);
+        animation: toast-in 0.22s ease-out;
+        transition:
+          opacity 0.22s ease,
+          transform 0.22s ease;
+      }
+
+      .toast.is-leaving {
+        opacity: 0;
+        transform: translateY(-10px);
+      }
+
+      .toast__icon {
+        flex-shrink: 0;
+        font-weight: 700;
+      }
+
+      .toast--success {
+        border-left-color: var(--green);
+      }
+      .toast--error {
+        border-left-color: var(--red);
+      }
+      .toast--warning {
+        border-left-color: var(--amber);
+      }
+      .toast--info {
+        border-left-color: var(--blue);
+      }
+
+      @keyframes toast-in {
+        from {
+          opacity: 0;
+          transform: translateY(-18px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div class="brand">
+          <img src="/icon.png" alt="" />
+          <span>
+            <strong>Scardice Log Admin</strong>
+            <span>runtime protected console</span>
+          </span>
+        </div>
+        <nav class="nav">
+          <a href="/">着色器</a>
+          <a href="/api-docs">API</a>
+          <button id="logoutButton" class="button danger hidden" type="button">
+            退出
+          </button>
+        </nav>
+      </header>
+
+      <section id="loginView" class="login hidden">
+        <h1>管理登录</h1>
+        <p class="subtle">
+          输入 `config.toml` 中的管理密码；未配置时使用服务启动日志里的临时
+          UUID。
+        </p>
+        <form id="loginForm">
+          <div class="field">
+            <label for="password">管理密码</label>
+            <input
+              id="password"
+              name="password"
+              type="password"
+              autocomplete="current-password"
+              required
+            />
+          </div>
+          <p id="loginError" class="error"></p>
+          <button id="loginButton" class="button primary" type="submit">
+            登录
+          </button>
+        </form>
+      </section>
+
+      <section id="adminView" class="hidden">
+        <div class="hero">
+          <div>
+            <h1>日志管理</h1>
+            <p class="subtle">
+              索引视图默认显示最近上传的日志；筛选范围为名称、IP、key和时间。
+            </p>
+          </div>
+          <div class="stat-strip">
+            <div class="stat">
+              <span>total</span>
+              <strong id="totalCount">0</strong>
+            </div>
+            <div class="stat">
+              <span>page</span>
+              <strong id="pageInfo">1 / 1</strong>
+            </div>
+            <div class="stat">
+              <span>page size</span>
+              <strong id="sizeInfo">20</strong>
+            </div>
+          </div>
+        </div>
+
+        <form id="searchForm" class="toolbar">
+          <input
+            id="searchInput"
+            type="search"
+            placeholder="筛选日志名、IP、key、时间"
+          />
+          <select id="pageSizeSelect">
+            <option value="20">20 / 页</option>
+            <option value="50">50 / 页</option>
+            <option value="100">100 / 页</option>
+          </select>
+          <button class="button primary" type="submit">筛选</button>
+          <button id="resetButton" class="button" type="button">重置</button>
+          <button id="refreshButton" class="button" type="button">刷新</button>
+        </form>
+
+        <div class="ops">
+          <div class="ops-left">
+            <span id="filterInfo" class="pill">最近上传</span>
+            <span id="selectionCount">已选 0</span>
+          </div>
+          <div class="ops-right">
+            <button
+              id="deleteSelectedButton"
+              class="button danger"
+              type="button"
+              disabled
+            >
+              删除已选
+            </button>
+            <button id="cleanupButton" class="button warning" type="button">
+              清理过期
+            </button>
+            <button id="maintenanceButton" class="button" type="button">
+              维护数据库
+            </button>
+          </div>
+        </div>
+
+        <div id="listStatus" class="loading">加载中</div>
+        <div id="logList" class="log-list hidden"></div>
+        <div class="pager">
+          <button id="prevButton" class="button" type="button">上一页</button>
+          <span id="pagerText">1 / 1</span>
+          <button id="nextButton" class="button" type="button">下一页</button>
+        </div>
+      </section>
+      <div id="toast-host" aria-live="polite"></div>
+    </main>
+
+    <aside
+      id="drawer"
+      class="drawer hidden"
+      aria-hidden="true"
+      aria-modal="true"
+      role="dialog"
+    >
+      <section class="drawer-panel">
+        <div class="drawer-head">
+          <div class="drawer-title">
+            <strong id="detailName">日志</strong>
+            <code id="detailKey"></code>
+          </div>
+          <div class="drawer-actions">
+            <button id="openPainterButton" class="button primary" type="button">
+              染色器
+            </button>
+            <button id="rawExportButton" class="button" type="button">
+              导出 JSON
+            </button>
+            <button id="deleteDetailButton" class="button danger" type="button">
+              删除
+            </button>
+            <button id="closeDrawer" class="button" type="button">关闭</button>
+          </div>
+        </div>
+        <div class="drawer-meta">
+          <div>
+            <span>消息</span>
+            <strong id="detailCount">0</strong>
+          </div>
+          <div>
+            <span>空间</span>
+            <strong id="detailSize">0 B</strong>
+          </div>
+          <div>
+            <span>客户端</span>
+            <strong id="detailClient">unknown</strong>
+          </div>
+          <div>
+            <span>版本</span>
+            <strong id="detailVersion">unknown</strong>
+          </div>
+          <div>
+            <span>上传时间</span>
+            <strong id="detailTime">unknown</strong>
+          </div>
+          <div>
+            <span>上传 IP</span>
+            <strong id="detailIp">unknown</strong>
+          </div>
+        </div>
+        <div class="content-wrap">
+          <pre id="detailContent">加载中</pre>
+        </div>
+      </section>
+    </aside>
+
+    <script type="module" src="/src/pages/admin.ts"></script>
+  </body>
+</html>

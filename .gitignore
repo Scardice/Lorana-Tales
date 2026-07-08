@@ -1,0 +1,59 @@
+# Dependencies
+node_modules/
+
+# Package manager caches used by this project
+.pnpm-store/
+.bun-cache/
+
+# Build output from package.json / vite.config.ts / tsconfig.server.json
+dist/
+out/
+build/
+.vite/
+vite.config.ts.timestamp-*.mjs
+
+# Generated TypeScript artifacts
+*.tsbuildinfo
+web/src/components.d.ts
+
+# Test / coverage artifacts
+coverage/
+
+# Runtime data and SQLite databases
+/data/
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+
+# Logs
+/logs/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+bun-debug.log*
+
+# Environment and local config
+.env
+.env.*
+!.env.example
+!.env.sample
+/config.toml
+config.local.toml
+*.local.toml
+
+# Temporary files and backups
+/tmp/
+/temp/
+/.cache/
+/backup-*/
+*.tmp
+*.bak
+
+# Local editor / OS files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo

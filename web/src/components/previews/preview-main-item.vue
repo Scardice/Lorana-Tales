@@ -1,0 +1,127 @@
+<template>
+  <!-- 这句是为了防止空元素占行 -->
+  <div class="list-item-dynamic">
+    <!-- {{  source  }} -->
+    <span
+      style="color: #aaa"
+      class="_time"
+      v-if="!store.exportOptions.timeHide"
+      >{{ timeSolve(source) }}</span
+    >
+    <span :style="{ color: colorByName(source) }" class="_nickname">{{
+      nicknameSolve(source)
+    }}</span>
+    <span
+      class="_message"
+      :style="{ color: colorByName(source) }"
+      v-html="previewMessageSolve(source)"
+    ></span>
+  </div>
+</template>
+
+<script setup lang="ts">
+import dayjs from "dayjs";
+import { type LogItem, packNameId } from "~/logManager/types";
+import { useStore } from "~/store";
+import {
+  escapeHTML,
+  getCanvasFontSize,
+  getTextWidth,
+  msgAtFormat,
+  msgCommandFormat,
+  msgIMUseridFormat,
+  msgImageFormat,
+  msgOffTopicFormat,
+} from "~/utils";
+
+const store = useStore();
+
+defineProps({
+  source: {
+    type: Object as () => LogItem,
+    default: () => {},
+  },
+});
+
+const colorByName = (i: LogItem) => {
+  // const info = store.pcMap.get(`${i.nickname}-`);
+  const info = store.pcMap.get(packNameId(i));
+  return info?.color;
+};
+
+const nicknameSolve = (i: LogItem) => {
+  let userid = `(${i.IMUserId})`;
+  const options = store.exportOptions;
+  if (options.userIdHide) {
+    userid = "";
+  }
+  return `<${i.nickname}${userid}>:`;
+};
+
+const timeSolve = (i: LogItem) => {
+  let timeText = i.timeText || (i.time === undefined ? "" : i.time.toString());
+  const options = store.exportOptions;
+  if (options.timeHide) {
+    timeText = "";
+  } else {
+    if (typeof i.time === "number" && i.time !== 0) {
+      timeText = dayjs
+        .unix(i.time)
+        .format(options.yearHide ? "HH:mm:ss" : "YYYY/MM/DD HH:mm:ss");
+    } else if (i.time !== undefined) {
+      if (i.timeText) {
+        timeText = i.timeText;
+      } else {
+        timeText = dayjs
+          .unix(i.time)
+          .format(options.yearHide ? "HH:mm:ss" : "YYYY/MM/DD HH:mm:ss");
+      }
+    }
+  }
+  return timeText;
+};
+
+const nameReplace = (msg: string) => {
+  for (let i of store.pcList) {
+    msg = msg.replaceAll(`<${i.name}>`, `${i.name}`);
+  }
+  return msg;
+};
+
+let canvasFontSize = "";
+
+const previewMessageSolve = (i: LogItem) => {
+  if (store.isHiddenLogItem(i)) return "";
+
+  let msg = msgImageFormat(escapeHTML(i.message), store.exportOptions, true);
+  msg = msgAtFormat(msg, store.pcList);
+  msg = msgOffTopicFormat(msg, store.exportOptions, i.isDice);
+  msg = msgCommandFormat(msg, store.exportOptions);
+  msg = msgIMUseridFormat(msg, store.exportOptions, i.isDice);
+  msg = msgOffTopicFormat(msg, store.exportOptions, i.isDice); // 再过滤一次
+
+  const prefix =
+    (!store.exportOptions.timeHide ? `${timeSolve(i)}` : "") + nicknameSolve(i);
+  if (i.isDice) {
+    msg = nameReplace(msg);
+  }
+
+  let length = 0;
+  if (store.exportOptions.textIndentFirst) {
+    if (canvasFontSize === "") {
+      canvasFontSize = getCanvasFontSize(
+        document.getElementById("preview") ?? document.body,
+      );
+    }
+    length = getTextWidth(prefix, canvasFontSize);
+  }
+
+  // return msg.replaceAll('<br />', '\n').replaceAll('\n', '<br /> ' + `<span style="color:white">${prefix}</span>`)
+  return msg
+    .replaceAll("<br />", "\n")
+    .replaceAll(
+      /\n([^\n]+)/g,
+      `<p style="text-indent: ${length}px; margin-top: 0; margin-bottom: 0">$1</p>`,
+    );
+};
+</script>

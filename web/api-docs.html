@@ -1,0 +1,759 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="referrer" content="never" />
+    <title>Scardice Log API</title>
+    <link rel="icon" type="image/png" href="/icon.png" />
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #1e252f;
+        --muted: #626d7c;
+        --line: #d9dee7;
+        --paper: #fbfbf8;
+        --panel: #ffffff;
+        --soft: #f0f3f7;
+        --green: #14845b;
+        --blue: #175bc2;
+        --amber: #9b6500;
+        --red: #b4232f;
+        --shadow: 0 18px 42px rgba(31, 39, 53, 0.08);
+        --grid-blue: rgba(23, 91, 194, 0.06);
+        --grid-green: rgba(20, 132, 91, 0.055);
+        --control-bg: rgba(255, 255, 255, 0.74);
+        --control-hover-bg: #ffffff;
+        --control-hover-line: #aab3c1;
+        --signal-bg: rgba(255, 255, 255, 0.78);
+        --prefix-bg: #f7f8fa;
+        --prefix-line: #e3e7ee;
+        --panel-bg: rgba(255, 255, 255, 0.86);
+        --field-line: #edf0f4;
+        --field-code: #263342;
+        --status-bg: #ffffff;
+        --pre-ink: #dbe7ff;
+        --pre-bg: #111820;
+        --toast-bg: #121923;
+        --toast-ink: #ffffff;
+        --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+        --sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          "PingFang SC", "Microsoft YaHei", sans-serif;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          color-scheme: dark;
+          --ink: #e6edf3;
+          --muted: #9aa8b7;
+          --line: #2c3846;
+          --paper: #0e1215;
+          --panel: #151b20;
+          --soft: #1d252b;
+          --green: #1f7d5d;
+          --blue: #2f6fcb;
+          --amber: #9a6500;
+          --red: #ff7b8a;
+          --shadow: 0 18px 42px rgba(0, 0, 0, 0.34);
+          --grid-blue: rgba(47, 111, 203, 0.1);
+          --grid-green: rgba(31, 125, 93, 0.08);
+          --control-bg: rgba(21, 27, 32, 0.84);
+          --control-hover-bg: #1b252e;
+          --control-hover-line: #3c4a5a;
+          --signal-bg: rgba(21, 27, 32, 0.82);
+          --prefix-bg: #111820;
+          --prefix-line: #2c3846;
+          --panel-bg: rgba(21, 27, 32, 0.88);
+          --field-line: #273441;
+          --field-code: #d4e1ee;
+          --status-bg: #151b20;
+          --pre-ink: #dcecff;
+          --pre-bg: #080d12;
+          --toast-bg: #e6edf3;
+          --toast-ink: #0e1215;
+        }
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        min-width: 320px;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        color: var(--ink);
+        font-family: var(--sans);
+        background:
+          linear-gradient(90deg, var(--grid-blue) 1px, transparent 1px),
+          linear-gradient(var(--grid-green) 1px, transparent 1px),
+          var(--paper);
+        background-size: 48px 48px;
+      }
+
+      a {
+        color: inherit;
+      }
+
+      .shell {
+        width: min(1160px, calc(100% - 32px));
+        margin: 0 auto;
+        padding: 28px 0 56px;
+      }
+
+      .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        min-height: 52px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        min-width: 0;
+      }
+
+      .brand img {
+        width: 30px;
+        height: 30px;
+      }
+
+      .brand strong {
+        display: block;
+        font-size: 15px;
+        line-height: 1.2;
+      }
+
+      .brand span {
+        color: var(--muted);
+        display: block;
+        font-size: 12px;
+        margin-top: 2px;
+      }
+
+      .nav {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+      }
+
+      .nav a,
+      .copy {
+        appearance: none;
+        border: 1px solid var(--line);
+        background: var(--control-bg);
+        color: var(--ink);
+        border-radius: 6px;
+        min-height: 34px;
+        padding: 7px 11px;
+        text-decoration: none;
+        font: 600 12px/1 var(--sans);
+        cursor: pointer;
+      }
+
+      .nav a:hover,
+      .copy:hover {
+        border-color: var(--control-hover-line);
+        background: var(--control-hover-bg);
+      }
+
+      .intro {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 360px;
+        gap: 28px;
+        align-items: end;
+        padding: 44px 0 30px;
+      }
+
+      h1 {
+        margin: 0;
+        max-width: 720px;
+        font-size: clamp(32px, 5vw, 68px);
+        line-height: 0.96;
+        letter-spacing: 0;
+      }
+
+      .lead {
+        max-width: 720px;
+        color: var(--muted);
+        font-size: 16px;
+        line-height: 1.8;
+        margin: 18px 0 0;
+      }
+
+      .signal {
+        border: 1px solid var(--line);
+        background: var(--signal-bg);
+        box-shadow: var(--shadow);
+        border-radius: 8px;
+        padding: 18px;
+      }
+
+      .signal-label {
+        color: var(--muted);
+        font-size: 12px;
+        margin-bottom: 10px;
+      }
+
+      .prefixes {
+        display: grid;
+        gap: 8px;
+      }
+
+      code,
+      pre {
+        font-family: var(--mono);
+      }
+
+      .prefix {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        background: var(--prefix-bg);
+        border: 1px solid var(--prefix-line);
+        border-radius: 6px;
+        padding: 10px 12px;
+        min-width: 0;
+      }
+
+      .prefix code {
+        font-size: 13px;
+        overflow-wrap: anywhere;
+      }
+
+      .section {
+        border-top: 1px solid var(--line);
+        padding: 28px 0;
+      }
+
+      .section-head {
+        display: flex;
+        align-items: end;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 14px;
+      }
+
+      h2 {
+        margin: 0;
+        font-size: 20px;
+        line-height: 1.2;
+      }
+
+      .hint {
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.6;
+        margin: 0;
+      }
+
+      .endpoint-list {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        overflow: hidden;
+        background: var(--panel);
+      }
+
+      .endpoint {
+        display: grid;
+        grid-template-columns: 82px minmax(0, 1fr) auto;
+        gap: 14px;
+        align-items: start;
+        padding: 16px;
+        border-top: 1px solid var(--line);
+      }
+
+      .endpoint:first-child {
+        border-top: 0;
+      }
+
+      .method {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 64px;
+        height: 28px;
+        border-radius: 5px;
+        color: #fff;
+        font: 800 11px/1 var(--sans);
+      }
+
+      .get {
+        background: var(--blue);
+      }
+
+      .put {
+        background: var(--amber);
+      }
+
+      .post {
+        background: var(--green);
+      }
+
+      .path {
+        font: 700 14px/1.45 var(--mono);
+        overflow-wrap: anywhere;
+      }
+
+      .desc {
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.55;
+        margin-top: 5px;
+      }
+
+      .copy {
+        white-space: nowrap;
+      }
+
+      .columns {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 18px;
+      }
+
+      .panel {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel-bg);
+        overflow: hidden;
+      }
+
+      .panel h3 {
+        margin: 0;
+        padding: 14px 16px;
+        border-bottom: 1px solid var(--line);
+        font-size: 15px;
+      }
+
+      .panel-body {
+        padding: 16px;
+      }
+
+      .fields {
+        display: grid;
+        gap: 10px;
+        margin: 0;
+      }
+
+      .field {
+        display: grid;
+        grid-template-columns: 132px minmax(0, 1fr);
+        gap: 12px;
+        padding-bottom: 10px;
+        border-bottom: 1px solid var(--field-line);
+      }
+
+      .field:last-child {
+        padding-bottom: 0;
+        border-bottom: 0;
+      }
+
+      .field code {
+        color: var(--field-code);
+        font-size: 13px;
+        overflow-wrap: anywhere;
+      }
+
+      .field span {
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.55;
+      }
+
+      pre {
+        margin: 0;
+        max-width: 100%;
+        overflow: auto;
+        color: var(--pre-ink);
+        background: var(--pre-bg);
+        border-radius: 8px;
+        padding: 16px;
+        font-size: 12px;
+        line-height: 1.7;
+      }
+
+      .sample-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 10px;
+      }
+
+      .sample-head strong {
+        font-size: 14px;
+      }
+
+      .status-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .status {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--status-bg);
+        padding: 13px;
+      }
+
+      .status code {
+        display: block;
+        color: var(--red);
+        font-weight: 800;
+        font-size: 15px;
+      }
+
+      .status span {
+        display: block;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.5;
+        margin-top: 6px;
+      }
+
+      .toast {
+        position: fixed;
+        right: 18px;
+        bottom: 18px;
+        transform: translateY(20px);
+        opacity: 0;
+        pointer-events: none;
+        background: var(--toast-bg);
+        color: var(--toast-ink);
+        border-radius: 6px;
+        padding: 10px 12px;
+        font-size: 13px;
+        box-shadow: var(--shadow);
+        transition: opacity 0.18s ease, transform 0.18s ease;
+      }
+
+      .toast.show {
+        opacity: 1;
+        transform: translateY(0);
+      }
+
+      @media (max-width: 880px) {
+        .intro,
+        .columns,
+        .status-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .endpoint {
+          grid-template-columns: 72px minmax(0, 1fr);
+        }
+
+        .endpoint .copy {
+          grid-column: 2;
+          justify-self: start;
+        }
+      }
+
+      @media (max-width: 560px) {
+        .shell {
+          width: min(100% - 22px, 1160px);
+          padding-top: 18px;
+        }
+
+        .topbar,
+        .section-head {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+
+        .nav {
+          justify-content: flex-start;
+        }
+
+        .intro {
+          padding-top: 30px;
+        }
+
+        .endpoint {
+          grid-template-columns: 1fr;
+        }
+
+        .endpoint .copy {
+          grid-column: 1;
+        }
+
+        .field {
+          grid-template-columns: 1fr;
+          gap: 4px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <a class="brand" href="/">
+          <img src="/icon.png" alt="" />
+          <span>
+            <strong>Scardice Log Service</strong>
+            <span>API reference</span>
+          </span>
+        </a>
+        <nav class="nav" aria-label="Primary">
+          <a href="/">着色器</a>
+          <a href="/admin">管理</a>
+        </nav>
+      </header>
+
+      <section class="intro">
+        <div>
+          <h1>日志上传与读取接口</h1>
+          <p class="lead">
+            当前部署把 Story Painter 前端和日志后端放在同一个 Node 服务内。
+            API 保持两套路径前缀兼容，旧客户端和新客户端可以指向同一个域名。
+          </p>
+        </div>
+        <aside class="signal">
+          <div class="signal-label">兼容路径前缀</div>
+          <div class="prefixes">
+            <div class="prefix">
+              <code>/api/dice</code>
+              <button type="button" class="copy" data-copy="/api/dice">复制</button>
+            </div>
+            <div class="prefix">
+              <code>/dice/api</code>
+              <button type="button" class="copy" data-copy="/dice/api">复制</button>
+            </div>
+          </div>
+        </aside>
+      </section>
+
+      <section class="section" id="endpoints">
+        <div class="section-head">
+          <h2>端点</h2>
+          <p class="hint">下方路径可把 `/api/dice` 等价替换为 `/dice/api`。</p>
+        </div>
+        <div class="endpoint-list">
+          <div class="endpoint">
+            <span class="method put">PUT</span>
+            <div>
+              <div class="path">/api/dice/log</div>
+              <div class="desc">余烬核心上传日志。请求体为 multipart/form-data。</div>
+            </div>
+            <button type="button" class="copy" data-copy="/api/dice/log">复制路径</button>
+          </div>
+          <div class="endpoint">
+            <span class="method post">POST</span>
+            <div>
+              <div class="path">/api/dice/w4123</div>
+              <div class="desc">w4123/Dice 插件兼容接口，支持 multipart/form-data 或 JSON。</div>
+            </div>
+            <button type="button" class="copy" data-copy="/api/dice/w4123">复制路径</button>
+          </div>
+          <div class="endpoint">
+            <span class="method get">GET</span>
+            <div>
+              <div class="path">/api/dice/load_data?key=AbCd&amp;password=123456</div>
+              <div class="desc">根据上传返回的 key 和 password 读取日志数据。</div>
+            </div>
+            <button type="button" class="copy" data-copy="/api/dice/load_data?key=AbCd&password=123456">复制路径</button>
+          </div>
+          <div class="endpoint">
+            <span class="method put">PUT</span>
+            <div>
+              <div class="path">/api/dice/backup-upload</div>
+              <div class="desc">备用上传桥接接口，主存储失败时可级联转发。</div>
+            </div>
+            <button type="button" class="copy" data-copy="/api/dice/backup-upload">复制路径</button>
+          </div>
+          <div class="endpoint">
+            <span class="method get">GET</span>
+            <div>
+              <div class="path">/healthz</div>
+              <div class="desc">服务健康检查。</div>
+            </div>
+            <button type="button" class="copy" data-copy="/healthz">复制路径</button>
+          </div>
+          <div class="endpoint">
+            <span class="method get">GET</span>
+            <div>
+              <div class="path">/metrics</div>
+              <div class="desc">Prometheus 文本格式指标；默认关闭，开启后可配置 Bearer token。</div>
+            </div>
+            <button type="button" class="copy" data-copy="/metrics">复制路径</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="admin-api">
+        <div class="section-head">
+          <h2>管理端接口</h2>
+          <p class="hint">以下接口需要先通过 `/admin/api/login` 获取管理会话。</p>
+        </div>
+        <div class="endpoint-list">
+          <div class="endpoint">
+            <span class="method get">GET</span>
+            <div>
+              <div class="path">/admin/api/logs</div>
+              <div class="desc">按 SQLite 元数据分页列出日志；`q` 只筛选名称、key、IP和时间。</div>
+            </div>
+            <button type="button" class="copy" data-copy="/admin/api/logs">复制路径</button>
+          </div>
+          <div class="endpoint">
+            <span class="method get">GET</span>
+            <div>
+              <div class="path">/admin/api/logs/:key/raw</div>
+              <div class="desc">导出原始存储 JSON。</div>
+            </div>
+            <button type="button" class="copy" data-copy="/admin/api/logs/:key/raw">复制路径</button>
+          </div>
+          <div class="endpoint">
+            <span class="method post">POST</span>
+            <div>
+              <div class="path">/admin/api/logs/delete</div>
+              <div class="desc">批量删除日志，请求体为 `{ "keys": ["AbCd#123456"] }`。</div>
+            </div>
+            <button type="button" class="copy" data-copy="/admin/api/logs/delete">复制路径</button>
+          </div>
+          <div class="endpoint">
+            <span class="method post">POST</span>
+            <div>
+              <div class="path">/admin/api/cleanup</div>
+              <div class="desc">按留存天数手动清理过期日志。</div>
+            </div>
+            <button type="button" class="copy" data-copy="/admin/api/cleanup">复制路径</button>
+          </div>
+          <div class="endpoint">
+            <span class="method post">POST</span>
+            <div>
+              <div class="path">/admin/api/database/maintenance</div>
+              <div class="desc">执行 SQLite integrity_check 和 WAL checkpoint，可选 `{ "vacuum": true }`。</div>
+            </div>
+            <button type="button" class="copy" data-copy="/admin/api/database/maintenance">复制路径</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="payloads">
+        <div class="section-head">
+          <h2>请求字段</h2>
+          <p class="hint">文件上传默认限制为 5 MB，可通过配置调整；`uniform_id` 需要符合 `来源:标识` 格式。</p>
+        </div>
+        <div class="columns">
+          <div class="panel">
+            <h3>multipart/form-data</h3>
+            <div class="panel-body">
+              <dl class="fields">
+                <div class="field">
+                  <code>name</code>
+                  <span>日志名称。</span>
+                </div>
+                <div class="field">
+                  <code>uniform_id</code>
+                  <span>上传方统一 ID，例如 `seal:123456`。</span>
+                </div>
+                <div class="field">
+                  <code>file</code>
+                  <span>日志文件，默认最大 5 MB。</span>
+                </div>
+              </dl>
+            </div>
+          </div>
+          <div class="panel">
+            <h3>backup-upload JSON</h3>
+            <div class="panel-body">
+              <dl class="fields">
+                <div class="field">
+                  <code>name</code>
+                  <span>日志名称。</span>
+                </div>
+                <div class="field">
+                  <code>uniform_id</code>
+                  <span>上传方统一 ID。</span>
+                </div>
+                <div class="field">
+                  <code>logdata</code>
+                  <span>Base64 编码后的压缩日志数据。</span>
+                </div>
+                <div class="field">
+                  <code>visitedHosts</code>
+                  <span>可选，用于级联转发时避免循环。</span>
+                </div>
+              </dl>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="examples">
+        <div class="section-head">
+          <h2>示例</h2>
+          <p class="hint">在一体化部署中，示例里的域名可以直接使用当前服务地址。</p>
+        </div>
+        <div class="columns">
+          <div>
+            <div class="sample-head">
+              <strong>上传日志</strong>
+              <button type="button" class="copy" data-copy="curl -X PUT http://localhost:3000/api/dice/log -F 'name=demo.txt' -F 'uniform_id=seal:123456' -F 'file=@demo.txt'">复制</button>
+            </div>
+            <pre><code>curl -X PUT http://localhost:3000/api/dice/log \
+  -F 'name=demo.txt' \
+  -F 'uniform_id=seal:123456' \
+  -F 'file=@demo.txt'</code></pre>
+          </div>
+          <div>
+            <div class="sample-head">
+              <strong>读取日志</strong>
+              <button type="button" class="copy" data-copy="curl 'http://localhost:3000/dice/api/load_data?key=AbCd&password=123456'">复制</button>
+            </div>
+            <pre><code>curl 'http://localhost:3000/dice/api/load_data?key=AbCd&password=123456'</code></pre>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="responses">
+        <div class="section-head">
+          <h2>响应与状态</h2>
+          <p class="hint">上传成功后返回的 URL 会指向当前前端页面。</p>
+        </div>
+        <div class="columns">
+          <pre><code>{
+  "url": "http://localhost:3000/?key=AbCd#123456"
+}</code></pre>
+          <div class="status-grid">
+            <div class="status">
+              <code>200</code>
+              <span>请求成功。</span>
+            </div>
+            <div class="status">
+              <code>400</code>
+              <span>字段缺失或格式不正确。</span>
+            </div>
+            <div class="status">
+              <code>404</code>
+              <span>读取的日志不存在。</span>
+            </div>
+            <div class="status">
+              <code>413</code>
+              <span>文件超过大小限制。</span>
+            </div>
+            <div class="status">
+              <code>422</code>
+              <span>上传内容命中安全拦截规则，返回纯文本警告且不会写入日志。</span>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <div class="toast" role="status" aria-live="polite">已复制</div>
+
+    <script type="module" src="/src/pages/api-docs.ts"></script>
+  </body>
+</html>

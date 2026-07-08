@@ -1,0 +1,22 @@
+{
+	"$schema": "https://biomejs.dev/schemas/2.4.8/schema.json",
+	"overrides": [
+		{
+			"includes": ["web/src/**/*.vue"],
+			"linter": {
+				"rules": {
+					"correctness": {
+						"noUnusedImports": "off",
+						"noUnusedVariables": "off"
+					}
+				}
+			}
+		},
+		{
+			"includes": ["web/src/components.d.ts"],
+			"formatter": {
+				"enabled": false
+			}
+		}
+	]
+}
