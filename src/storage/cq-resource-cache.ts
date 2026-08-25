@@ -157,7 +157,7 @@ function normalizeOptions(options: CqResourceCacheOptions = {}): NormalizedOptio
 		imageQuality: clampNumber(options.image_quality, 65, 1, 100),
 		allowedHosts: Array.isArray(options.allowed_hosts)
 			? options.allowed_hosts.map((host) => String(host).trim().toLowerCase()).filter(Boolean)
-			: ["*.qq.com", "*.qpic.cn", "*.gtimg.cn"],
+			: ["*.qq.com", "*.qlogo.cn", "*.qpic.cn", "*.gtimg.cn"],
 		allowPublicHosts: parseBoolean(options.allow_public_hosts, false),
 		downloadTimeoutMs:
 			clampNumber(options.download_timeout_seconds, 15, 1, 60) * 1000,
@@ -258,6 +258,10 @@ function isPublicIp(address: string): boolean {
 		);
 	}
 	const normalized = address.toLowerCase();
+	if (normalized.startsWith("::ffff:")) {
+		const mapped = normalized.slice("::ffff:".length);
+		if (net.isIP(mapped) === 4) return isPublicIp(mapped);
+	}
 	return !(
 		normalized === "::" || normalized === "::1" || normalized.startsWith("fc") ||
 		normalized.startsWith("fd") || normalized.startsWith("fe80:") || normalized.startsWith("::ffff:127.")
@@ -339,6 +343,16 @@ export class CqResourceCache {
 
 	get enabled() {
 		return this.options.enabled;
+	}
+
+	async cacheRemoteImage(remoteUrl: string): Promise<string> {
+		const resourceId = await this.cacheCandidate({ source: remoteUrl, remoteUrl, kind: "image" });
+		this.cleanupExpired().catch((error) => console.warn(`[resource-cache] Cleanup failed: ${error instanceof Error ? error.message : String(error)}`));
+		return resourceId;
+	}
+
+	resourceUrl(resourceId: string, resourceBaseUrl = ""): string {
+		return this.publicResourceUrl(resourceId, resourceBaseUrl);
 	}
 
 	async archiveStoredLog(
@@ -444,7 +458,7 @@ export class CqResourceCache {
 	}
 
 	async cleanupExpired(): Promise<number> {
-		if (!this.enabled || Date.now() - this.lastCleanupAt < cleanupIntervalMs) return 0;
+		if (Date.now() - this.lastCleanupAt < cleanupIntervalMs) return 0;
 		this.lastCleanupAt = Date.now();
 		let entries: string[];
 		try { entries = await fs.readdir(this.options.storagePath); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0; throw error; }

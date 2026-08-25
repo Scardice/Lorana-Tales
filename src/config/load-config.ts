@@ -37,9 +37,48 @@ const DEFAULT_CONFIG = {
 		max_file_mb: 12,
 		max_resources_per_log: 40,
 		image_quality: 65,
-		allowed_hosts: ["*.qq.com", "*.qpic.cn", "*.gtimg.cn"],
+		allowed_hosts: ["*.qq.com", "*.qlogo.cn", "*.qpic.cn", "*.gtimg.cn"],
 		allow_public_hosts: false,
 		download_timeout_seconds: 15,
+	},
+	accounts: {
+		enabled: false,
+		registration_enabled: true,
+		encryption_key: "",
+		session_days: 30,
+		trusted_device_days: 90,
+		cookie_same_site: "auto",
+		allowed_email_domains: [],
+		max_project_mb: 25,
+		max_asset_mb: 12,
+		captcha_provider: "image",
+		captcha_ttl_seconds: 120,
+		risk_trust_minutes: 30,
+		risk_cooldown_minutes: 15,
+		email_code_ttl_minutes: 10,
+		email_code_resend_seconds: 60,
+		email_code_per_hour: 5,
+		ip_email_code_per_hour: 10,
+		smtp: {
+			host: "",
+			port: 587,
+			secure: false,
+			user: "",
+			password: "",
+			from: "",
+		},
+		altcha: {
+			hmac_key: "",
+			max_number: 100000,
+		},
+		turnstile: {
+			site_key: "",
+			secret_key: "",
+		},
+		hcaptcha: {
+			site_key: "",
+			secret_key: "",
+		},
 	},
 	app: {
 		frontend_url: "",
@@ -125,7 +164,7 @@ function resolveConfigPath() {
  * @returns {object} Config object with server, storage, and app sections.
  */
 export function loadConfig() {
-	let fileConfig = {};
+	let fileConfig: any = {};
 
 	// Load the first available config file.
 	const configPath = resolveConfigPath();
@@ -143,6 +182,22 @@ export function loadConfig() {
 
 	// Merge: defaults ← file config
 	const config = deepMerge(DEFAULT_CONFIG, fileConfig);
+	config.accounts.smtp = {
+		...DEFAULT_CONFIG.accounts.smtp,
+		...(fileConfig.accounts?.smtp || {}),
+	};
+	config.accounts.altcha = {
+		...DEFAULT_CONFIG.accounts.altcha,
+		...(fileConfig.accounts?.altcha || {}),
+	};
+	config.accounts.turnstile = {
+		...DEFAULT_CONFIG.accounts.turnstile,
+		...(fileConfig.accounts?.turnstile || {}),
+	};
+	config.accounts.hcaptcha = {
+		...DEFAULT_CONFIG.accounts.hcaptcha,
+		...(fileConfig.accounts?.hcaptcha || {}),
+	};
 
 	// Environment variable overrides (highest priority)
 	if (process.env.HOST) config.server.host = process.env.HOST;
@@ -199,6 +254,37 @@ export function loadConfig() {
 		if (!Number.isNaN(value) && value > 0)
 			config.resource_cache.download_timeout_seconds = value;
 	}
+	if (process.env.ACCOUNTS_ENABLED !== undefined)
+		config.accounts.enabled = parseBoolean(process.env.ACCOUNTS_ENABLED, config.accounts.enabled);
+	if (process.env.ACCOUNTS_REGISTRATION_ENABLED !== undefined)
+		config.accounts.registration_enabled = parseBoolean(
+			process.env.ACCOUNTS_REGISTRATION_ENABLED,
+			config.accounts.registration_enabled,
+		);
+	if (process.env.ACCOUNTS_ENCRYPTION_KEY)
+		config.accounts.encryption_key = process.env.ACCOUNTS_ENCRYPTION_KEY;
+	if (process.env.ACCOUNTS_SESSION_DAYS)
+		config.accounts.session_days = parseInt(process.env.ACCOUNTS_SESSION_DAYS, 10) || config.accounts.session_days;
+	if (process.env.ACCOUNTS_TRUSTED_DEVICE_DAYS)
+		config.accounts.trusted_device_days = parseInt(process.env.ACCOUNTS_TRUSTED_DEVICE_DAYS, 10) || config.accounts.trusted_device_days;
+	if (process.env.ACCOUNTS_COOKIE_SAME_SITE)
+		config.accounts.cookie_same_site = process.env.ACCOUNTS_COOKIE_SAME_SITE;
+	if (process.env.ACCOUNTS_ALLOWED_EMAIL_DOMAINS)
+		config.accounts.allowed_email_domains = parseList(process.env.ACCOUNTS_ALLOWED_EMAIL_DOMAINS);
+	if (process.env.ACCOUNTS_CAPTCHA_PROVIDER)
+		config.accounts.captcha_provider = process.env.ACCOUNTS_CAPTCHA_PROVIDER;
+	if (process.env.SMTP_HOST) config.accounts.smtp.host = process.env.SMTP_HOST;
+	if (process.env.SMTP_PORT) config.accounts.smtp.port = parseInt(process.env.SMTP_PORT, 10) || config.accounts.smtp.port;
+	if (process.env.SMTP_SECURE !== undefined)
+		config.accounts.smtp.secure = parseBoolean(process.env.SMTP_SECURE, config.accounts.smtp.secure);
+	if (process.env.SMTP_USER) config.accounts.smtp.user = process.env.SMTP_USER;
+	if (process.env.SMTP_PASSWORD) config.accounts.smtp.password = process.env.SMTP_PASSWORD;
+	if (process.env.SMTP_FROM) config.accounts.smtp.from = process.env.SMTP_FROM;
+	if (process.env.ALTCHA_HMAC_KEY) config.accounts.altcha.hmac_key = process.env.ALTCHA_HMAC_KEY;
+	if (process.env.TURNSTILE_SITE_KEY) config.accounts.turnstile.site_key = process.env.TURNSTILE_SITE_KEY;
+	if (process.env.TURNSTILE_SECRET_KEY) config.accounts.turnstile.secret_key = process.env.TURNSTILE_SECRET_KEY;
+	if (process.env.HCAPTCHA_SITE_KEY) config.accounts.hcaptcha.site_key = process.env.HCAPTCHA_SITE_KEY;
+	if (process.env.HCAPTCHA_SECRET_KEY) config.accounts.hcaptcha.secret_key = process.env.HCAPTCHA_SECRET_KEY;
 	if (process.env.FRONTEND_URL)
 		config.app.frontend_url = process.env.FRONTEND_URL;
 	if (process.env.LOG_RETENTION_DAYS) {
@@ -263,6 +349,7 @@ export function loadConfig() {
 
 	config.server.allowed_hosts = parseList(config.server.allowed_hosts);
 	config.resource_cache.allowed_hosts = parseList(config.resource_cache.allowed_hosts);
+	config.accounts.allowed_email_domains = parseList(config.accounts.allowed_email_domains);
 	config.security.warning_quotes = parseList(config.security.warning_quotes);
 
 	if (!path.isAbsolute(config.storage.sqlite_path)) {

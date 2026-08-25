@@ -1,10 +1,12 @@
 import { spawn } from "node:child_process";
 
-const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
+const pnpmEntry = process.env.npm_execpath;
+const command = pnpmEntry ? process.execPath : "pnpm";
+const pnpmArgs = (script) => pnpmEntry ? [pnpmEntry, script] : [script];
 
 const children = [
-	spawn(pnpm, ["dev:server"], { stdio: "inherit" }),
-	spawn(pnpm, ["dev"], { stdio: "inherit" }),
+	spawn(command, pnpmArgs("dev:server"), { stdio: "inherit" }),
+	spawn(command, pnpmArgs("dev"), { stdio: "inherit" }),
 ];
 
 let shuttingDown = false;

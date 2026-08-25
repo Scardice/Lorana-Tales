@@ -122,6 +122,57 @@ function installDocxBrowserGlobals() {
 	}
 }
 
+function canvasPngDataUrl(canvas: HTMLCanvasElement): string {
+	return canvas.toDataURL("image/png");
+}
+
+async function normalizeEmbeddedImage(source: string): Promise<string> {
+	if (!/^data:image\/(?:png|jpe?g|webp|gif);base64,/i.test(source)) return source;
+	const image = new Image();
+	image.decoding = "sync";
+	image.src = source.replaceAll(/\s+/g, "");
+	await image.decode();
+	const width = Math.max(1, image.naturalWidth);
+	const height = Math.max(1, image.naturalHeight);
+	const canvas = document.createElement("canvas");
+	canvas.width = width;
+	canvas.height = height;
+	const context = canvas.getContext("2d", { willReadFrequently: true });
+	if (!context) return source;
+	context.imageSmoothingEnabled = false;
+	context.globalCompositeOperation = "copy";
+	context.drawImage(image, 0, 0, width, height);
+	const pixels = context.getImageData(0, 0, width, height);
+	const [red, green, blue, alpha] = pixels.data;
+	let solid = true;
+	for (let index = 4; index < pixels.data.length; index += 4) {
+		if (pixels.data[index] !== red || pixels.data[index + 1] !== green || pixels.data[index + 2] !== blue || pixels.data[index + 3] !== alpha) {
+			solid = false;
+			break;
+		}
+	}
+	if (solid) {
+		context.clearRect(0, 0, width, height);
+		context.fillStyle = `rgba(${red}, ${green}, ${blue}, ${alpha / 255})`;
+		context.fillRect(0, 0, width, height);
+	}
+	return canvasPngDataUrl(canvas);
+}
+
+export async function normalizeDocxEmbeddedImages(html: string): Promise<string> {
+	const template = document.createElement("template");
+	template.innerHTML = html;
+	for (const image of Array.from(template.content.querySelectorAll("img"))) {
+		const source = image.getAttribute("src") || "";
+		try {
+			image.setAttribute("src", await normalizeEmbeddedImage(source));
+		} catch (error) {
+			console.warn("DOCX embedded image normalization skipped", error);
+		}
+	}
+	return template.innerHTML;
+}
+
 /**
  * Generate a real Office Open XML package from the rendered preview.
  * The upstream converter embeds data URL images into word/media instead of
@@ -129,8 +180,9 @@ function installDocxBrowserGlobals() {
  */
 export async function exportFileDocx(html: string, filename: string) {
 	installDocxBrowserGlobals();
+	const normalizedHtml = await normalizeDocxEmbeddedImages(html);
 	const { default: HTMLtoDOCX } = await import("@turbodocx/html-to-docx");
-	const output = await HTMLtoDOCX(createDocumentHtml(html), null, {
+	const output = await HTMLtoDOCX(createDocumentHtml(normalizedHtml), null, {
 		creator: "Scardice Story Painter",
 		description: "余烬 TRPG 跑团记录",
 		font: "Microsoft YaHei",

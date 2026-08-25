@@ -532,10 +532,23 @@
         text-align: center;
       }
 
+      .account-admin { margin-top: 34px; padding-top: 24px; border-top: 1px solid var(--line); }
+      .account-admin__head { display:flex; align-items:end; justify-content:space-between; gap:12px; margin-bottom:14px; }
+      .account-admin__head h2 { margin:0; font-size:24px; }
+      .user-create { display:grid; grid-template-columns:1.3fr 1fr 1fr 120px auto; gap:8px; margin-bottom:12px; }
+      .user-create input,.user-create select { min-height:38px; border:1px solid var(--line); border-radius:6px; background:var(--input-bg); color:var(--ink); padding:8px 10px; }
+      .user-list { display:grid; gap:8px; }
+      .user-row { display:grid; grid-template-columns:minmax(180px,1fr) 110px 120px minmax(220px,auto); gap:10px; align-items:center; padding:12px; border:1px solid var(--line); background:var(--panel); }
+      .user-row__name { min-width:0; display:grid; }
+      .user-row__name strong,.user-row__name small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .user-row__actions { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:6px; }
+
       @media (max-width: 1080px) {
         .hero,
         .toolbar,
-        .log-row {
+        .log-row,
+        .user-create,
+        .user-row {
           grid-template-columns: 1fr;
         }
 
@@ -766,6 +779,18 @@
           <span id="pagerText">1 / 1</span>
           <button id="nextButton" class="button" type="button">下一页</button>
         </div>
+
+        <section id="accountAdmin" class="account-admin">
+          <div class="account-admin__head"><div><h2>账户管理</h2><p class="subtle">创建、编辑、授权、封禁或删除用户。封禁必须填写理由。</p></div><button id="refreshUsersButton" class="button" type="button">刷新账户</button></div>
+          <form id="createUserForm" class="user-create">
+            <input id="newUserEmail" type="email" placeholder="邮箱" required />
+            <input id="newUserName" placeholder="显示名" />
+            <input id="newUserPassword" type="password" minlength="10" placeholder="临时密码（至少 10 位）" required />
+            <select id="newUserRole"><option value="user">用户</option><option value="admin">管理员</option></select>
+            <button class="button primary" type="submit">新增用户</button>
+          </form>
+          <div id="userStatus" class="loading">加载中</div><div id="userList" class="user-list"></div>
+        </section>
       </section>
       <div id="toast-host" aria-live="polite"></div>
     </main>

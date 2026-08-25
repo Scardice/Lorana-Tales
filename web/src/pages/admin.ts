@@ -34,7 +34,10 @@ interface LogDetailResponse extends LogSummary {
 
 interface SessionResponse {
   authenticated: boolean;
+  mode?: "root" | "account" | "none";
 }
+
+interface AccountUser { id:string; email:string; displayName:string; role:"user"|"admin"; status:"active"|"disabled"|"banned"; banReason:string; banUntil:string; projectCount?:number; }
 
 interface DeleteResponse {
   deleted?: string[];
@@ -60,6 +63,7 @@ function requireElement<T extends Element>(selector: string): T {
 
 const state = {
   authenticated: false,
+  authMode: "none" as "root" | "account" | "none",
   page: 1,
   pageSize: 20,
   total: 0,
@@ -111,6 +115,14 @@ const els = {
   detailTime: requireElement<HTMLElement>("#detailTime"),
   detailIp: requireElement<HTMLElement>("#detailIp"),
   detailContent: requireElement<HTMLElement>("#detailContent"),
+  createUserForm: requireElement<HTMLFormElement>("#createUserForm"),
+  newUserEmail: requireElement<HTMLInputElement>("#newUserEmail"),
+  newUserName: requireElement<HTMLInputElement>("#newUserName"),
+  newUserPassword: requireElement<HTMLInputElement>("#newUserPassword"),
+  newUserRole: requireElement<HTMLSelectElement>("#newUserRole"),
+  refreshUsersButton: requireElement<HTMLButtonElement>("#refreshUsersButton"),
+  userStatus: requireElement<HTMLElement>("#userStatus"),
+  userList: requireElement<HTMLElement>("#userList"),
 };
 
 function escapeHtml(value: unknown): string {
@@ -227,6 +239,7 @@ function closeDrawer(): void {
 
 function showLogin() {
   state.authenticated = false;
+  state.authMode = "none";
   state.selected.clear();
   closeDrawer();
   els.loginView.classList.remove("hidden");
@@ -236,19 +249,22 @@ function showLogin() {
   els.password.focus();
 }
 
-function showAdmin() {
+function showAdmin(mode: "root" | "account" = "root") {
   state.authenticated = true;
+  state.authMode = mode;
   els.loginView.classList.add("hidden");
   els.adminView.classList.remove("hidden");
   els.logoutButton.classList.remove("hidden");
 }
 
 async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const csrf = decodeURIComponent(document.cookie.split("; ").find((item) => item.startsWith("scardice_account_csrf="))?.split("=").slice(1).join("=") || "");
   const response = await fetch(path, {
     cache: "no-store",
     credentials: "same-origin",
     headers: {
       "Content-Type": "application/json",
+      ...(csrf ? { "X-CSRF-Token": csrf } : {}),
       ...(options.headers || {}),
     },
     ...options,
@@ -275,8 +291,9 @@ async function checkSession() {
   try {
     const session = await api<SessionResponse>("/admin/api/session");
     if (session.authenticated) {
-      showAdmin();
+      showAdmin(session.mode === "account" ? "account" : "root");
       await loadLogs();
+      await loadUsers();
     } else {
       showLogin();
     }
@@ -294,8 +311,9 @@ async function login(event: SubmitEvent): Promise<void> {
       body: JSON.stringify({ password: els.password.value }),
     });
     els.password.value = "";
-    showAdmin();
+    showAdmin("root");
     await loadLogs();
+    await loadUsers();
   } catch (error) {
     const status = error instanceof AdminApiError ? error.status : 0;
     els.loginError.textContent =
@@ -304,7 +322,7 @@ async function login(event: SubmitEvent): Promise<void> {
 }
 
 async function logout(): Promise<void> {
-  await api<SessionResponse>("/admin/api/logout", { method: "POST" }).catch(
+  await api<SessionResponse>(state.authMode === "account" ? "/api/account/logout" : "/admin/api/logout", { method: "POST", body: "{}" }).catch(
     () => {},
   );
   showLogin();
@@ -555,6 +573,52 @@ async function runMaintenance(): Promise<void> {
   }
 }
 
+function renderUsers(items: AccountUser[]): void {
+  els.userList.innerHTML = items.map((user) => `<article class="user-row" data-user-id="${escapeHtml(user.id)}">
+    <div class="user-row__name"><strong>${escapeHtml(user.displayName || user.email)}</strong><small>${escapeHtml(user.email)}</small></div>
+    <span class="pill">${user.role === "admin" ? "管理员" : "用户"}</span>
+    <span class="pill">${user.status === "banned" ? `已封禁：${escapeHtml(user.banReason)}` : user.status === "disabled" ? "已停用" : "正常"}</span>
+    <div class="user-row__actions"><button class="button" data-user-action="edit">编辑</button><button class="button" data-user-action="password">改密码</button><button class="button warning" data-user-action="status">${user.status === "active" ? "封禁/停用" : "恢复"}</button><button class="button danger" data-user-action="delete">删除</button></div>
+  </article>`).join("");
+  els.userList.querySelectorAll<HTMLElement>("[data-user-action]").forEach((button) => button.addEventListener("click", () => {
+    const row = button.closest<HTMLElement>("[data-user-id]"); const user = items.find((item) => item.id === row?.dataset.userId); if (user) manageUser(user, button.dataset.userAction || "");
+  }));
+}
+
+async function loadUsers(): Promise<void> {
+  els.userStatus.classList.remove("hidden"); els.userStatus.textContent = "加载账户…";
+  try {
+    const data = await api<{items:AccountUser[]}>("/admin/api/users?pageSize=100");
+    renderUsers(data.items || []); els.userStatus.classList.toggle("hidden", !!data.items?.length); if (!data.items?.length) els.userStatus.textContent = "还没有账户";
+  } catch (error) {
+    els.userList.innerHTML = ""; els.userStatus.textContent = error instanceof AdminApiError && error.status === 404 ? "账户功能未开启" : "账户读取失败";
+  }
+}
+
+async function manageUser(user: AccountUser, action: string): Promise<void> {
+  try {
+    if (action === "edit") {
+      const email = prompt("邮箱", user.email); if (email === null) return; const displayName = prompt("显示名", user.displayName); if (displayName === null) return; const role = prompt("角色：admin 或 user", user.role); if (role !== "admin" && role !== "user") return;
+      await api(`/admin/api/users/${encodeURIComponent(user.id)}`, { method:"PATCH", body:JSON.stringify({ email, displayName, role }) });
+    } else if (action === "password") {
+      const password = prompt("输入至少 10 位的新密码。用户下次登录必须修改。", ""); if (!password) return;
+      await api(`/admin/api/users/${encodeURIComponent(user.id)}/password`, { method:"POST", body:JSON.stringify({ password, mustChangePassword:true }) });
+    } else if (action === "status") {
+      if (user.status !== "active") await api(`/admin/api/users/${encodeURIComponent(user.id)}/status`, { method:"POST", body:JSON.stringify({ status:"active" }) });
+      else { const type = prompt("输入 banned 封禁，或 disabled 停用", "banned"); if (type !== "banned" && type !== "disabled") return; const reason = prompt(type === "banned" ? "封禁理由（必填）" : "停用备注", ""); if (type === "banned" && !reason?.trim()) { showAdminToast("封禁必须填写理由", "warning"); return; } const until = type === "banned" ? prompt("可选：解封时间（ISO 日期）；留空为永久", "") : ""; await api(`/admin/api/users/${encodeURIComponent(user.id)}/status`, { method:"POST", body:JSON.stringify({ status:type, reason, until }) }); }
+    } else if (action === "delete") {
+      const projectAction = prompt("用户工程如何处理：archive（归档）、delete（删除）或 transfer（转移）", "archive"); if (!projectAction || !["archive","delete","transfer"].includes(projectAction)) return; let transferUserId=""; if(projectAction==="transfer"){transferUserId=prompt("接收用户 ID","")||"";if(!transferUserId)return}if(!confirm(`确定删除 ${user.email}？工程处理：${projectAction}`))return;await api(`/admin/api/users/${encodeURIComponent(user.id)}`,{method:"DELETE",body:JSON.stringify({projectAction,transferUserId})});
+    }
+    showAdminToast("账户操作完成", "success"); await loadUsers();
+  } catch (error) { showAdminToast(error instanceof Error ? error.message : "账户操作失败", "error"); }
+}
+
+async function createUser(event: SubmitEvent): Promise<void> {
+  event.preventDefault();
+  try { await api("/admin/api/users", { method:"POST", body:JSON.stringify({ email:els.newUserEmail.value, displayName:els.newUserName.value, password:els.newUserPassword.value, role:els.newUserRole.value, mustChangePassword:true }) }); els.createUserForm.reset(); showAdminToast("用户已创建", "success"); await loadUsers(); }
+  catch (error) { showAdminToast(error instanceof Error ? error.message : "创建失败", "error"); }
+}
+
 function exportCurrentRaw(): void {
   if (!state.currentDetailKey) return;
   window.location.href = `/admin/api/logs/${encodeURIComponent(state.currentDetailKey)}/raw`;
@@ -566,6 +630,8 @@ function openCurrentPainter(): void {
 }
 
 els.loginForm.addEventListener("submit", login);
+els.createUserForm.addEventListener("submit", createUser);
+els.refreshUsersButton.addEventListener("click", loadUsers);
 els.logoutButton.addEventListener("click", logout);
 els.searchForm.addEventListener("submit", (event) => {
   event.preventDefault();

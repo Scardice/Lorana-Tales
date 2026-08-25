@@ -50,13 +50,60 @@ max_resources_per_log = 40
 image_quality = 65
 
 # 允许下载的上游域名，支持 *.example.com 后缀匹配。默认仅覆盖 QQ/Tencent 常见媒体域名；需要其他图床时显式加入，避免日志 URL 被用于服务端请求探测。
-allowed_hosts = ["*.qq.com", "*.qpic.cn", "*.gtimg.cn"]
+allowed_hosts = ["*.qq.com", "*.qlogo.cn", "*.qpic.cn", "*.gtimg.cn"]
 
 # 是否允许 allowed_hosts 以外的任意公网地址。保持 false 更安全；true 时仍会拒绝内网、环回和链路本地地址，但不建议在不受信任上传环境开启。
 allow_public_hosts = false
 
 # 下载单个资源的超时时间，单位秒。超时资源会保留原上游链接，不影响本次日志上传。
 download_timeout_seconds = 15
+
+[accounts]
+# 可选账号与云端编辑功能总开关。关闭时不注册账号 API，也不会显示登录入口。
+enabled = false
+# 是否允许访客自行注册；关闭后管理员仍可在 /admin 创建用户。
+registration_enabled = true
+# 用于 AES-256-GCM 加密日志源访问密钥，启用账号时必须设置至少 32 个随机字符。
+# 可用 `openssl rand -base64 48` 生成；修改后旧工程中的加密源密钥将无法解密。
+encryption_key = ""
+session_days = 30
+trusted_device_days = 90
+# auto/lax、strict 或 none；跨站部署使用 none 时必须走 HTTPS。
+cookie_same_site = "auto"
+# 留空允许任意邮箱域；也可写 ["example.com", "school.edu"]。
+allowed_email_domains = []
+max_project_mb = 25
+max_asset_mb = 12
+# image（本地图片验证码）、altcha（自托管 PoW）、turnstile 或 hcaptcha。
+captcha_provider = "image"
+captcha_ttl_seconds = 120
+risk_trust_minutes = 30
+risk_cooldown_minutes = 15
+email_code_ttl_minutes = 10
+email_code_resend_seconds = 60
+email_code_per_hour = 5
+ip_email_code_per_hour = 10
+
+[accounts.smtp]
+host = ""
+port = 587
+secure = false
+user = ""
+password = ""
+from = "余烬染色器 <no-reply@example.com>"
+
+[accounts.altcha]
+# 使用 ALTCHA 时设置独立随机 HMAC 密钥；留空会退回 accounts.encryption_key。
+hmac_key = ""
+max_number = 100000
+
+[accounts.turnstile]
+site_key = ""
+secret_key = ""
+
+[accounts.hcaptcha]
+site_key = ""
+secret_key = ""
 
 [app]
 # 生成日志查看链接时使用的前端地址。

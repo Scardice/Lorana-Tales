@@ -5,6 +5,12 @@ third-party components. The CQ image codec stack contains only permissive
 Apache-2.0 and BSD-style licenses; no GPL/LGPL native dependency is bundled.
 This project does not elect the GPLv3 alternative offered by JSZip.
 
+The advanced editor and optional account system additionally use SortableJS
+(MIT), fflate (MIT), Nodemailer (MIT-0), svg-captcha (MIT), and ALTCHA / ALTCHA
+Lib (MIT). These licenses permit use, modification, redistribution, and
+commercial deployment subject to retaining their notices; no copyleft runtime
+dependency was added.
+
 ## @turbodocx/html-to-docx 1.22.2
 
 Source: <https://github.com/TurboDocx/html-to-docx>

@@ -5,6 +5,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Express } from "express";
 import express from "express";
+import { AccountService } from "../accounts/router.js";
+import { AccountStore } from "../accounts/account-store.js";
 import { createAdminRouter } from "../api/admin.js";
 import { handleDiceApiRequest } from "../api/dice.js";
 import { loadConfig } from "../config/load-config.js";
@@ -26,6 +28,7 @@ type StartServerResult = {
 	server: Server;
 	store: SqliteLogStore;
 	config: ReturnType<typeof loadConfig>;
+	accountService: AccountService | null;
 };
 
 type SecurityBlockRecord = {
@@ -122,12 +125,14 @@ function setSecurityHeaders(_req, res, next) {
 		"Content-Security-Policy",
 		[
 			"default-src 'self'",
-			"script-src 'self' 'wasm-unsafe-eval'",
+			"script-src 'self' 'wasm-unsafe-eval' https://challenges.cloudflare.com https://js.hcaptcha.com",
 			"style-src 'self' 'unsafe-inline'",
 			"img-src 'self' data: blob: http: https:",
 			"media-src 'self' http: https:",
 			"font-src 'self' data:",
-			"connect-src 'self' https://dice-api.weizaima.com",
+			"connect-src 'self' https://dice-api.weizaima.com https://challenges.cloudflare.com https://api.hcaptcha.com https://*.hcaptcha.com",
+			"frame-src https://challenges.cloudflare.com https://*.hcaptcha.com",
+			"worker-src 'self' blob:",
 			"object-src 'none'",
 			"base-uri 'self'",
 			"frame-ancestors 'none'",
@@ -220,6 +225,18 @@ export async function startServer(
 	const allowedHosts = getAllowedHosts(config);
 	const securityBlocksByIp = new Map<string, SecurityBlockRecord>();
 	const securityBlocksById = new Map<string, SecurityBlockRecord>();
+	const editorAssetFetches = new Map<string, { startedAt: number; count: number }>();
+	function takeEditorFetchQuota(kind: "asset" | "avatar", clientIp: string, limit: number) {
+		const key = `${kind}:${clientIp}`;
+		const now = Date.now();
+		const current = editorAssetFetches.get(key);
+		const quota = current && current.startedAt > now - 10 * 60 * 1000 ? current : { startedAt: now, count: 0 };
+		if (quota.count >= limit) return false;
+		quota.count += 1;
+		editorAssetFetches.set(key, quota);
+		if (editorAssetFetches.size > 5000) editorAssetFetches.delete(editorAssetFetches.keys().next().value as string);
+		return true;
+	}
 
 	function cleanupSecurityBlocks() {
 		const now = Date.now();
@@ -279,6 +296,13 @@ export async function startServer(
 	}
 
 	const store = new SqliteLogStore(config.storage.sqlite_path);
+	let accountService: AccountService | null = null;
+	if (config.accounts?.enabled) {
+		if (String(config.accounts.encryption_key || "").length < 32) {
+			throw new Error("accounts.encryption_key must contain at least 32 characters when accounts are enabled");
+		}
+		accountService = new AccountService(new AccountStore(store.db), config.accounts, trustProxy, store);
+	}
 	const resourceCache = new CqResourceCache(config.resource_cache);
 	if (resourceCache.enabled) {
 		const deleted = await resourceCache.cleanupExpired();
@@ -339,8 +363,10 @@ export async function startServer(
 
 	// Parse raw body for all content types (up to 10 MB to handle the default
 	// 5 MB upload limit plus multipart overhead).
-	const rawLimitMb = Math.max(10, Number(config.app.max_upload_mb || 5) * 2);
+	const accountBodyLimitMb = config.accounts?.enabled ? Number(config.accounts.max_project_mb || 25) + 2 : 0;
+	const rawLimitMb = Math.max(10, Number(config.app.max_upload_mb || 5) * 2, accountBodyLimitMb);
 	app.use(express.raw({ type: "*/*", limit: `${rawLimitMb}mb` }));
+	accountService?.register(app);
 
 	app.get("/healthz", (_req, res) => {
 		res.status(200);
@@ -416,6 +442,43 @@ export async function startServer(
 		}
 	});
 
+	app.get("/api/editor/avatar/qq/:uin", async (req, res) => {
+		const uin = String(req.params.uin || "");
+		if (!/^\d{5,12}$/.test(uin)) {
+			res.status(400).type("text/plain").send("Invalid QQ number");
+			return;
+		}
+		if (!takeEditorFetchQuota("avatar", getClientIp(req, trustProxy), 120)) {
+			res.status(429).type("text/plain").send("Avatar fetch rate limited");
+			return;
+		}
+		try {
+			const resourceId = await resourceCache.cacheRemoteImage(`http://q1.qlogo.cn/g?b=qq&nk=${encodeURIComponent(uin)}&s=100`);
+			res.setHeader("Cache-Control", "public, max-age=86400");
+			res.redirect(302, resourceCache.resourceUrl(resourceId));
+		} catch (error) {
+			console.error("[server] QQ avatar cache failed:", error);
+			res.status(502).type("text/plain").send("Avatar unavailable");
+		}
+	});
+
+	app.post("/api/editor/assets/fetch", async (req, res) => {
+		const clientIp = getClientIp(req, trustProxy);
+		if (!takeEditorFetchQuota("asset", clientIp, 40)) {
+			res.status(429).type("application/json").send(JSON.stringify({ error: "asset_fetch_rate_limited" }));
+			return;
+		}
+		try {
+			const raw = Buffer.isBuffer(req.body) ? req.body.toString("utf-8") : "{}";
+			const sourceUrl = String(JSON.parse(raw || "{}").url || "");
+			const resourceId = await resourceCache.cacheRemoteImage(sourceUrl);
+			res.status(200).set({ "Cache-Control": "no-store", "Content-Type": "application/json; charset=utf-8" }).send(JSON.stringify({ resourceId, url: resourceCache.resourceUrl(resourceId) }));
+		} catch (error) {
+			console.error("[server] Editor asset fetch failed:", error);
+			res.status(400).type("application/json").send(JSON.stringify({ error: "asset_fetch_failed" }));
+		}
+	});
+
 	const staticDir = path.resolve(projectRoot, "out");
 	if (fs.existsSync(staticDir)) {
 		console.log(`[server] Serving static files from: ${staticDir}`);
@@ -429,6 +492,7 @@ export async function startServer(
 		adminFilePath: path.resolve(staticDir, "admin.html"),
 		trustProxy,
 		retentionDays: config.app.log_retention_days,
+		accountService,
 		security: {
 			bruteforceBlockEnabled:
 				config.security?.admin_bruteforce_block_enabled !== false,
@@ -536,6 +600,7 @@ export async function startServer(
 		console.log(
 			`[server] CQ resource cache: ${resourceCache.enabled ? `enabled (${config.resource_cache.retention_days} days, ${config.resource_cache.path})` : "disabled"}`,
 		);
+		console.log(`[server] Accounts: ${accountService ? "enabled" : "disabled"}`);
 		console.log(`[server] Trust proxy: ${trustProxy ? "enabled" : "disabled"}`);
 		console.log(
 			`[server] Allowed hosts: ${[...allowedHosts].join(", ") || "none"}`,
@@ -560,7 +625,7 @@ export async function startServer(
 		}
 	});
 
-	return { app, server, store, config };
+	return { app, server, store, config, accountService };
 }
 
 const directRunPath = process.argv[1] ? path.resolve(process.argv[1]) : "";

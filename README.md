@@ -16,6 +16,8 @@
 - 运行入口产物：`dist/bin/scardice-story-painter.js`
 - 内置 API 说明页位于 `/api-docs`
 - 内置管理后台位于 `/admin`
+- 高级沉浸编辑默认开启，支持头像、左右/旁白布局、批量插入与拖动、全屏编辑、动画播放和可继续编辑的 `.ssp` 工程包
+- 可选账号系统支持 SMTP 邮件码、新设备/网段验证、风险验证码、云端工程和管理员账户管理
 
 ## 接口
 
@@ -141,9 +143,23 @@ retention_days = 60 # 资源归档保留天数，和日志保留天数独立
 max_file_mb = 12 # 单个远程/内嵌资源的最大体积
 max_resources_per_log = 40 # 单份日志最多下载的资源数
 image_quality = 65 # PNG/JPEG/WebP 转 WebP 时的有损质量（1-100）
-allowed_hosts = ["*.qq.com", "*.qpic.cn", "*.gtimg.cn"] # 可信上游资源域名
+allowed_hosts = ["*.qq.com", "*.qlogo.cn", "*.qpic.cn", "*.gtimg.cn"] # 可信上游资源域名与 QQ 头像
 allow_public_hosts = false # 不建议开启；true 时允许任意公网域名
 download_timeout_seconds = 15 # 单资源下载超时
+
+[accounts]
+enabled = false # 开启账号注册、登录与云端工程
+registration_enabled = true
+encryption_key = "" # 开启时必填，至少 32 个随机字符
+captcha_provider = "image" # image / altcha / turnstile / hcaptcha
+
+[accounts.smtp]
+host = "smtp.example.com"
+port = 587
+secure = false
+user = "no-reply@example.com"
+password = ""
+from = "余烬染色器 <no-reply@example.com>"
 
 [app]
 frontend_url = ""        # 留空时使用代理解析后的外部域名；跨域/CDN 托管前端时固定填写公开 URL
@@ -193,6 +209,17 @@ admin_bruteforce_block_seconds = 60 # 触发后的封禁时长；期间访问会
 | `CQ_RESOURCE_CACHE_ALLOWED_HOSTS`  | 可信上游域名，逗号分隔                                     |
 | `CQ_RESOURCE_CACHE_ALLOW_PUBLIC_HOSTS` | 是否允许任意公网域名                                  |
 | `CQ_RESOURCE_CACHE_DOWNLOAD_TIMEOUT_SECONDS` | 单资源下载超时秒数                              |
+| `ACCOUNTS_ENABLED`                | 是否开启账号与云端工程                                   |
+| `ACCOUNTS_REGISTRATION_ENABLED`   | 是否开放自行注册                                         |
+| `ACCOUNTS_ENCRYPTION_KEY`         | 工程源密钥加密主密钥，至少 32 字符                       |
+| `ACCOUNTS_CAPTCHA_PROVIDER`       | `image`、`altcha`、`turnstile` 或 `hcaptcha`             |
+| `SMTP_HOST` / `SMTP_PORT`         | SMTP 主机与端口                                           |
+| `SMTP_SECURE`                     | 是否使用隐式 TLS                                          |
+| `SMTP_USER` / `SMTP_PASSWORD`     | SMTP 登录凭据                                             |
+| `SMTP_FROM`                       | 验证码发件人                                              |
+| `ALTCHA_HMAC_KEY`                 | 自托管 ALTCHA HMAC 密钥                                   |
+| `TURNSTILE_SITE_KEY` / `TURNSTILE_SECRET_KEY` | Cloudflare Turnstile 配置                   |
+| `HCAPTCHA_SITE_KEY` / `HCAPTCHA_SECRET_KEY` | hCaptcha 配置                                  |
 | `FRONTEND_URL`                    | 生成查看链接时使用的前端地址；留空则使用当前请求域名       |
 | `LOG_RETENTION_DAYS`              | 日志保留天数                                               |
 | `MAX_UPLOAD_MB`                   | 上传大小限制                                               |
@@ -233,11 +260,19 @@ trust_proxy = true
 
 ### CQ 资源本地归档
 
-开启 `[resource_cache].enabled` 后，服务会在上传时解压日志，提取 `CQ:image`、`face`、`record`、`voice`、`audio`、`video` 和 `file` 中的 URL 或 base64 资源，下载后将日志引用改为本站 `/cq-resources/...`。默认只允许腾讯 QQ/QPic/GTImg 域名；如日志确实使用其他图床，应将对应域名加入 `allowed_hosts`，而不是直接开启 `allow_public_hosts`。
+开启 `[resource_cache].enabled` 后，服务会在上传时解压日志，提取 `CQ:image`、`face`、`record`、`voice`、`audio`、`video` 和 `file` 中的 URL 或 base64 资源，下载后将日志引用改为本站 `/cq-resources/...`。默认只允许腾讯 QQ/QLogo/QPic/GTImg 域名；如日志确实使用其他图床，应将对应域名加入 `allowed_hosts`，而不是直接开启 `allow_public_hosts`。
 
 PNG、JPEG 和 WebP 会以 `image_quality` 重编码为 WebP；只有更小才替换原文件。所有保存后的资源还会使用最高质量 Brotli 无损压缩；支持 Brotli 的浏览器直接得到压缩流，其他客户端由服务端即时解压。音频、视频和其他附件不进行有损转码，避免改变可播放性。
 
 `retention_days` 从资源归档成功时计算，与日志的 `log_retention_days` 独立。被拒绝、超限、超时或下载失败的资源会保留原上游 URL，且不会导致日志上传失败。
+
+### 沉浸编辑、SSP 与账号
+
+高级编辑模式会把旧格式日志无损映射为版本化的 `StoryDocument`，旁白角色固定存在且不可删除。修改会保存在当前浏览器的 IndexedDB，刷新或再次打开相同日志时会询问是否恢复；“删除本地修改”需要二次确认。`Ctrl+S` 下载 `.ssp`：它是带清单、SHA-256 校验与内嵌资源的高压缩 ZIP 工程包，可重新导入继续编辑。传统文本和三种标准 DOCX 导出仍然可用。
+
+开启 `[accounts].enabled` 后，用户可用邮箱和密码注册/登录，并把自有编辑副本保存为云端工程；登录状态下从网页上传的旧日志会自动归入账号，骰子机器人上传的匿名日志仍可由用户另存为自己的工程。新设备、浏览器指纹或 IP 网段变化（IPv4 `/24`、IPv6 `/64`）需要邮件验证码；发送验证码以及异常行为会要求 CAPTCHA。风控只要求验证或冷却，不会自动永久封号。管理员可以在 `/admin` 新增、删除、编辑、升降管理员、改密码、停用或带理由封禁用户；系统阻止移除最后一个可用管理员。原来的 `[admin].password` 仍作为应急 root 登录。
+
+账号开启时 `accounts.encryption_key` 必须至少 32 字符。注册与新设备登录还需要可用 SMTP；建议生产环境使用 HTTPS，并保护配置文件中的 SMTP 密码、CAPTCHA 密钥与加密主密钥。
 
 ### 备用API（可选）
 

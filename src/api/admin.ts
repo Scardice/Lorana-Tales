@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import type { LogStore } from "../storage/log-store.js";
 import { getClientIp } from "../server/client-ip.js";
+import type { AccountService } from "../accounts/router.js";
 
 const SESSION_COOKIE = "scardice_admin_session";
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
@@ -92,6 +93,7 @@ export function createAdminRouter({
 	adminFilePath,
 	trustProxy = false,
 	retentionDays = 60,
+	accountService = null,
 	security = {},
 }: {
 	app;
@@ -100,6 +102,7 @@ export function createAdminRouter({
 	adminFilePath: string;
 	trustProxy?: boolean;
 	retentionDays?: number;
+	accountService?: AccountService | null;
 	security?: {
 		bruteforceBlockEnabled?: boolean;
 		maxAttempts?: number;
@@ -138,13 +141,25 @@ export function createAdminRouter({
 	}
 
 	function isAuthenticated(req) {
-		return !!getSession(req);
+		return !!getSession(req) || !!accountService?.isAdmin(req);
 	}
 
 	function requireAuth(req, res) {
 		if (isAuthenticated(req)) return true;
 		sendJson(res, 401, { error: "admin authentication required" });
 		return false;
+	}
+
+	function requireMutationAuth(req, res) {
+		if (getSession(req)) return true;
+		const session = accountService?.getSession(req);
+		if (session?.user.role === "admin" && accountService?.store.verifyCsrf(session, String(req.headers["x-csrf-token"] || ""))) return true;
+		sendJson(res, session ? 403 : 401, { error: session ? "csrf_failed" : "admin authentication required" });
+		return false;
+	}
+
+	function actor(req) {
+		return getSession(req) ? "root" : accountService?.getSession(req)?.user.id || "unknown";
 	}
 
 	function setSessionCookie(req, res, token) {
@@ -227,7 +242,8 @@ export function createAdminRouter({
 	});
 
 	app.get("/admin/api/session", (req, res) => {
-		sendJson(res, 200, { authenticated: isAuthenticated(req) });
+		const account = accountService?.getSession(req);
+		sendJson(res, 200, { authenticated: isAuthenticated(req), mode: getSession(req) ? "root" : account?.user.role === "admin" ? "account" : "none", user: account?.user.role === "admin" ? account.user : null });
 	});
 
 	app.post("/admin/api/login", async (req, res) => {
@@ -275,6 +291,68 @@ export function createAdminRouter({
 		sendJson(res, 200, { authenticated: false });
 	});
 
+	app.get("/admin/api/users", (req, res) => {
+		if (!requireAuth(req, res)) return;
+		if (!accountService) { sendJson(res, 404, { error: "accounts_disabled" }); return; }
+		sendJson(res, 200, accountService.store.listUsers(String(req.query.q || ""), clampInt(req.query.page, 1, 1, Number.MAX_SAFE_INTEGER), clampInt(req.query.pageSize, 20, 1, 100)));
+	});
+
+	app.get("/admin/api/account-audit", (req, res) => {
+		if (!requireAuth(req, res)) return;
+		if (!accountService) { sendJson(res, 404, { error: "accounts_disabled" }); return; }
+		sendJson(res, 200, accountService.store.listAudit(clampInt(req.query.page, 1, 1, Number.MAX_SAFE_INTEGER), clampInt(req.query.pageSize, 50, 1, 100)));
+	});
+
+	app.post("/admin/api/users", async (req, res) => {
+		if (!requireMutationAuth(req, res)) return;
+		if (!accountService) { sendJson(res, 404, { error: "accounts_disabled" }); return; }
+		try {
+			const body = readJsonBody(req); const email = String(body.email || ""); const newPassword = String(body.password || "");
+			if (!email.includes("@") || newPassword.length < 10) { sendJson(res, 400, { error: "invalid_user" }); return; }
+			const user = await accountService.store.createUser({ email, password: newPassword, displayName: String(body.displayName || ""), role: body.role === "admin" ? "admin" : "user", mustChangePassword: body.mustChangePassword !== false });
+			accountService.store.audit(actor(req), "admin.user-create", user.id, { email: user.email, role: user.role }); sendJson(res, 201, user);
+		} catch (error) { console.error("[admin] create user failed", error); sendJson(res, 409, { error: "user_exists" }); }
+	});
+
+	app.patch("/admin/api/users/:id", (req, res) => {
+		if (!requireMutationAuth(req, res)) return;
+		if (!accountService) { sendJson(res, 404, { error: "accounts_disabled" }); return; }
+		try {
+			const current = accountService.store.getUserById(req.params.id); if (!current) { sendJson(res, 404, { error: "user_not_found" }); return; }
+			const body = readJsonBody(req);
+			if (current.role === "admin" && body.role === "user" && current.status === "active" && accountService.store.activeAdminCount() <= 1) { sendJson(res, 409, { error: "last_admin" }); return; }
+			const user = accountService.store.updateUser(current.id, { email: typeof body.email === "string" ? body.email : undefined, displayName: typeof body.displayName === "string" ? body.displayName : undefined, role: body.role === "admin" || body.role === "user" ? body.role : undefined });
+			accountService.store.audit(actor(req), "admin.user-update", current.id, body); sendJson(res, 200, user);
+		} catch { sendJson(res, 409, { error: "user_update_failed" }); }
+	});
+
+	app.post("/admin/api/users/:id/password", async (req, res) => {
+		if (!requireMutationAuth(req, res)) return;
+		if (!accountService) { sendJson(res, 404, { error: "accounts_disabled" }); return; }
+		try { const body = readJsonBody(req); const newPassword = String(body.password || ""); if (newPassword.length < 10 || !accountService.store.getUserById(req.params.id)) { sendJson(res, 400, { error: "invalid_password" }); return; } await accountService.store.updatePassword(req.params.id, newPassword, body.mustChangePassword !== false); accountService.store.audit(actor(req), "admin.password-reset", req.params.id); sendJson(res, 200, { ok: true }); }
+		catch { sendJson(res, 400, { error: "password_update_failed" }); }
+	});
+
+	app.post("/admin/api/users/:id/status", (req, res) => {
+		if (!requireMutationAuth(req, res)) return;
+		if (!accountService) { sendJson(res, 404, { error: "accounts_disabled" }); return; }
+		const current = accountService.store.getUserById(req.params.id); if (!current) { sendJson(res, 404, { error: "user_not_found" }); return; }
+		const body = readJsonBody(req); const status = String(body.status || "active"); const reason = String(body.reason || "").trim();
+		if (!["active", "disabled", "banned"].includes(status) || (status === "banned" && !reason)) { sendJson(res, 400, { error: "ban_reason_required" }); return; }
+		if (current.role === "admin" && current.status === "active" && status !== "active" && accountService.store.activeAdminCount() <= 1) { sendJson(res, 409, { error: "last_admin" }); return; }
+		const user = accountService.store.setStatus(current.id, status as "active" | "disabled" | "banned", reason, String(body.until || "")); accountService.store.audit(actor(req), `admin.user-${status}`, current.id, { reason, until: body.until || "" }); sendJson(res, 200, user);
+	});
+
+	app.delete("/admin/api/users/:id", (req, res) => {
+		if (!requireMutationAuth(req, res)) return;
+		if (!accountService) { sendJson(res, 404, { error: "accounts_disabled" }); return; }
+		const current = accountService.store.getUserById(req.params.id); if (!current) { sendJson(res, 404, { error: "user_not_found" }); return; }
+		if (current.role === "admin" && current.status === "active" && accountService.store.activeAdminCount() <= 1) { sendJson(res, 409, { error: "last_admin" }); return; }
+		const body = readJsonBody(req); const action = String(body.projectAction || "archive");
+		if (!["delete", "archive", "transfer"].includes(action) || (action === "transfer" && !accountService.store.getUserById(String(body.transferUserId || "")))) { sendJson(res, 400, { error: "invalid_project_action" }); return; }
+		const ok = accountService.store.deleteUser(current.id, action as "delete" | "archive" | "transfer", String(body.transferUserId || "")); accountService.store.audit(actor(req), "admin.user-delete", current.id, { projectAction: action, transferUserId: body.transferUserId || "" }); sendJson(res, ok ? 200 : 404, { ok });
+	});
+
 	app.get("/admin/api/logs", async (req, res) => {
 		if (!requireAuth(req, res)) return;
 
@@ -297,7 +375,7 @@ export function createAdminRouter({
 	});
 
 	app.post("/admin/api/logs/delete", async (req, res) => {
-		if (!requireAuth(req, res)) return;
+		if (!requireMutationAuth(req, res)) return;
 
 		let keys: string[];
 		try {
@@ -352,7 +430,7 @@ export function createAdminRouter({
 	});
 
 	app.delete("/admin/api/logs/:key", async (req, res) => {
-		if (!requireAuth(req, res)) return;
+		if (!requireMutationAuth(req, res)) return;
 
 		try {
 			const key = String(req.params.key || "");
@@ -391,7 +469,7 @@ export function createAdminRouter({
 	});
 
 	app.post("/admin/api/cleanup", async (req, res) => {
-		if (!requireAuth(req, res)) return;
+		if (!requireMutationAuth(req, res)) return;
 
 		let requestedRetentionDays = retentionDays;
 		try {
@@ -418,7 +496,7 @@ export function createAdminRouter({
 	});
 
 	app.post("/admin/api/database/maintenance", async (req, res) => {
-		if (!requireAuth(req, res)) return;
+		if (!requireMutationAuth(req, res)) return;
 
 		let vacuum = false;
 		try {

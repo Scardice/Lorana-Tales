@@ -44,7 +44,7 @@ export default defineConfig({
 	},
 	base: "./",
 	plugins: [
-		vue(),
+		vue({ template: { compilerOptions: { isCustomElement: (tag) => tag === "altcha-widget" } } }),
 		Components({
 			// allow auto load markdown components under `./src/components/`
 			extensions: ["vue", "md"],

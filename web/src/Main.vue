@@ -13,6 +13,7 @@
           <n-tag type="success" size="small" :bordered="false">v1.0.0</n-tag>
         </n-flex>
         <n-flex align="center" justify="center">
+          <account-panel :archive="storyArchive" @load="onStoryChange" @sync="syncStorySource" />
           <n-button
             tag="a"
             href="/api-docs"
@@ -111,6 +112,18 @@
                 ]"
               />
 
+              <n-select
+                v-if="storyArchive?.document.settings.enabled"
+                class="pc-row__position"
+                :value="storyPositionFor(i)"
+                :options="[
+                  { value: 'left', label: '左侧' },
+                  { value: 'right', label: '右侧' },
+                  { value: 'narrator', label: '旁白位' },
+                ]"
+                @update:value="setStoryPosition(i, $event)"
+              />
+
               <n-color-picker
                 v-if="!isCompactViewport"
                 v-model:value="i.color"
@@ -166,6 +179,12 @@
             </div>
           </div>
 
+          <story-options
+            v-if="storyArchive"
+            :model="storyArchive.document.settings"
+            @change="updateStorySettings"
+          />
+
           <section class="workbench-actions" aria-label="导出和预览控制">
             <div class="action-card action-card--export">
               <div class="action-card__title">
@@ -178,6 +197,14 @@
                 <n-button secondary type="primary" @click="exportRecordRaw"
                   >下载原始文件</n-button
                 >
+                <n-button
+                  v-if="storyArchive?.document.settings.enabled"
+                  secondary
+                  type="success"
+                  @click="downloadStoryPackage"
+                  >下载可编辑 SSP</n-button
+                >
+                <n-button secondary type="primary" @click="triggerFileUpload">导入日志 / SSP</n-button>
                 <!-- <n-button secondary type="primary" v-show="false" @click="exportRecordQQ">下载QQ风格记录</n-button>-->
                 <!-- <n-button secondary type="primary" v-show="false" @click="exportRecordIRC">下载IRC风格记录</n-button>-->
                 <n-button secondary type="primary" @click="exportRecordDOC"
@@ -204,6 +231,18 @@
                   :border="true"
                   @click="previewClick('preview')"
                 />
+                <n-button
+                  v-if="storyArchive?.document.settings.enabled"
+                  secondary
+                  type="success"
+                  @click="isStoryPlayerVisible = true"
+                >沉浸预览</n-button>
+                <n-button
+                  v-if="storyArchive?.document.settings.enabled"
+                  secondary
+                  type="warning"
+                  @click="clearStoryDraft"
+                >删除本地修改</n-button>
                 <n-checkbox
                   label="论坛代码"
                   v-model:checked="isShowPreviewBBS"
@@ -226,8 +265,18 @@
             </div>
           </section>
 
+          <story-editor
+            v-if="storyArchive?.document.settings.enabled"
+            :archive="storyArchive"
+            :asset-url="storyAssetUrl"
+            @change="onStoryChange"
+            @download="downloadStoryPackage"
+            @preview="isStoryPlayerVisible = true"
+          />
+
           <div
             v-show="
+              !storyArchive?.document.settings.enabled &&
               !(
                 isShowPreview ||
                 isShowPreviewBBS ||
@@ -283,7 +332,7 @@
               <input
                 ref="fileInputRef"
                 type="file"
-                accept=".json,.txt,.log,.trpglog,.olivadicelog"
+                accept=".ssp,.json,.txt,.log,.trpglog,.olivadicelog"
                 style="display: none"
                 @change="onFileChange"
               />
@@ -359,6 +408,13 @@
           </n-button>
         </template>
       </n-modal>
+      <story-player
+        v-if="storyArchive"
+        :show="isStoryPlayerVisible"
+        :archive="storyArchive"
+        :asset-url="storyAssetUrl"
+        @close="isStoryPlayerVisible = false"
+      />
     </n-layout-content>
   </n-layout>
 </template>
@@ -400,15 +456,25 @@ import {
   onMounted,
   ref,
   render,
+  toRaw,
   type Component,
   watch,
 } from "vue";
 import PreviewItem from "./components/previews/preview-main-item.vue";
 import PreviewTableTR from "./components/previews/preview-table-tr.vue";
+import AccountPanel from "./components/story/AccountPanel.vue";
+import StoryEditor from "./components/story/StoryEditor.vue";
+import StoryOptions from "./components/story/StoryOptions.vue";
+import StoryPlayer from "./components/story/StoryPlayer.vue";
 import { useThemeDark } from "./composables/useTheme";
 import { setCharInfo, type TextInfo } from "./logManager/importers/_logImpoter";
 import { logMan } from "./logManager/logManager";
 import type { CharItem, LogItem } from "./logManager/types";
+import { deleteLocalStoryDraft, loadLocalStoryDraft, saveLocalStoryDraft } from "./story/local-storage";
+import { storyFromLogItems, storyToLogItems } from "./story/model";
+import { createStoryPackage, readStoryPackage } from "./story/package";
+import { mergeStorySource } from "./story/sync";
+import type { StoryArchive, StoryPosition, StorySettings } from "./story/types";
 import { UploadBlockedBySecurityError, useStore } from "./store";
 import {
   applyQQImageRKeyReplacement,
@@ -447,6 +513,172 @@ const isShowPreview = ref(false);
 const isShowPreviewBBS = ref(false);
 const isShowPreviewBBSPineapple = ref(false);
 const isShowPreviewTRG = ref(false);
+const isStoryPlayerVisible = ref(false);
+const storyArchive = ref<StoryArchive>();
+const storyObjectUrls = new Map<string, string>();
+const storyDraftKey = `story:${location.origin}${location.pathname}?key=${new URLSearchParams(location.search).get("key") || "local"}`;
+let applyingStoryChange = false;
+
+const storyAssetUrl = (id: string) => {
+  const existing = storyObjectUrls.get(id);
+  if (existing) return existing;
+  const bytes = storyArchive.value?.assets.get(id);
+  if (!bytes) return id;
+  const refs = [
+    ...storyArchive.value!.document.characters.map((item) => item.avatar),
+    ...storyArchive.value!.document.messages.map((item) => item.kind === "image" ? item.asset : undefined),
+  ];
+  const mime = refs.find((item) => item?.id === id)?.mime || "application/octet-stream";
+  const url = URL.createObjectURL(new Blob([bytes], { type: mime }));
+  storyObjectUrls.set(id, url);
+  return url;
+};
+
+const saveStoryDraft = debounce((archive: StoryArchive) => {
+  saveLocalStoryDraft(storyDraftKey, archive).catch((error) => console.error("保存沉浸编辑草稿失败", error));
+}, 500);
+
+function ensureStoryArchive() {
+  if (storyArchive.value) return;
+  const params = new URLSearchParams(location.search);
+  const assets = new Map<string, Uint8Array>();
+  storyArchive.value = {
+    document: storyFromLogItems(logMan.curItems, store.pcList, {
+      title: document.title || "跑团记录",
+      sourceKey: params.get("key") || undefined,
+      assets,
+    }),
+    assets,
+  };
+}
+
+function onStoryChange(archive: StoryArchive) {
+  storyArchive.value = archive;
+  applyingStoryChange = true;
+  try {
+    logMan.curItems = storyToLogItems(archive.document);
+    logMan.flush();
+    showPreview();
+  } finally {
+    applyingStoryChange = false;
+  }
+  saveStoryDraft(archive);
+}
+
+function updateStorySettings(settings: StorySettings) {
+  if (!storyArchive.value) return;
+  onStoryChange({ ...storyArchive.value, document: { ...storyArchive.value.document, settings } });
+}
+
+function storyCharacterFor(pc: CharItem) {
+  return storyArchive.value?.document.characters.find((item) => item.name === pc.name && item.imUserId === pc.IMUserId);
+}
+
+function storyPositionFor(pc: CharItem): StoryPosition {
+  return storyCharacterFor(pc)?.position || (pc.role === "主持人" ? "right" : pc.role === "骰子" ? "narrator" : "left");
+}
+
+function setStoryPosition(pc: CharItem, position: StoryPosition) {
+  if (!storyArchive.value) return;
+  const archive = { document: structuredClone(toRaw(storyArchive.value.document)), assets: new Map(toRaw(storyArchive.value.assets)) };
+  const target = archive.document.characters.find((item) => item.name === pc.name && item.imUserId === pc.IMUserId);
+  if (target) target.position = position;
+  onStoryChange(archive);
+}
+
+async function downloadStoryPackage() {
+  ensureStoryArchive();
+  if (!storyArchive.value) return;
+  const { archive, failed } = await hydrateStoryAssets(storyArchive.value);
+  storyArchive.value = archive;
+  const blob = await createStoryPackage(archive);
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${storyArchive.value.document.title.replace(/[\\/:*?\"<>|]/g, "_") || "跑团记录"}.ssp`;
+  link.style.display = "none";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  message.success("SSP 工程包已生成");
+  if (failed) message.warning(`${failed} 个失效或超时的远程资源无法内嵌，SSP 中已保留原链接`);
+}
+
+async function hydrateStoryAssets(source: StoryArchive): Promise<{ archive: StoryArchive; failed: number }> {
+  const archive = { document: structuredClone(toRaw(source.document)), assets: new Map(toRaw(source.assets)) };
+  let failed = 0;
+  const refs = [
+    ...archive.document.characters.map((item) => item.avatar),
+    ...archive.document.messages.map((item) => item.kind === "image" ? item.asset : undefined),
+  ].filter((item): item is NonNullable<typeof item> => !!item);
+  for (const asset of refs) {
+    if (archive.assets.has(asset.id)) continue;
+    const sourceUrl = asset.sourceUrl || (/^https?:\/\//i.test(asset.id) ? asset.id : "");
+    if (!sourceUrl) continue;
+    try {
+      let localUrl = sourceUrl;
+      if (new URL(sourceUrl, location.href).origin !== location.origin) {
+        const cached = await fetch("/api/editor/assets/fetch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: sourceUrl }), signal: AbortSignal.timeout(8000) });
+        if (!cached.ok) throw new Error("资源归档失败");
+        localUrl = (await cached.json()).url;
+      }
+      const response = await fetch(localUrl, { signal: AbortSignal.timeout(8000) });
+      if (!response.ok) throw new Error("资源下载失败");
+      const id = `asset-${crypto.randomUUID()}`;
+      archive.assets.set(id, new Uint8Array(await response.arrayBuffer()));
+      asset.id = id;
+      asset.sourceUrl = undefined;
+      asset.mime = response.headers.get("content-type") || asset.mime;
+    } catch (error) {
+      failed += 1;
+      console.warn(`SSP 资源暂时无法内嵌：${asset.name || sourceUrl}`, error);
+    }
+  }
+  return { archive, failed };
+}
+
+async function syncStorySource(payload: { record: { client: string; data: string; name?: string; updated_at?: string }; sourceKey: string; sourceRevision?: string }) {
+  if (!storyArchive.value) return;
+  try {
+    let rawText = "";
+    if (payload.record.client === "Parquet") {
+      const bytes = Uint8Array.from(atob(payload.record.data), (char) => char.charCodeAt(0));
+      const file = await asyncBufferFrom({ file: new File([bytes], "source.parquet"), byteLength: bytes.byteLength });
+      const rows = await parquetReadObjects({ file, compressors });
+      rawText = JSON.stringify({ items: rows.map((row) => ({ ...row, id: Number(row.id), time: Number(row.time), commandId: Number(row.commandId) })), version: 105 });
+    } else {
+      rawText = strFromU8(unzlibSync(Uint8Array.from(atob(payload.record.data), (char) => char.charCodeAt(0))));
+    }
+    rawText = await applyQQImageRKey(rawText);
+    const parsed = logMan.parse(rawText);
+    if (!parsed) throw new Error("源日志格式无法解析");
+    const incomingAssets = new Map<string, Uint8Array>();
+    const incoming = storyFromLogItems(parsed.items, [...parsed.charInfo.values()], { title: payload.record.name, sourceKey: payload.sourceKey, sourceRevision: payload.record.updated_at || payload.sourceRevision, assets: incomingAssets });
+    const result = mergeStorySource(storyArchive.value.document, incoming);
+    onStoryChange({ document: result.document, assets: new Map([...storyArchive.value.assets, ...incomingAssets]) });
+    message.success(`同步完成：新增 ${result.added}、更新 ${result.updated}、移除 ${result.removed}${result.conflicts ? `，保留 ${result.conflicts} 个冲突` : ""}`);
+  } catch (error) {
+    console.error("同步源日志失败", error);
+    message.error(error instanceof Error ? error.message : "同步源日志失败");
+  }
+}
+
+async function clearStoryDraft() {
+  if (!confirm("确定删除这个日志在本浏览器保存的全部高级编辑修改吗？此操作需要再次确认。")) return;
+  if (!confirm("再次确认：删除后无法从本浏览器恢复，已下载的 SSP 不受影响。")) return;
+  await deleteLocalStoryDraft(storyDraftKey);
+  storyArchive.value = undefined;
+  ensureStoryArchive();
+  message.success("本地编辑修改已删除");
+}
+
+function onStorySaveShortcut(event: KeyboardEvent) {
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s" && storyArchive.value?.document.settings.enabled) {
+    event.preventDefault();
+    downloadStoryPackage().catch((error) => { console.error(error); message.error("SSP 下载失败"); });
+  }
+}
 
 const colors = ref<string[]>([]);
 const mobileColorTarget = ref<CharItem>();
@@ -521,6 +753,57 @@ const buildUploadFile = async (file: File): Promise<File | undefined> => {
   });
 };
 
+const bytesToBase64 = (bytes: Uint8Array) => {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return btoa(binary);
+};
+
+const accountCsrf = () => decodeURIComponent(
+  document.cookie.split("; ").find((value) => value.startsWith("scardice_account_csrf="))?.split("=").slice(1).join("=") || "",
+);
+
+async function claimWebUpload(file: File, uploadedUrl: string) {
+  const accountResponse = await fetch("/api/account/me", { credentials: "same-origin" });
+  if (!accountResponse.ok) return;
+  const account = await accountResponse.json();
+  if (!account.authenticated) return;
+
+  const parsed = logMan.parse(await file.text());
+  if (!parsed?.items.length) return;
+  const target = new URL(uploadedUrl, location.href);
+  const assets = new Map<string, Uint8Array>();
+  const document = storyFromLogItems(parsed.items, [...parsed.charInfo.values()], {
+    title: file.name.replace(/\.[^.]+$/, "") || "跑团记录",
+    sourceKey: target.searchParams.get("key") || undefined,
+    sourceRevision: new Date().toISOString(),
+    assets,
+  });
+  const csrf = accountCsrf();
+  const response = await fetch("/api/account/projects", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {
+      "Content-Type": "application/json",
+      ...(csrf ? { "X-CSRF-Token": csrf } : {}),
+    },
+    body: JSON.stringify({
+      title: document.title,
+      document: {
+        story: document,
+        assets: [...assets].map(([id, bytes]) => [id, bytesToBase64(bytes)]),
+      },
+      sourceKey: document.source.key || "",
+      sourceRevision: document.source.revision || "",
+      sourceSecret: target.hash.slice(1),
+    }),
+  });
+  if (!response.ok) throw new Error("上传成功，但自动保存到账号失败");
+}
+
 const onFileChange = async (event: Event) => {
   if (!(event.target instanceof HTMLInputElement)) return;
 
@@ -530,6 +813,12 @@ const onFileChange = async (event: Event) => {
 
   isUploadingFile.value = true;
   try {
+    if (file.name.toLowerCase().endsWith(".ssp")) {
+      const archive = await readStoryPackage(file);
+      onStoryChange(archive);
+      message.success("SSP 工程包已载入，可继续编辑");
+      return;
+    }
     const uploadFile = await buildUploadFile(file);
     if (!uploadFile) {
       message.error("文件解析失败，请确认日志格式受支持");
@@ -537,6 +826,12 @@ const onFileChange = async (event: Event) => {
     }
 
     const url = await store.uploadLogFile(uploadFile);
+    try {
+      await claimWebUpload(file, url);
+    } catch (error) {
+      console.warn("自动保存上传日志到账号失败", error);
+      message.warning("日志已上传，但未能自动保存到账号；打开后可在账号面板手动保存");
+    }
     message.success("上传成功，正在打开新的染色器链接");
     window.location.assign(url);
   } catch (e) {
@@ -655,6 +950,7 @@ const browserAlert = () => {
 
 onMounted(async () => {
   window.addEventListener("resize", updateCompactViewport, { passive: true });
+  window.addEventListener("keydown", onStorySaveShortcut);
   const searchParams = new URLSearchParams(window.location.search);
   const key = searchParams.get("key");
   const password = location.hash.slice(1);
@@ -760,6 +1056,17 @@ onMounted(async () => {
     showHl();
   }
 
+  ensureStoryArchive();
+  try {
+    const draft = await loadLocalStoryDraft(storyDraftKey);
+    if (draft && confirm("检测到这个日志在当前浏览器保存的高级编辑修改，是否恢复？")) {
+      onStoryChange(draft);
+      message.success("已恢复本地编辑修改");
+    }
+  } catch (error) {
+    console.error("读取沉浸编辑草稿失败", error);
+  }
+
   // cminstance.value = cmRefDom.value?.cminstance;
   // cminstance.value?.focus();
   // console.log(cminstance.value)
@@ -774,6 +1081,10 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   window.removeEventListener("resize", updateCompactViewport);
+  window.removeEventListener("keydown", onStorySaveShortcut);
+  saveStoryDraft.cancel();
+  for (const url of storyObjectUrls.values()) URL.revokeObjectURL(url);
+  storyObjectUrls.clear();
 });
 
 function exportRecordRaw() {
@@ -1042,6 +1353,15 @@ logMan.ev.on("textSet", (text) => {
 
 logMan.ev.on("parsed", (ti: TextInfo) => {
   store.updatePcList(ti.charInfo);
+  if (!applyingStoryChange && storyArchive.value && !storyArchive.value.document.settings.enabled) {
+    const settings = storyArchive.value.document.settings;
+    const assets = new Map(storyArchive.value.assets);
+    storyArchive.value = {
+      document: { ...storyFromLogItems(ti.items, [...ti.charInfo.values()], { assets }), settings },
+      assets,
+    };
+    saveStoryDraft(storyArchive.value);
+  }
 });
 
 const onChange = (v: ViewUpdate) => {
