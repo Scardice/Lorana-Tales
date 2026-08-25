@@ -11,13 +11,17 @@ host = "0.0.0.0"
 # 改为 80/443 通常需要额外权限；反向代理部署时一般保持 3000，并由 Nginx/Caddy 转发。
 port = 3000
 
-# 是否信任 CDN/反代转发的客户端 IP 头（CF-Connecting-IP、True-Client-IP、
-# Fastly-Client-IP、X-Real-IP、X-Client-IP、X-Forwarded-For、Forwarded）。
-# false 时客户端 IP 和外部协议/域名取自直连请求，能避免伪造代理头；true 时必须确保前面只有可信反向代理会设置这些头。
+# 是否信任 CDN/反代转发的客户端 IP、协议和域名请求头。
+# true 时读取并校验 CF-Connecting-IP、True-Client-IP、Fastly-Client-IP、
+# X-Real-IP、X-Client-IP、X-Forwarded-For、Forwarded: for= 等客户端 IP 头，
+# 同时使用 X-Forwarded-Proto/X-Forwarded-Host 生成外部链接和安全 Cookie。
+# 只有当前面的每一层代理都会覆盖这些头、不会把公网传入值直接放行时才设为 true；
+# false 时完全忽略外部转发头，适合直连部署，也能避免客户端伪造 IP。
 trust_proxy = false
 
 # 允许访问后端的 Host 头白名单。
-# 列表外 Host 会返回 400，可防止 Host header poisoning 影响 CORS 和分享链接生成；生产环境必须加入你的真实域名。
+# 列表外 Host 会返回 400，可防止 Host header poisoning 影响 CORS 和分享链接生成。
+# 反代/CDN 部署时填写用户实际访问的域名，以及代理转发到源站时使用的 Host（如有不同）。
 allowed_hosts = ["localhost", "127.0.0.1", "::1"]
 
 [storage]
@@ -27,7 +31,8 @@ sqlite_path = "./data/scardice.db"
 
 [app]
 # 生成日志查看链接时使用的前端地址。
-# 留空时使用当前请求来源，适合前后端一体部署；跨域部署或反向代理多域名时应固定为公开前端 URL，避免分享链接域名不稳定。
+# 留空时使用当前请求经 trust_proxy 解析后的外部协议和域名，适合前后端一体部署；
+# 跨域部署、CDN 托管完整前端或反向代理多域名时，应固定为用户实际打开的公开前端 URL。
 frontend_url = ""
 
 # 日志保留天数。

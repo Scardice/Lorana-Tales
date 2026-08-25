@@ -1,0 +1,104 @@
+name: Nightly Release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nightly-release
+  cancel-in-progress: true
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22.x"
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install build dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check types
+        run: pnpm lint
+
+      - name: Build server and frontend
+        run: pnpm build
+
+      - name: Stage portable runtime package
+        run: node scripts/package-nightly.mjs release/scardice-story-painter-nightly
+
+      - name: Install production dependencies into package
+        working-directory: release/scardice-story-painter-nightly
+        run: |
+          npm install --package-lock-only --ignore-scripts --omit=dev --no-audit --no-fund
+          npm ci --omit=dev --no-audit --no-fund
+
+      - name: Verify staged runtime package
+        working-directory: release/scardice-story-painter-nightly
+        run: |
+          test -f config.toml
+          test -f dist/bin/scardice-story-painter.js
+          test -f out/index.html
+          test -f package.json
+          node --input-type=module -e "await import('better-sqlite3'); console.log('better-sqlite3 runtime loaded')"
+
+      - name: Archive runtime package
+        run: |
+          tar -czf release/scardice-story-painter-nightly-linux-x64.tar.gz \
+            -C release scardice-story-painter-nightly
+          (cd release && zip -qr scardice-story-painter-nightly-linux-x64.zip scardice-story-painter-nightly)
+          (cd release && sha256sum \
+            scardice-story-painter-nightly-linux-x64.tar.gz \
+            scardice-story-painter-nightly-linux-x64.zip \
+            > SHA256SUMS.txt)
+
+      - name: Move rolling nightly tag to this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NIGHTLY_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          ref="repos/${GITHUB_REPOSITORY}/git/refs/tags/nightly"
+          if gh api "$ref" >/dev/null 2>&1; then
+            gh api --method PATCH "$ref" -f sha="$NIGHTLY_SHA" -F force=true >/dev/null
+          else
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f ref="refs/tags/nightly" -f sha="$NIGHTLY_SHA" >/dev/null
+          fi
+
+      - name: Publish Nightly Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: nightly
+          target_commitish: ${{ github.sha }}
+          name: Nightly Release
+          prerelease: true
+          make_latest: false
+          overwrite_files: true
+          fail_on_unmatched_files: true
+          body: |
+            Rolling nightly build for commit `${{ github.sha }}`.
+
+            Target: Linux x64, Node.js >= 20.19.
+            The package contains compiled `dist/`, `out/`, production dependencies, and an editable `config.toml`.
+          files: |
+            release/scardice-story-painter-nightly-linux-x64.tar.gz
+            release/scardice-story-painter-nightly-linux-x64.zip
+            release/SHA256SUMS.txt

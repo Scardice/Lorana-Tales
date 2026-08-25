@@ -85,6 +85,25 @@ pnpm dev
 
 运行时 JS 来自 `dist/` 和 `out/assets/` 编译产物；辅助开发脚本放在 `scripts/`。
 
+### Nightly Release
+
+每次 `main` 分支有新提交时，GitHub Actions 会重新构建并更新 [Nightly Release](https://github.com/Scardice/Scardice-story-painter/releases/tag/nightly)。它是一个滚动的预发布版本，固定使用 `nightly` 标签，不会创建大量按提交分裂的 Release。
+
+Nightly 包面向 Linux x64，使用 Node.js `>=20.19`，已经包含服务端 `dist/`、前端 `out/`、生产依赖和 `better-sqlite3` 原生模块，不需要再编译源码。下载 `.tar.gz` 或 `.zip` 后：
+
+```bash
+# 解压后进入目录
+cd scardice-story-painter-nightly
+
+# 直接编辑已经准备好的运行配置；不要把真实密码或域名提交回源码仓库
+$EDITOR config.toml
+
+# 直接启动，不需要 pnpm install，也不需要重新构建
+npm start
+```
+
+包内同时保留 `config.toml.example` 和 `NIGHTLY-README.md`。如果要在其他操作系统上运行，建议使用源码仓库按当前平台重新执行 `pnpm install && pnpm build`，因为 `better-sqlite3` 的原生依赖与平台和 CPU 架构有关。
+
 ## 配置
 
 ### config.toml（主要配置方式）
@@ -109,14 +128,14 @@ cp config.toml.example config.toml
 [server]
 host = "0.0.0.0"       # 监听地址
 port = 3000             # 监听端口
-trust_proxy = false     # 是否信任反向代理/CDN IP 头；可信代理链后设为 true
-allowed_hosts = ["localhost", "127.0.0.1", "::1"] # 允许的 Host 头；生产环境加入你的域名
+trust_proxy = false     # 可信 CDN/反代链路才设为 true；直连部署保持 false
+allowed_hosts = ["localhost", "127.0.0.1", "::1"] # 加入用户实际访问的公开域名
 
 [storage]
 sqlite_path = "./data/scardice.db" # SQLite 数据库路径
 
 [app]
-frontend_url = ""        # 留空时自动使用当前请求域名，适合前后端一体部署
+frontend_url = ""        # 留空时使用代理解析后的外部域名；跨域/CDN 托管前端时固定填写公开 URL
 log_retention_days = 60  # 日志保留天数
 max_upload_mb = 5        # 上传大小限制
 cleanup_on_start = false # 启动时清理过期日志
@@ -183,7 +202,7 @@ PORT=8080 SQLITE_PATH=/mnt/data/scardice.db pnpm start
 
 当服务位于可信的 Nginx、Caddy、Cloudflare、Fastly 或其他 CDN 后方时，将 `trust_proxy = true`，或设置 `TRUST_PROXY=true`。服务端按以下优先级读取真实客户端 IP：`CF-Connecting-IP`、`True-Client-IP`、`Fastly-Client-IP`、`X-Real-IP`、`X-Client-IP`、`X-Forwarded-For`，最后兼容 RFC 7239 的 `Forwarded: for=`。
 
-这些请求头只有在 `trust_proxy` 开启时才会被信任；直连部署保持 `false`，这样客户端不能伪造 IP。反向代理应覆盖或清理来自公网请求的同名请求头，并把 CDN 到代理之间的链路设为可信。
+这些请求头只有在 `trust_proxy` 开启时才会被信任；直连部署保持 `false`，这样客户端不能伪造 IP。反向代理应覆盖或清理来自公网请求的同名请求头，并把 CDN 到代理之间的链路设为可信。`allowed_hosts` 仍必须加入用户实际访问的域名；它与 `trust_proxy` 是两项独立的安全检查。
 
 ```toml
 [server]

@@ -3,6 +3,9 @@
 	"version": "1.0.0",
 	"private": true,
 	"type": "module",
+	"engines": {
+		"node": ">=20.19"
+	},
 	"bin": {
 		"scardice-story-painter": "./dist/bin/scardice-story-painter.js"
 	},
@@ -12,7 +15,7 @@
 		"dev:server": "pnpm build:server && node dist/bin/scardice-story-painter.js",
 		"start": "node dist/bin/scardice-story-painter.js",
 		"build": "pnpm build:server && pnpm build:web",
-		"build:server": "tsc -p tsconfig.server.json && chmod +x dist/bin/scardice-story-painter.js",
+		"build:server": "tsc -p tsconfig.server.json && node scripts/set-executable.mjs dist/bin/scardice-story-painter.js",
 		"build:web": "vue-tsc --noEmit && vite build",
 		"lint": "tsc -p tsconfig.server.json --noEmit && vue-tsc --noEmit",
 		"preview": "vite preview --host 0.0.0.0"
