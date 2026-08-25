@@ -1,6 +1,6 @@
 import type { LogItem } from "~/logManager/types";
 
-export const STORY_SCHEMA_VERSION = 2;
+export const STORY_SCHEMA_VERSION = 3;
 
 export type StoryPosition = "left" | "right" | "narrator";
 export type StoryTheme = "auto" | "light" | "dark";
@@ -67,6 +67,7 @@ export interface StorySettings {
   showQqInEditor: boolean;
   showQqInPreview: boolean;
   showNames: boolean;
+  showNarratorNames: boolean;
   showTime: boolean;
   preserveLineBreaks: boolean;
   theme: StoryTheme;
@@ -134,6 +135,7 @@ export const defaultStorySettings = (): StorySettings => ({
   showQqInEditor: true,
   showQqInPreview: false,
   showNames: true,
+  showNarratorNames: true,
   showTime: false,
   preserveLineBreaks: false,
   theme: "auto",
@@ -141,7 +143,7 @@ export const defaultStorySettings = (): StorySettings => ({
   fontSize: 16,
   avatarSize: 42,
   bubbleMaxWidth: 78,
-  canvasWidth: 720,
+  canvasWidth: 1600,
   animation: "slide-fade",
   animationDurationMs: 220,
   autoplay: false,

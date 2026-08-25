@@ -44,7 +44,6 @@
         <n-text type="info" italic class="block text-center my-1"
           >Scardice官方QQ一群 1084726031</n-text
         >
-        <option-view></option-view>
         <div class="remote-load-frame">
           <div
             v-if="loading"
@@ -55,6 +54,9 @@
             <div class="remote-load-spinner" aria-hidden="true"></div>
             <span>正在尝试加载远程记录……</span>
           </div>
+          <details class="mobile-config-fold" :open="!isCompactViewport">
+            <summary><strong>配置与角色</strong><span>点击展开导出样式、角色位置与高级编辑设置</span></summary>
+            <option-view></option-view>
           <div class="pc-list">
             <div
               v-for="(i, index) in store.pcList"
@@ -70,6 +72,7 @@
                 @click="deletePc(index, i)"
                 :aria-label="`删除角色 ${i.name || index + 1}`"
                 :disabled="
+                  isDefaultNarratorPc(i) ||
                   isShowPreview ||
                   isShowPreviewBBS ||
                   isShowPreviewBBSPineapple ||
@@ -83,6 +86,7 @@
 
               <n-input
                 :disabled="
+                  isDefaultNarratorPc(i) ||
                   isShowPreview ||
                   isShowPreviewBBS ||
                   isShowPreviewBBSPineapple ||
@@ -104,6 +108,7 @@
               <n-select
                 v-model:value="i.role"
                 class="pc-row__role"
+                :disabled="isDefaultNarratorPc(i)"
                 :options="[
                   { value: '主持人', label: '主持人' },
                   { value: '角色', label: '角色' },
@@ -116,6 +121,7 @@
                 v-if="storyArchive?.document.settings.enabled"
                 class="pc-row__position"
                 :value="storyPlacementFor(i)"
+                :disabled="isDefaultNarratorPc(i)"
                 :options="[
                   { value: 'left', label: '左侧' },
                   { value: 'right', label: '右侧' },
@@ -134,6 +140,7 @@
                 :modes="['hex', 'rgb', 'hsl', 'hsv']"
                 :swatches="colors"
                 :disabled="
+                  isDefaultNarratorPc(i) ||
                   isShowPreview ||
                   isShowPreviewBBS ||
                   isShowPreviewBBSPineapple ||
@@ -150,6 +157,7 @@
                     :aria-label="`设置 ${i.name || '角色'} 颜色`"
                     @click="onClick"
                     :disabled="
+                      isDefaultNarratorPc(i) ||
                       isShowPreview ||
                       isShowPreviewBBS ||
                       isShowPreviewBBSPineapple ||
@@ -169,6 +177,7 @@
                 :aria-label="`设置 ${i.name || '角色'} 颜色`"
                 @click="openMobileColorPicker(i)"
                 :disabled="
+                  isDefaultNarratorPc(i) ||
                   isShowPreview ||
                   isShowPreviewBBS ||
                   isShowPreviewBBSPineapple ||
@@ -185,6 +194,7 @@
             :model="storyArchive.document.settings"
             @change="updateStorySettings"
           />
+          </details>
 
           <section class="workbench-actions" aria-label="导出和预览控制">
             <div class="action-card action-card--export">
@@ -573,6 +583,10 @@ function updateStorySettings(settings: StorySettings) {
 
 function storyCharacterFor(pc: CharItem) {
   return storyArchive.value?.document.characters.find((item) => item.name === pc.name && item.imUserId === pc.IMUserId);
+}
+
+function isDefaultNarratorPc(pc: CharItem) {
+  return !!storyCharacterFor(pc)?.isNarrator;
 }
 
 function storyPositionFor(pc: CharItem): StoryPosition {
@@ -1556,9 +1570,18 @@ const _code = ref("");
 }
 
 .painter-workspace {
-  width: min(1000px, calc(100% - 28px));
+  width: min(1600px, calc(100% - 28px));
   margin: 0 auto;
   padding-bottom: 3rem;
+}
+
+/* Select menus are teleported to body; keep them above immersive and modal layers. */
+.n-base-select-menu {
+  z-index: 11050 !important;
+}
+
+.v-binder-follower-container {
+  z-index: 11040 !important;
 }
 
 .painter-content .n-text {
@@ -1601,6 +1624,14 @@ const _code = ref("");
   margin: 0.75rem 0 1rem;
   box-shadow: var(--home-shadow);
   overflow: hidden;
+}
+
+.mobile-config-fold {
+  border: 0;
+}
+
+.mobile-config-fold > summary {
+  display: none;
 }
 
 .pc-row {
@@ -1802,6 +1833,54 @@ const _code = ref("");
 }
 
 @media (max-width: 520px) {
+  .mobile-config-fold {
+    margin: 0.75rem 0 1rem;
+    border: 1px solid var(--home-line);
+    border-radius: var(--home-radius);
+    background: var(--home-panel);
+    box-shadow: var(--home-shadow);
+    overflow: hidden;
+  }
+
+  .mobile-config-fold > summary {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0.2rem 0.75rem;
+    align-items: center;
+    padding: 0.85rem 1rem;
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+  }
+
+  .mobile-config-fold > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .mobile-config-fold > summary::after {
+    content: "＋";
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    color: var(--home-muted);
+    font-size: 1.25rem;
+    transition: transform 0.18s ease;
+  }
+
+  .mobile-config-fold[open] > summary::after {
+    transform: rotate(45deg);
+  }
+
+  .mobile-config-fold > summary span {
+    color: var(--home-muted);
+    font-size: 0.72rem;
+  }
+
+  .mobile-config-fold > .pc-list,
+  .mobile-config-fold > .story-options {
+    margin-right: 0.5rem;
+    margin-left: 0.5rem;
+  }
+
   .pc-row {
     grid-template-areas:
       "name color delete"

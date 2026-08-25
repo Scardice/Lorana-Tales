@@ -9,6 +9,7 @@
       <label><n-switch :value="model.mergeNarration" @update:value="set('mergeNarration', $event)" />融合旁白</label>
       <label><n-switch :value="model.showAvatars" @update:value="set('showAvatars', $event)" />显示头像</label>
       <label><n-switch :value="model.showNames" @update:value="set('showNames', $event)" />显示角色名</label>
+      <label><n-switch :value="model.showNarratorNames" @update:value="set('showNarratorNames', $event)" />显示自定义旁白名</label>
       <label><n-switch :value="model.showTime" @update:value="set('showTime', $event)" />显示时间</label>
       <label><n-switch :value="model.preserveLineBreaks" @update:value="set('preserveLineBreaks', $event)" />保留消息内换行</label>
       <label><n-switch :value="model.showQqInEditor" @update:value="set('showQqInEditor', $event)" />编辑时显示 QQ 号</label>
@@ -20,7 +21,7 @@
       <label class="size-option"><span>头像大小 {{ model.avatarSize }}px</span><n-slider :value="model.avatarSize" :min="28" :max="64" :step="2" @update:value="set('avatarSize', $event)" /></label>
       <label class="size-option"><span>字体大小 {{ model.fontSize }}px</span><n-slider :value="model.fontSize" :min="12" :max="32" @update:value="set('fontSize', $event)" /></label>
       <label>气泡宽度 <n-slider :value="model.bubbleMaxWidth" :min="48" :max="96" @update:value="set('bubbleMaxWidth', $event)" /></label>
-      <label>画布宽度 <n-slider :value="model.canvasWidth" :min="360" :max="1200" :step="20" @update:value="set('canvasWidth', $event)" /></label>
+      <label>画布宽度 <n-slider :value="model.canvasWidth" :min="360" :max="1600" :step="20" @update:value="set('canvasWidth', $event)" /></label>
       <label>动画<n-select :value="model.animation" :options="animationOptions" @update:value="set('animation', $event)" /></label>
     </div>
   </section>

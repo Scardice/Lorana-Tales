@@ -293,6 +293,13 @@ export function storyToLogItems(document: StoryDocument): LogItem[] {
 
 export function normalizeStoryDocument(input: StoryDocument): StoryDocument {
   const defaults = defaultStorySettings();
+  const settings = {
+    ...defaults,
+    ...(input.settings || {}),
+    ...((input.schemaVersion || 0) < 3 && (!input.settings?.canvasWidth || input.settings.canvasWidth === 720)
+      ? { canvasWidth: defaults.canvasWidth }
+      : {}),
+  };
   const inheritedNarratorAvatar = input.settings?.showNarratorAvatar ?? defaults.showNarratorAvatar;
   const characters = Array.isArray(input.characters)
     ? input.characters.map((item) => ({
@@ -344,7 +351,7 @@ export function normalizeStoryDocument(input: StoryDocument): StoryDocument {
           return migrated.some((item) => item.kind === "image") ? migrated : [message];
         })
       : [],
-    settings: { ...defaults, ...(input.settings || {}) },
+    settings,
     source: input.source || { kind: "none" },
   };
 }
