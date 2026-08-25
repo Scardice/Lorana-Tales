@@ -11,7 +11,8 @@ host = "0.0.0.0"
 # 改为 80/443 通常需要额外权限；反向代理部署时一般保持 3000，并由 Nginx/Caddy 转发。
 port = 3000
 
-# 是否信任 X-Forwarded-*、X-Real-IP、CF-Connecting-IP 等代理头。
+# 是否信任 CDN/反代转发的客户端 IP 头（CF-Connecting-IP、True-Client-IP、
+# Fastly-Client-IP、X-Real-IP、X-Client-IP、X-Forwarded-For、Forwarded）。
 # false 时客户端 IP 和外部协议/域名取自直连请求，能避免伪造代理头；true 时必须确保前面只有可信反向代理会设置这些头。
 trust_proxy = false
 

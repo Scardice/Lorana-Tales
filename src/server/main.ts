@@ -8,6 +8,7 @@ import express from "express";
 import { createAdminRouter } from "../api/admin.js";
 import { handleDiceApiRequest } from "../api/dice.js";
 import { loadConfig } from "../config/load-config.js";
+import { getClientIp } from "./client-ip.js";
 import {
 	createSecurityInterceptId,
 	formatBruteforceDetail,
@@ -42,24 +43,6 @@ const ADMIN_BRUTEFORCE_REASON =
 function firstHeaderValue(value) {
 	if (Array.isArray(value)) return value[0] || "";
 	return String(value || "");
-}
-
-function getClientIp(req, trustProxy) {
-	if (trustProxy) {
-		const forwardedFor = firstHeaderValue(req.headers["x-forwarded-for"])
-			.split(",")[0]
-			.trim();
-		return (
-			firstHeaderValue(req.headers["cf-connecting-ip"]) ||
-			firstHeaderValue(req.headers["x-real-ip"]) ||
-			forwardedFor ||
-			req.socket?.remoteAddress ||
-			req.ip ||
-			"unknown"
-		);
-	}
-
-	return req.socket?.remoteAddress || req.ip || "unknown";
 }
 
 function getExternalProtocol(req, trustProxy) {

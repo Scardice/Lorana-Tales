@@ -109,7 +109,7 @@ cp config.toml.example config.toml
 [server]
 host = "0.0.0.0"       # 监听地址
 port = 3000             # 监听端口
-trust_proxy = false     # 是否信任反向代理 IP 头
+trust_proxy = false     # 是否信任反向代理/CDN IP 头；可信代理链后设为 true
 allowed_hosts = ["localhost", "127.0.0.1", "::1"] # 允许的 Host 头；生产环境加入你的域名
 
 [storage]
@@ -150,7 +150,7 @@ admin_bruteforce_block_seconds = 60 # 触发后的封禁时长；期间访问会
 | --------------------------------- | ---------------------------------------------------------- |
 | `HOST`                            | 监听地址                                                   |
 | `PORT`                            | 监听端口                                                   |
-| `TRUST_PROXY`                     | 是否信任反向代理 IP 头                                     |
+| `TRUST_PROXY`                     | 是否信任反向代理/CDN IP 头；设为 `true` 后读取真实客户端 IP |
 | `ALLOWED_HOSTS`                   | 允许的 Host 头列表，逗号分隔                               |
 | `SQLITE_PATH`                     | SQLite 数据库路径                                          |
 | `DATABASE_PATH`                   | SQLite 数据库路径兼容变量；和 `SQLITE_PATH` 同时设置时优先 |
@@ -178,6 +178,19 @@ admin_bruteforce_block_seconds = 60 # 触发后的封禁时长；期间访问会
 ```bash
 PORT=8080 SQLITE_PATH=/mnt/data/scardice.db pnpm start
 ```
+
+### 反向代理与 CDN 客户端 IP
+
+当服务位于可信的 Nginx、Caddy、Cloudflare、Fastly 或其他 CDN 后方时，将 `trust_proxy = true`，或设置 `TRUST_PROXY=true`。服务端按以下优先级读取真实客户端 IP：`CF-Connecting-IP`、`True-Client-IP`、`Fastly-Client-IP`、`X-Real-IP`、`X-Client-IP`、`X-Forwarded-For`，最后兼容 RFC 7239 的 `Forwarded: for=`。
+
+这些请求头只有在 `trust_proxy` 开启时才会被信任；直连部署保持 `false`，这样客户端不能伪造 IP。反向代理应覆盖或清理来自公网请求的同名请求头，并把 CDN 到代理之间的链路设为可信。
+
+```toml
+[server]
+trust_proxy = true
+```
+
+如果使用 Cloudflare，通常保留 `CF-Connecting-IP`，并让 Cloudflare 转发到源站；如果使用普通反代，至少配置 `X-Forwarded-For` 或 `X-Real-IP`。真实 IP 会用于上传记录、限流、管理后台爆破防护和安全拦截关联。
 
 ### 备用API（可选）
 

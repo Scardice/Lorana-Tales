@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import type { LogStore } from "../storage/log-store.js";
+import { getClientIp } from "../server/client-ip.js";
 
 const SESSION_COOKIE = "scardice_admin_session";
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
@@ -61,29 +62,6 @@ function clampInt(value, fallback, min, max) {
 	const parsed = parseInt(String(value || ""), 10);
 	if (Number.isNaN(parsed)) return fallback;
 	return Math.max(min, Math.min(max, parsed));
-}
-
-function firstHeaderValue(value) {
-	if (Array.isArray(value)) return value[0] || "";
-	return String(value || "");
-}
-
-function getClientIp(req, trustProxy) {
-	if (trustProxy) {
-		const forwardedFor = firstHeaderValue(req.headers["x-forwarded-for"])
-			.split(",")[0]
-			.trim();
-		return (
-			firstHeaderValue(req.headers["cf-connecting-ip"]) ||
-			firstHeaderValue(req.headers["x-real-ip"]) ||
-			forwardedFor ||
-			req.socket?.remoteAddress ||
-			req.ip ||
-			"unknown"
-		);
-	}
-
-	return req.socket?.remoteAddress || req.ip || "unknown";
 }
 
 function safeDownloadName(key) {
@@ -170,7 +148,9 @@ export function createAdminRouter({
 	}
 
 	function setSessionCookie(req, res, token) {
-		const forwardedProto = firstHeaderValue(req.headers["x-forwarded-proto"]);
+		const forwardedProto = Array.isArray(req.headers["x-forwarded-proto"])
+			? req.headers["x-forwarded-proto"][0] || ""
+			: String(req.headers["x-forwarded-proto"] || "");
 		const secure =
 			req.secure ||
 			(trustProxy && forwardedProto.split(",")[0].trim() === "https");
