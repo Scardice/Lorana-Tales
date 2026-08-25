@@ -28,7 +28,10 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: "22.x"
+          # Production dependencies include native better-sqlite3 binaries.
+          # Build with the minimum advertised runtime so the portable package
+          # really runs on every supported Node.js version.
+          node-version: "20.19.2"
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
 
