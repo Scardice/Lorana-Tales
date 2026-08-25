@@ -25,6 +25,8 @@ const requiredPaths = [
 	"package.json",
 	"config.toml.example",
 	"README.md",
+	"LICENSE",
+	"THIRD_PARTY_NOTICES.md",
 ];
 
 for (const relativePath of requiredPaths) {
@@ -73,6 +75,14 @@ await fs.copyFile(
 	path.join(repoRoot, "README.md"),
 	path.join(outputDir, "README.md"),
 );
+await fs.copyFile(
+	path.join(repoRoot, "LICENSE"),
+	path.join(outputDir, "LICENSE"),
+);
+await fs.copyFile(
+	path.join(repoRoot, "THIRD_PARTY_NOTICES.md"),
+	path.join(outputDir, "THIRD_PARTY_NOTICES.md"),
+);
 await fs.writeFile(
 	path.join(outputDir, "package.json"),
 	`${JSON.stringify(runtimePackage, null, "\t")}\n`,
@@ -89,6 +99,8 @@ const nightlyReadme = [
 	"- Keep the SQLite path and security audit path on persistent storage.",
 	"- Set `trust_proxy = true` only when every proxy/CDN hop is trusted and overwrites forwarding headers.",
 	"- Set `allowed_hosts` and `frontend_url` to the public host when deploying behind a proxy or CDN.",
+	"- See `THIRD_PARTY_NOTICES.md` for bundled DOCX-export dependency notices.",
+	"- This project is distributed under the MIT License; see `LICENSE`.",
 	"",
 ].join("\n");
 await fs.writeFile(path.join(outputDir, "NIGHTLY-README.md"), nightlyReadme);

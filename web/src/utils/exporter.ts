@@ -1,5 +1,5 @@
+import { Buffer } from "buffer";
 import dayjs from "dayjs";
-import { AlignmentType, Document, Packer, Paragraph, TextRun } from "docx";
 import { saveAs } from "file-saver";
 import type { LogItem } from "~/logManager/types";
 import { useStore } from "~/store";
@@ -9,6 +9,9 @@ type TextExportOptions = {
 	readonly timeHide?: boolean;
 	readonly userIdHide?: boolean;
 };
+
+const DOCX_MIME =
+	"application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
 // TODO: 移植到logMan/exporters
 export function exportFileQQ(
@@ -86,173 +89,68 @@ export function exportFileRaw(doc: string) {
 	);
 }
 
-export function exportFileDoc(html: string) {
-	const text =
-		`MIME-Version: 1.0
-Content-Type: multipart/related; boundary="----=_NextPart_WritingBug"
-
-此文档为“单个文件网页”，也称为“Web 档案”文件。如果您看到此消息，但是您的浏览器或编辑器不支持“Web 档案”文件。请下载支持“Web 档案”的浏览器。
-
-------=_NextPart_WritingBug
-Content-Type: text/html; charset="utf-8"
-
-<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"></head>
-<body>
-` +
-		html +
-		`
-</body>
-</html>
-------=_NextPart_WritingBug
-Content-Transfer-Encoding: quoted-printable
-Content-Type: text/xml; charset="utf-8"
-
-<xml xmlns:o=3D"urn:schemas-microsoft-com:office:office">
- <o:MainFile HRef=3D"../file4969.htm"/>
- <o:File HRef=3D"themedata.thmx"/>
- <o:File HRef=3D"colorschememapping.xml"/>
- <o:File HRef=3D"header.htm"/>
- <o:File HRef=3D"filelist.xml"/>
-</xml>
-------=_NextPart_WritingBug--`;
-
-	saveAs(new Blob([text], { type: "application/msword" }), "跑团记录.doc");
-	return text;
+function createDocumentHtml(content: string) {
+	return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <style>
+    body { color: #17202a; font-family: "Microsoft YaHei", "PingFang SC", sans-serif; font-size: 11pt; line-height: 1.6; }
+    p, div { margin: 0 0 6pt; }
+    table { border-collapse: collapse; width: 100%; }
+    td { padding: 4pt 6pt; vertical-align: top; }
+    img { height: auto; max-width: 360pt; }
+  </style>
+</head>
+<body>${content}</body>
+</html>`;
 }
 
-export interface DocxExportEntry {
-	time?: string;
-	timeColor?: string;
-	nickname?: string;
-	nicknameColor?: string;
-	messageLines: string[];
-	messageColor?: string;
+function toDocxBlob(output: ArrayBuffer | Blob | Uint8Array) {
+	if (output instanceof Blob) {
+		return output;
+	}
+	return new Blob([output], { type: DOCX_MIME });
 }
 
-function colorToDocx(color?: string): string | undefined {
-	if (!color) return undefined;
-	let value = color.trim();
-	if (!value) return undefined;
-	if (value.startsWith("#")) {
-		value = value.slice(1);
-		if (value.length === 3) {
-			value = value
-				.split("")
-				.map((char) => char + char)
-				.join("");
-		}
-		return value.toUpperCase();
+function installDocxBrowserGlobals() {
+	const browserGlobal = globalThis as typeof globalThis & {
+		Buffer?: typeof Buffer;
+	};
+	if (!browserGlobal.Buffer) {
+		browserGlobal.Buffer = Buffer;
 	}
-	const rgbMatch = value.match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)/i);
-	if (rgbMatch) {
-		const hex = rgbMatch
-			.slice(1, 4)
-			.map((segment) => {
-				const n = Number(segment);
-				if (Number.isNaN(n) || n < 0) {
-					return "00";
-				}
-				return Math.min(255, n).toString(16).padStart(2, "0");
-			})
-			.join("");
-		return hex.toUpperCase();
-	}
-	return undefined;
 }
 
-function buildDocxParagraphs(entry: DocxExportEntry): Paragraph[] {
-	const lines =
-		entry.messageLines && entry.messageLines.length > 0
-			? [...entry.messageLines]
-			: [""];
-	const firstLine = lines.shift() ?? "";
-	const timeText = (entry.time ?? "").trim();
-	const nicknameText = (entry.nickname ?? "").trim();
-
-	const timeColor = colorToDocx(entry.timeColor) ?? "666666";
-	const nicknameColor =
-		colorToDocx(entry.nicknameColor) ??
-		colorToDocx(entry.messageColor) ??
-		"333333";
-	const messageColor = colorToDocx(entry.messageColor) ?? nicknameColor;
-
-	const runs: TextRun[] = [];
-
-	if (timeText) {
-		runs.push(new TextRun({ text: timeText, color: timeColor }));
-	}
-	if (timeText && (nicknameText || firstLine)) {
-		runs.push(new TextRun({ text: " " }));
-	}
-	if (nicknameText) {
-		runs.push(new TextRun({ text: nicknameText, color: nicknameColor }));
-	}
-	if (nicknameText && firstLine) {
-		runs.push(new TextRun({ text: " " }));
-	}
-	if (firstLine) {
-		runs.push(new TextRun({ text: firstLine, color: messageColor }));
-	}
-
-	if (runs.length === 0) {
-		runs.push(new TextRun({ text: "" }));
-	}
-
-	const continuationIndentTwip = 800; // ~=0.55in -> roughly 3.75 monospace characters
-
-	const paragraphs: Paragraph[] = [
-		new Paragraph({
-			children: runs,
-			spacing: { after: 120 },
-			alignment: AlignmentType.LEFT,
-		}),
-	];
-
-	lines.forEach((line) => {
-		const childRun = line
-			? new TextRun({ text: line, color: messageColor })
-			: new TextRun({ text: "" });
-
-		paragraphs.push(
-			new Paragraph({
-				children: [childRun],
-				indent: { left: continuationIndentTwip },
-				spacing: { after: 120 },
-				alignment: AlignmentType.LEFT,
-			}),
-		);
+/**
+ * Generate a real Office Open XML package from the rendered preview.
+ * The upstream converter embeds data URL images into word/media instead of
+ * relying on Word's non-standard MHT/HTML compatibility path.
+ */
+export async function exportFileDocx(html: string, filename: string) {
+	installDocxBrowserGlobals();
+	const { default: HTMLtoDOCX } = await import("@turbodocx/html-to-docx");
+	const output = await HTMLtoDOCX(createDocumentHtml(html), null, {
+		creator: "Scardice Story Painter",
+		description: "余烬 TRPG 跑团记录",
+		font: "Microsoft YaHei",
+		fontSize: 22,
+		lang: "zh-CN",
+		margins: { top: 720, right: 720, bottom: 720, left: 720 },
+		table: {
+			row: { cantSplit: true },
+			borderOptions: { size: 1, color: "B8C1CC" },
+		},
+		imageProcessing: {
+			downloadTimeout: 8000,
+			maxRetries: 2,
+			maxImageSize: 10 * 1024 * 1024,
+			svgHandling: "native",
+			suppressSharpWarning: true,
+		},
 	});
 
-	return paragraphs;
-}
-
-export function exportFileDocx(
-	entries: DocxExportEntry[],
-	filename = "跑团记录.docx",
-) {
-	const children =
-		entries.length > 0
-			? entries.flatMap((entry) => buildDocxParagraphs(entry))
-			: [
-					new Paragraph({
-						children: [new TextRun({ text: "" })],
-						alignment: AlignmentType.LEFT,
-					}),
-				];
-
-	const document = new Document({
-		sections: [
-			{
-				properties: {},
-				children,
-			},
-		],
-	});
-
-	return Packer.toBlob(document).then((blob) => {
-		saveAs(blob, filename);
-		return blob;
-	});
+	const blob = toDocxBlob(output);
+	saveAs(blob, filename);
+	return blob;
 }

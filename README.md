@@ -261,3 +261,8 @@ config.toml                  # 本地/生产配置，默认忽略不提交
 - [海豹骰日志前端](https://github.com/sealdice/story-painter)
 - [海豹骰日志后端 - CF版](https://github.com/sealdice/story-painter-cfbackend)
 - [海豹骰日志后端 - EO版](https://github.com/DiceZone/story-painter-eobackend)
+
+## 许可证
+
+本项目采用 [MIT License](LICENSE)。带图 Word 导出的第三方组件声明见
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

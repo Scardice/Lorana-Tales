@@ -9,6 +9,7 @@ node_modules/
 dist/
 out/
 build/
+release/
 .vite/
 vite.config.ts.timestamp-*.mjs
 

@@ -13,6 +13,13 @@ const pathSrc = path.resolve(pathWeb, "src");
 // https://vitejs.dev/config/
 export default defineConfig({
 	root: pathWeb,
+	// TurboDocx's browser build performs a legacy `global` capability check.
+	// Map that identifier to the standard browser global without adding a runtime
+	// polyfill or changing application behavior outside the DOCX split chunk.
+	define: {
+		global: "globalThis",
+		Buffer: "globalThis.Buffer",
+	},
 	resolve: {
 		alias: {
 			"~/": `${pathSrc}/`,

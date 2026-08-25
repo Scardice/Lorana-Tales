@@ -181,13 +181,13 @@
                 <!-- <n-button secondary type="primary" v-show="false" @click="exportRecordQQ">下载QQ风格记录</n-button>-->
                 <!-- <n-button secondary type="primary" v-show="false" @click="exportRecordIRC">下载IRC风格记录</n-button>-->
                 <n-button secondary type="primary" @click="exportRecordDOC"
-                  >下载带图doc</n-button
+                  >下载带图 Word</n-button
                 >
                 <n-button secondary type="primary" @click="exportRecordTalkDOC"
-                  >下载对话doc</n-button
+                  >下载对话 Word</n-button
                 >
                 <n-button secondary type="primary" @click="exportRecordDocx"
-                  >下载docx</n-button
+                  >下载文本 Word</n-button
                 >
               </div>
             </div>
@@ -400,6 +400,7 @@ import {
   onMounted,
   ref,
   render,
+  type Component,
   watch,
 } from "vue";
 import PreviewItem from "./components/previews/preview-main-item.vue";
@@ -418,9 +419,7 @@ import {
   msgOffTopicFormat,
   shouldApplyQQImageRKeyReplacement,
 } from "./utils";
-import type { DocxExportEntry } from "./utils/exporter";
 import {
-  exportFileDoc,
   exportFileDocx,
   exportFileIRC,
   exportFileQQ,
@@ -794,250 +793,76 @@ function exportRecordIRC() {
   exportFileIRC(previewItems.value, store.exportOptions);
 }
 
-function exportRecordDOC() {
-  browserAlert();
-  if (isMobile.value) {
-    message.warning(
-      "你当前处于移动端环境，已知只有WPS能够查看生成的Word文件，且无法看图！使用PC打开可以查看图片。",
-    );
-  }
-
-  const solveImg = (el: Element) => {
-    if (el.tagName === "IMG") {
-      let width = el.clientWidth;
-      let height = el.clientHeight;
-      if (width === 0) {
-        width = 300;
-        height = 300;
-      }
-      el.setAttribute("width", `${width}`);
-      el.setAttribute("height", `${height}`);
-    }
-    for (let i = 0; i < el.children.length; i += 1) {
-      solveImg(el.children[i]);
-    }
-  };
-
-  const el = document.createElement("span");
-  const _elRoot = document.createElement("div");
-  const items = [];
-
-  showPreview();
-  for (let i of previewItems.value) {
-    if (i.isRaw) continue;
-    if (store.isHiddenLogItem(i)) continue;
-
-    const html = h(PreviewItem, { source: i });
-    render(html, el);
-
-    const c = el;
-    solveImg(c);
-    items.push(c.innerHTML);
-  }
-
-  exportFileDoc(items.join("\n"));
-}
-
-function exportRecordTalkDOC() {
-  browserAlert();
-  if (isMobile.value) {
-    message.warning(
-      "你当前处于移动端环境，已知只有WPS能够查看生成的Word文件，且无法看图！使用PC打开可以查看图片。",
-    );
-  }
-
-  const solveImg = (el: Element) => {
-    if (el.tagName === "IMG") {
-      let width = el.clientWidth;
-      let height = el.clientHeight;
-      if (width === 0) {
-        width = 300;
-        height = 300;
-      }
-      el.setAttribute("width", `${width}`);
-      el.setAttribute("height", `${height}`);
-    }
-    for (let i = 0; i < el.children.length; i += 1) {
-      solveImg(el.children[i]);
-    }
-  };
-
-  const el = document.createElement("span");
-  const _elRoot = document.createElement("div");
-  const items: string[] = [];
-
-  showPreview();
-  for (let i of previewItems.value) {
-    if (i.isRaw) continue;
-    if (store.isHiddenLogItem(i)) continue;
-
-    const html = h(PreviewTableTR, { source: i });
-    render(html, el);
-
-    const c = el;
-    solveImg(c);
-    items.push(c.innerHTML);
-  }
-  exportFileDoc(
-    `<table style="border-collapse: collapse;"><tbody>${items.join("\n")}</tbody></table>`,
-  );
-}
-
-const readElementColor = (el: HTMLElement | null): string | undefined => {
-  if (!el) return undefined;
-  if (el.style?.color) {
-    return el.style.color;
-  }
-  const computed = window.getComputedStyle(el);
-  return computed?.color || undefined;
-};
-
-const extractMessageLines = (el: HTMLElement | null): string[] => {
-  if (!el) return [""];
-  const clone = el.cloneNode(true) as HTMLElement;
-  const doc = el.ownerDocument || document;
-
-  clone.querySelectorAll("img").forEach((img) => {
-    const src = img.getAttribute("src") || "";
-    const placeholder = src ? `[图:${src}]` : "[图:无可用链接]";
-    img.replaceWith(doc.createTextNode(placeholder));
-  });
-
-  const blockTags = new Set(["P", "DIV", "LI", "UL", "OL", "BLOCKQUOTE"]);
-  const lines: string[] = [];
-  let current = "";
-
-  const pushLine = (forceEmpty = false) => {
-    const normalized = current.replace(/\u00A0/g, " ").replace(/\s+$/g, "");
-    if (normalized || forceEmpty || lines.length === 0) {
-      lines.push(normalized);
-    }
-    current = "";
-  };
-
-  const appendText = (text: string | null) => {
-    if (!text) return;
-    const normalized = text.replace(/\u00A0/g, " ");
-    const segments = normalized.split(/\r?\n/);
-    segments.forEach((segment, index) => {
-      current += segment;
-      if (index < segments.length - 1) {
-        pushLine();
-      }
-    });
-  };
-
-  const processNode = (node: Node) => {
-    if (node.nodeType === Node.TEXT_NODE) {
-      appendText(node.textContent);
-      return;
-    }
-
-    if (node.nodeType !== Node.ELEMENT_NODE) {
-      return;
-    }
-
-    const element = node as HTMLElement;
-
-    if (element.tagName === "BR") {
-      pushLine(true);
-      return;
-    }
-
-    if (blockTags.has(element.tagName)) {
-      if (current) {
-        pushLine();
-      }
-
-      if (element.tagName === "LI") {
-        const parent = element.parentElement;
-        if (parent?.tagName === "OL") {
-          const siblings = Array.from(parent.children).filter(
-            (child) => child.tagName === "LI",
-          );
-          const index = siblings.indexOf(element);
-          appendText(`${index + 1}. `);
-        } else {
-          appendText("• ");
-        }
-      }
-
-      const before = lines.length;
-      Array.from(element.childNodes).forEach(processNode);
-
-      if (current) {
-        pushLine();
-      } else if (lines.length === before) {
-        pushLine(true);
-      }
-      return;
-    }
-
-    Array.from(element.childNodes).forEach(processNode);
-  };
-
-  Array.from(clone.childNodes).forEach(processNode);
-
-  if (current !== "" || lines.length === 0) {
-    pushLine(lines.length === 0);
-  }
-
-  while (lines.length > 1 && lines[lines.length - 1].trim() === "") {
-    lines.pop();
-  }
-
-  if (lines.length === 0) {
-    lines.push("");
-  }
-
-  return lines;
-};
-
-function exportRecordDocx() {
-  browserAlert();
-  showPreview();
-
-  const entries: DocxExportEntry[] = [];
+const renderWordHtml = (component: Component, asTable = false) => {
+  const fragments: string[] = [];
 
   for (const item of previewItems.value) {
-    if (item.isRaw) continue;
-    if (store.isHiddenLogItem(item)) continue;
+    if (item.isRaw || store.isHiddenLogItem(item)) continue;
 
-    const mountPoint = document.createElement("div");
-    const vnode = h(PreviewItem, { source: item });
-    render(vnode, mountPoint);
-
-    const host = mountPoint.firstElementChild as HTMLElement | null;
-    if (!host) {
-      render(null, mountPoint);
-      continue;
-    }
-
-    const timeEl = host.querySelector("._time") as HTMLElement | null;
-    const nicknameEl = host.querySelector("._nickname") as HTMLElement | null;
-    const messageEl = host.querySelector("._message") as HTMLElement | null;
-
-    const entry: DocxExportEntry = {
-      time: (timeEl?.textContent ?? "").trim(),
-      timeColor: readElementColor(timeEl),
-      nickname: (nicknameEl?.textContent ?? "").trim(),
-      nicknameColor: readElementColor(nicknameEl),
-      messageLines: extractMessageLines(messageEl),
-      messageColor: readElementColor(messageEl),
-    };
-
-    entries.push(entry);
+    const mountPoint = document.createElement(asTable ? "tbody" : "div");
+    render(h(component, { source: item }), mountPoint);
+    fragments.push(mountPoint.innerHTML);
     render(null, mountPoint);
   }
 
-  if (!entries.length) {
+  if (fragments.length === 0) return "";
+  return asTable
+    ? `<table><tbody>${fragments.join("\n")}</tbody></table>`
+    : fragments.join("\n");
+};
+
+const removeExportImages = (html: string) => {
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  template.content.querySelectorAll("img").forEach((image) => {
+    const alt = image.getAttribute("alt")?.trim();
+    image.replaceWith(document.createTextNode(alt ? `[图:${alt}]` : "[图]"));
+  });
+  return template.innerHTML;
+};
+
+const exportWordDocument = async (
+  filename: string,
+  component: Component,
+  options: { asTable?: boolean; includeImages?: boolean } = {},
+) => {
+  browserAlert();
+  showPreview();
+
+  let html = renderWordHtml(component, options.asTable);
+  if (!html) {
     message.warning("没有可导出的内容");
     return;
   }
+  if (!options.includeImages) {
+    html = removeExportImages(html);
+  }
 
-  exportFileDocx(entries, "跑团记录.docx").catch((err) => {
-    console.error(err);
-    message.error("Docx 导出失败，请稍后重试");
+  try {
+    await exportFileDocx(html, filename);
+    message.success("已生成标准 DOCX 文档");
+  } catch (error) {
+    console.error(error);
+    message.error("Word 导出失败，请稍后重试");
+  }
+};
+
+function exportRecordDOC() {
+  return exportWordDocument("跑团记录(带图).docx", PreviewItem, {
+    includeImages: true,
+  });
+}
+
+function exportRecordTalkDOC() {
+  return exportWordDocument("跑团记录(对话).docx", PreviewTableTR, {
+    asTable: true,
+    includeImages: true,
+  });
+}
+
+function exportRecordDocx() {
+  return exportWordDocument("跑团记录(文本).docx", PreviewItem, {
+    includeImages: false,
   });
 }
 
