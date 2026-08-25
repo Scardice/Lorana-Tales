@@ -1,6 +1,6 @@
 <template>
   <Teleport to="body">
-	<div v-if="show" ref="scrollEl" class="player" :class="[`player--${storyDocument.settings.theme}`, `player--${storyDocument.settings.density}`, screenEffectClass, persistentEffectClasses, { 'player--performance-edit': performanceEditMode }]" :style="playerStyle" @click="advanceFromCanvas" @scroll.passive="schedulePlayerStickyAvatar">
+	<div v-if="show" ref="scrollEl" class="player" :class="[isDark ? 'player--dark' : 'player--light', `player--${storyDocument.settings.density}`, screenEffectClass, persistentEffectClasses, { 'player--performance-edit': performanceEditMode }]" :style="playerStyle" @click="advanceFromCanvas" @scroll.passive="schedulePlayerStickyAvatar">
       <header @click.stop>
         <button @click="started ? stopPlayback() : $emit('close')">← 返回</button>
         <div class="player-title">
@@ -137,6 +137,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, toRaw, watch } from "vue";
+import { useThemeDark } from "~/composables/useTheme";
 import { useVirtualizer } from "@tanstack/vue-virtual";
 import { zipSync } from "fflate";
 import { toBlob } from "html-to-image";
@@ -149,6 +150,7 @@ import { storyPalette } from "~/story/palette";
 import type { StoryArchive, StoryAssetRef, StoryCharacter, StoryInteractionEffect, StoryMessage, StoryPersistentEffect, StoryScreenEffect, StorySettings, StoryStreamTokenAnimation } from "~/story/types";
 
 const props = defineProps<{ show: boolean; archive: StoryArchive; assetUrl: (id: string) => string; imageExportRequest?: number }>();
+const isDark = useThemeDark();
 const emit = defineEmits<{ close: []; raw: []; change: [StoryArchive] }>();
 const storyDocument = computed(() => props.archive.document);
 const scrollEl = ref<HTMLElement>();
@@ -375,4 +377,5 @@ onBeforeUnmount(() => { stopTimers();cancelAnimationFrame(playerStickyFrame); gl
 .player-virtual-list{position:relative;width:100%;contain:layout style}.player-virtual-row{position:absolute;top:0;left:0;width:100%;contain:layout style;will-change:transform}.player-message--revealed{animation:virtual-message-reveal var(--animation-duration,.28s) ease both}@keyframes virtual-message-reveal{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:none}}
 .token-segmenter{display:grid;gap:.6rem;padding:.65rem;border:1px solid #33413f;border-radius:12px;background:#0d1413}.token-chip-list{display:flex;flex-wrap:wrap;gap:.35rem}.token-chip-list button{min-width:0;padding:.42rem .58rem;border:1px solid #4b5957;border-radius:9px;background:#273230}.token-chip-list button.custom{border-style:dashed;color:#8de1db}.token-chip-list button.selected{border-color:#4ed9d4;background:#18504e;box-shadow:0 0 0 2px #38bfc82c}.token-segment-actions{display:flex;align-items:center;flex-wrap:wrap;gap:.4rem}.token-segment-actions span{min-width:12rem;margin-right:auto;color:#97a5a2;font-size:.72rem}.token-timing code.custom{color:#86ddd7}@media(max-width:650px){.player>footer{right:0}.settings-panel{position:fixed;inset:0;z-index:10040;grid-template-columns:1fr;width:100%;height:100dvh;max-height:none;margin:0;padding:max(1rem,env(safe-area-inset-top)) .85rem max(1rem,env(safe-area-inset-bottom));overflow-y:auto;border:0;border-radius:0}.settings-title{position:sticky;top:0;z-index:2;padding:.3rem 0 .65rem;background:#182120}.settings-title>button{margin-left:auto}.token-chip-list{max-height:30dvh;overflow:auto}.token-chip-list button{min-height:42px}.token-segment-actions{display:grid;grid-template-columns:1fr 1fr}.token-segment-actions span{grid-column:1/-1;min-width:0}.token-segment-actions button:last-child{grid-column:1/-1}}
 .player{user-select:none}.player input,.player textarea{user-select:text}
+.player{background:var(--app-bg,#0b1110);color:var(--control-text,#eef2f1);scrollbar-color:var(--control-border,#465956) transparent}.player header,.player>footer{border-color:var(--control-border);background:color-mix(in srgb,var(--panel-surface) 96%,transparent);color:var(--control-text)}.player-title small,.player-message__content>small,.character-account,.message-time{color:var(--muted-text)}.player button,.settings-panel button,.performance-modal button{background:var(--control-surface);color:var(--control-text)}.player button:hover,.settings-panel button:hover,.performance-modal button:hover{background:var(--control-hover)}.player-title input,.settings-panel input,.settings-panel select,.performance-modal input,.performance-modal select{border-color:var(--control-border);background:var(--control-bg);color:var(--control-text)}.settings-panel,.performance-tools,.performance-modal form,.token-timing{border-color:var(--control-border);background:var(--panel-surface);color:var(--control-text)}.player--light .player-message{--bubble-color-light:var(--panel-surface);--bubble-text-light:var(--control-text);--character-color-light:#475569}.player--light .player-message--right{--bubble-color-light:#d7eeee}.player--light .player-message--narrator{--bubble-color-light:#e5e9e8;--bubble-text-light:#35423f}.player--light .player-avatar,.player--light .narrator-avatar{background:#dfe6e4}
 </style>

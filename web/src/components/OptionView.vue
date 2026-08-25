@@ -2,11 +2,8 @@
 import { Help } from "@vicons/carbon";
 import { ref } from "vue";
 import { useStore } from "~/store";
-import { useThemeDark } from "~/composables/useTheme";
 
 const option_store = useStore().exportOptions;
-
-const isDark = useThemeDark();
 
 interface ExportOption {
 	label: string;
@@ -55,7 +52,7 @@ const formatOptions: ExportOption[] = [
 	},
 ];
 
-type HelpKey = keyof typeof option_store | "darkMode";
+type HelpKey = keyof typeof option_store;
 
 const helpVisible = ref<Partial<Record<HelpKey, boolean>>>({});
 
@@ -156,37 +153,6 @@ const toggleHelp = (key: HelpKey) => {
           </div>
         </div>
 
-        <div class="option-item">
-          <div class="option-item__label">
-            <n-switch v-model:value="isDark" />
-            <strong>深色模式展示</strong>
-            <n-tooltip
-              trigger="manual"
-              placement="top"
-              :show="helpVisible.darkMode"
-            >
-              <template #trigger>
-                <n-button
-                  quaternary
-                  circle
-                  size="tiny"
-                  class="option-item__help"
-                  aria-label="深色模式展示说明"
-                  @mouseenter="showHelp('darkMode')"
-                  @mouseleave="hideHelp('darkMode')"
-                  @focus="showHelp('darkMode')"
-                  @blur="hideHelp('darkMode')"
-                  @click.stop="toggleHelp('darkMode')"
-                >
-                  <template #icon>
-                    <n-icon :component="Help" />
-                  </template>
-                </n-button>
-              </template>
-              未手动设置时，将跟随系统或浏览器的深色模式配置
-            </n-tooltip>
-          </div>
-        </div>
       </div>
     </article>
   </section>
