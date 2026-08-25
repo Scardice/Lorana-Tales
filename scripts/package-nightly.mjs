@@ -6,7 +6,7 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 const defaultOutput = path.join(
 	repoRoot,
 	"release",
-	"scardice-story-painter-nightly",
+	"lorana-tales-nightly",
 );
 const outputDir = path.resolve(process.argv[2] || defaultOutput);
 
@@ -89,7 +89,7 @@ await fs.writeFile(
 );
 
 const nightlyReadme = [
-	"# Scardice Story Painter Nightly",
+	"# Lorana Tales Nightly",
 	"",
 	`This Linux x64 package is prebuilt for Node.js ${runtimePackage.engines.node}.`,
 	"Edit `config.toml` and run `npm start`.",

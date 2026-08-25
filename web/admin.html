@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="referrer" content="never" />
-    <title>Scardice Log Admin</title>
+    <title>Lorana Tales 管理中心</title>
     <link rel="icon" type="image/png" href="/icon.png" />
     <style>
       :root {
@@ -672,7 +672,7 @@
         <div class="brand">
           <img src="/icon.png" alt="" />
           <span>
-            <strong>Scardice Log Admin</strong>
+            <strong>Lorana Tales 管理中心</strong>
             <span>runtime protected console</span>
           </span>
         </div>
@@ -784,12 +784,16 @@
           <div class="account-admin__head"><div><h2>账户管理</h2><p class="subtle">创建、编辑、授权、封禁或删除用户。封禁必须填写理由。</p></div><button id="refreshUsersButton" class="button" type="button">刷新账户</button></div>
           <form id="createUserForm" class="user-create">
             <input id="newUserEmail" type="email" placeholder="邮箱" required />
-            <input id="newUserName" placeholder="显示名" />
+            <input id="newUserName" pattern="[A-Za-z0-9_-]{3,32}" placeholder="用户名（字母/数字/_/-）" required />
             <input id="newUserPassword" type="password" minlength="10" placeholder="临时密码（至少 10 位）" required />
             <select id="newUserRole"><option value="user">用户</option><option value="admin">管理员</option></select>
             <button class="button primary" type="submit">新增用户</button>
           </form>
           <div id="userStatus" class="loading">加载中</div><div id="userList" class="user-list"></div>
+        </section>
+        <section class="account-admin">
+          <div class="account-admin__head"><div><h2>用户云端工程副本</h2><p class="subtle">管理员可查看所有用户保存的工程副本；打开后默认进入沉浸编辑，且不会冒充原用户保存。</p></div><button id="refreshProjectsButton" class="button" type="button">刷新副本</button></div>
+          <div id="projectStatus" class="loading">加载中</div><div id="projectList" class="user-list"></div>
         </section>
       </section>
       <div id="toast-host" aria-live="polite"></div>

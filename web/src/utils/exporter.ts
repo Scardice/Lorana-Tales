@@ -183,7 +183,7 @@ export async function exportFileDocx(html: string, filename: string) {
 	const normalizedHtml = await normalizeDocxEmbeddedImages(html);
 	const { default: HTMLtoDOCX } = await import("@turbodocx/html-to-docx");
 	const output = await HTMLtoDOCX(createDocumentHtml(normalizedHtml), null, {
-		creator: "Scardice Story Painter",
+		creator: "Lorana Tales",
 		description: "余烬 TRPG 跑团记录",
 		font: "Microsoft YaHei",
 		fontSize: 22,

@@ -34,10 +34,12 @@ interface LogDetailResponse extends LogSummary {
 
 interface SessionResponse {
   authenticated: boolean;
+  accountMode?: boolean;
   mode?: "root" | "account" | "none";
 }
 
-interface AccountUser { id:string; email:string; displayName:string; role:"user"|"admin"; status:"active"|"disabled"|"banned"; banReason:string; banUntil:string; projectCount?:number; }
+interface AccountUser { id:string; email:string; username:string; nickname:string; displayName:string; role:"user"|"admin"; status:"active"|"disabled"|"banned"; banReason:string; banUntil:string; projectCount?:number; }
+interface UserProject { id:string; title:string; revision:number; username:string; nickname:string; email:string; updatedAt:string; }
 
 interface DeleteResponse {
   deleted?: string[];
@@ -123,6 +125,9 @@ const els = {
   refreshUsersButton: requireElement<HTMLButtonElement>("#refreshUsersButton"),
   userStatus: requireElement<HTMLElement>("#userStatus"),
   userList: requireElement<HTMLElement>("#userList"),
+  refreshProjectsButton: requireElement<HTMLButtonElement>("#refreshProjectsButton"),
+  projectStatus: requireElement<HTMLElement>("#projectStatus"),
+  projectList: requireElement<HTMLElement>("#projectList"),
 };
 
 function escapeHtml(value: unknown): string {
@@ -293,9 +298,15 @@ async function checkSession() {
     if (session.authenticated) {
       showAdmin(session.mode === "account" ? "account" : "root");
       await loadLogs();
-      await loadUsers();
+      await Promise.all([loadUsers(), loadProjects()]);
     } else {
       showLogin();
+      if (session.accountMode) {
+        els.loginForm.hidden = true;
+        els.loginError.textContent = "账号模式已启用。请返回编辑器，从共享顶栏登录管理员账号后再进入这里。";
+      } else {
+        els.loginForm.hidden = false;
+      }
     }
   } catch {
     showLogin();
@@ -313,7 +324,7 @@ async function login(event: SubmitEvent): Promise<void> {
     els.password.value = "";
     showAdmin("root");
     await loadLogs();
-    await loadUsers();
+    await Promise.all([loadUsers(), loadProjects()]);
   } catch (error) {
     const status = error instanceof AdminApiError ? error.status : 0;
     els.loginError.textContent =
@@ -575,7 +586,7 @@ async function runMaintenance(): Promise<void> {
 
 function renderUsers(items: AccountUser[]): void {
   els.userList.innerHTML = items.map((user) => `<article class="user-row" data-user-id="${escapeHtml(user.id)}">
-    <div class="user-row__name"><strong>${escapeHtml(user.displayName || user.email)}</strong><small>${escapeHtml(user.email)}</small></div>
+    <div class="user-row__name"><strong>${escapeHtml(user.nickname || user.displayName || user.username)}</strong><small>@${escapeHtml(user.username)} · ${escapeHtml(user.email)} · ${user.projectCount || 0} 个工程</small></div>
     <span class="pill">${user.role === "admin" ? "管理员" : "用户"}</span>
     <span class="pill">${user.status === "banned" ? `已封禁：${escapeHtml(user.banReason)}` : user.status === "disabled" ? "已停用" : "正常"}</span>
     <div class="user-row__actions"><button class="button" data-user-action="edit">编辑</button><button class="button" data-user-action="password">改密码</button><button class="button warning" data-user-action="status">${user.status === "active" ? "封禁/停用" : "恢复"}</button><button class="button danger" data-user-action="delete">删除</button></div>
@@ -595,11 +606,27 @@ async function loadUsers(): Promise<void> {
   }
 }
 
+async function loadProjects(): Promise<void> {
+  els.projectStatus.classList.remove("hidden"); els.projectStatus.textContent = "加载用户工程副本…";
+  try {
+    const data = await api<{items:UserProject[]}>("/admin/api/projects?pageSize=100");
+    const items = data.items || [];
+    els.projectList.innerHTML = items.map((project) => `<article class="user-row">
+      <div class="user-row__name"><strong>${escapeHtml(project.title)}</strong><small>${escapeHtml(project.nickname || project.username || project.email)} · @${escapeHtml(project.username)} · 修订 ${project.revision} · ${escapeHtml(new Date(project.updatedAt).toLocaleString())}</small></div>
+      <span class="pill">用户副本</span><span class="pill">${escapeHtml(project.email)}</span>
+      <div class="user-row__actions"><a class="button primary" href="/story?adminProject=${encodeURIComponent(project.id)}" target="_blank" rel="noopener">打开沉浸编辑</a></div>
+    </article>`).join("");
+    els.projectStatus.classList.toggle("hidden", !!items.length); if (!items.length) els.projectStatus.textContent = "还没有用户云端工程副本";
+  } catch (error) {
+    els.projectList.innerHTML = ""; els.projectStatus.textContent = error instanceof AdminApiError && error.status === 404 ? "账户功能未开启" : "用户工程副本读取失败";
+  }
+}
+
 async function manageUser(user: AccountUser, action: string): Promise<void> {
   try {
     if (action === "edit") {
-      const email = prompt("邮箱", user.email); if (email === null) return; const displayName = prompt("显示名", user.displayName); if (displayName === null) return; const role = prompt("角色：admin 或 user", user.role); if (role !== "admin" && role !== "user") return;
-      await api(`/admin/api/users/${encodeURIComponent(user.id)}`, { method:"PATCH", body:JSON.stringify({ email, displayName, role }) });
+      const email = prompt("邮箱", user.email); if (email === null) return; const username = prompt("用户名（字母、数字、_、-）", user.username); if (username === null) return; const nickname = prompt("昵称", user.nickname || user.displayName); if (nickname === null) return; const role = prompt("角色：admin 或 user", user.role); if (role !== "admin" && role !== "user") return;
+      await api(`/admin/api/users/${encodeURIComponent(user.id)}`, { method:"PATCH", body:JSON.stringify({ email, username, nickname, role }) });
     } else if (action === "password") {
       const password = prompt("输入至少 10 位的新密码。用户下次登录必须修改。", ""); if (!password) return;
       await api(`/admin/api/users/${encodeURIComponent(user.id)}/password`, { method:"POST", body:JSON.stringify({ password, mustChangePassword:true }) });
@@ -615,7 +642,7 @@ async function manageUser(user: AccountUser, action: string): Promise<void> {
 
 async function createUser(event: SubmitEvent): Promise<void> {
   event.preventDefault();
-  try { await api("/admin/api/users", { method:"POST", body:JSON.stringify({ email:els.newUserEmail.value, displayName:els.newUserName.value, password:els.newUserPassword.value, role:els.newUserRole.value, mustChangePassword:true }) }); els.createUserForm.reset(); showAdminToast("用户已创建", "success"); await loadUsers(); }
+  try { await api("/admin/api/users", { method:"POST", body:JSON.stringify({ email:els.newUserEmail.value, username:els.newUserName.value, nickname:els.newUserName.value, password:els.newUserPassword.value, role:els.newUserRole.value, mustChangePassword:true }) }); els.createUserForm.reset(); showAdminToast("用户已创建", "success"); await loadUsers(); }
   catch (error) { showAdminToast(error instanceof Error ? error.message : "创建失败", "error"); }
 }
 
@@ -632,6 +659,7 @@ function openCurrentPainter(): void {
 els.loginForm.addEventListener("submit", login);
 els.createUserForm.addEventListener("submit", createUser);
 els.refreshUsersButton.addEventListener("click", loadUsers);
+els.refreshProjectsButton.addEventListener("click", loadProjects);
 els.logoutButton.addEventListener("click", logout);
 els.searchForm.addEventListener("submit", (event) => {
   event.preventDefault();

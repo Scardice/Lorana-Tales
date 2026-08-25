@@ -32,6 +32,7 @@ export default defineConfig({
 			input: {
 				main: path.resolve(pathWeb, "index.html"),
 				admin: path.resolve(pathWeb, "admin.html"),
+				docs: path.resolve(pathWeb, "docs.html"),
 				apiDocs: path.resolve(pathWeb, "api-docs.html"),
 				securityWarning: path.resolve(pathWeb, "security-warning.html"),
 			},

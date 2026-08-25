@@ -1,48 +1,10 @@
 <template>
   <n-layout class="painter-home">
-    <n-layout-header class="painter-header">
-      <n-flex
-        class="py-3 text-2xl"
-        size="large"
-        align="center"
-        justify="center"
-        wrap
-      >
-        <n-flex align="center" justify="center">
-          <strong>余烬TRPG跑团Log着色器</strong>
-          <n-tag type="success" size="small" :bordered="false">v1.0.0</n-tag>
-        </n-flex>
-        <n-flex align="center" justify="center">
-          <account-panel :archive="storyArchive" @load="onStoryChange" @sync="syncStorySource" />
-          <n-button
-            tag="a"
-            href="/api-docs"
-            secondary
-            type="primary"
-            size="small"
-          >
-            <template #icon>
-              <n-icon>
-                <icon-api />
-              </n-icon>
-            </template>
-            API
-          </n-button>
-          <n-button tag="a" href="/admin" secondary type="primary" size="small">
-            <template #icon>
-              <n-icon>
-                <icon-user-admin />
-              </n-icon>
-            </template>
-            管理
-          </n-button>
-        </n-flex>
-      </n-flex>
-    </n-layout-header>
+    <Teleport to="#global-account-slot"><AccountPanel :archive="storyArchive" @load="onStoryChange" @sync="syncStorySource" /></Teleport>
     <n-layout-content class="painter-content">
       <div class="painter-workspace">
         <n-text type="info" italic class="block text-center my-1"
-          >Scardice官方QQ一群 1084726031</n-text
+          >Lorana Tales 官方 QQ 群 1084726031</n-text
         >
         <div class="remote-load-frame">
           <div
@@ -118,7 +80,7 @@
               />
 
               <n-select
-                v-if="storyArchive?.document.settings.enabled"
+                v-if="isStoryEnabled"
                 class="pc-row__position"
                 :value="storyPlacementFor(i)"
                 :disabled="isDefaultNarratorPc(i)"
@@ -190,7 +152,7 @@
           </div>
 
           <story-options
-            v-if="storyArchive"
+            v-if="storyArchive && !legacyOnly"
             :model="storyArchive.document.settings"
             @change="updateStorySettings"
           />
@@ -209,7 +171,7 @@
                   >下载原始文件</n-button
                 >
                 <n-button
-                  v-if="storyArchive?.document.settings.enabled"
+                  v-if="isStoryEnabled"
                   secondary
                   type="success"
                   @click="downloadStoryPackage"
@@ -243,13 +205,13 @@
                   @click="previewClick('preview')"
                 />
                 <n-button
-                  v-if="storyArchive?.document.settings.enabled"
+                  v-if="isStoryEnabled"
                   secondary
                   type="success"
                   @click="isStoryPlayerVisible = true"
                 >沉浸预览</n-button>
                 <n-button
-                  v-if="storyArchive?.document.settings.enabled"
+                  v-if="isStoryEnabled"
                   secondary
                   type="warning"
                   @click="clearStoryDraft"
@@ -277,7 +239,7 @@
           </section>
 
           <story-editor
-            v-if="storyArchive?.document.settings.enabled"
+            v-if="storyArchive && isStoryEnabled"
             :archive="storyArchive"
             :asset-url="storyAssetUrl"
             @change="onStoryChange"
@@ -287,7 +249,7 @@
 
           <div
             v-show="
-              !storyArchive?.document.settings.enabled &&
+              !isStoryEnabled &&
               !(
                 isShowPreview ||
                 isShowPreviewBBS ||
@@ -434,14 +396,12 @@
 <script setup lang="ts">
 import type { ViewUpdate } from "@codemirror/view";
 import {
-  Api as IconApi,
   ColorPalette as IconColorPalette,
   Download as IconDownload,
   Renew as IconRenew,
   Reset as IconReset,
   TrashCan as IconTrashCan,
   Upload as IconUpload,
-  UserAdmin as IconUserAdmin,
   View as IconView,
   User,
 } from "@vicons/carbon";
@@ -505,6 +465,7 @@ import {
 } from "./utils/exporter";
 
 const isDark = useThemeDark();
+const { legacyOnly = false } = defineProps<{ legacyOnly?: boolean }>();
 const _toggleDark = useToggle(isDark);
 
 // 不用他了 虽然很不错，但是没有屏幕取色
@@ -527,6 +488,7 @@ const isShowPreviewBBSPineapple = ref(false);
 const isShowPreviewTRG = ref(false);
 const isStoryPlayerVisible = ref(false);
 const storyArchive = ref<StoryArchive>();
+const isStoryEnabled = computed(() => !legacyOnly && !!storyArchive.value?.document.settings.enabled);
 const storyObjectUrls = new Map<string, string>();
 const storyDraftKey = `story:${location.origin}${location.pathname}?key=${new URLSearchParams(location.search).get("key") || "local"}`;
 let applyingStoryChange = false;
@@ -701,7 +663,7 @@ async function clearStoryDraft() {
 }
 
 function onStorySaveShortcut(event: KeyboardEvent) {
-  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s" && storyArchive.value?.document.settings.enabled) {
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s" && isStoryEnabled.value) {
     event.preventDefault();
     downloadStoryPackage().catch((error) => { console.error(error); message.error("SSP 下载失败"); });
   }
@@ -1380,7 +1342,7 @@ logMan.ev.on("textSet", (text) => {
 
 logMan.ev.on("parsed", (ti: TextInfo) => {
   store.updatePcList(ti.charInfo);
-  if (!applyingStoryChange && storyArchive.value && !storyArchive.value.document.settings.enabled) {
+  if (!applyingStoryChange && storyArchive.value && !isStoryEnabled.value) {
     const settings = storyArchive.value.document.settings;
     const assets = new Map(storyArchive.value.assets);
     storyArchive.value = {

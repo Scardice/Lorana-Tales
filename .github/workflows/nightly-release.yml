@@ -45,16 +45,16 @@ jobs:
         run: pnpm build
 
       - name: Stage portable runtime package
-        run: node scripts/package-nightly.mjs release/scardice-story-painter-nightly
+        run: node scripts/package-nightly.mjs release/lorana-tales-nightly
 
       - name: Install production dependencies into package
-        working-directory: release/scardice-story-painter-nightly
+        working-directory: release/lorana-tales-nightly
         run: |
           npm install --package-lock-only --ignore-scripts --omit=dev --no-audit --no-fund
           npm ci --omit=dev --no-audit --no-fund
 
       - name: Verify staged runtime package
-        working-directory: release/scardice-story-painter-nightly
+        working-directory: release/lorana-tales-nightly
         run: |
           test -f config.toml
           test -f dist/bin/scardice-story-painter.js
@@ -64,12 +64,12 @@ jobs:
 
       - name: Archive runtime package
         run: |
-          tar -czf release/scardice-story-painter-nightly-linux-x64.tar.gz \
-            -C release scardice-story-painter-nightly
-          (cd release && zip -qr scardice-story-painter-nightly-linux-x64.zip scardice-story-painter-nightly)
+          tar -czf release/lorana-tales-nightly-linux-x64.tar.gz \
+            -C release lorana-tales-nightly
+          (cd release && zip -qr lorana-tales-nightly-linux-x64.zip lorana-tales-nightly)
           (cd release && sha256sum \
-            scardice-story-painter-nightly-linux-x64.tar.gz \
-            scardice-story-painter-nightly-linux-x64.zip \
+            lorana-tales-nightly-linux-x64.tar.gz \
+            lorana-tales-nightly-linux-x64.zip \
             > SHA256SUMS.txt)
 
       - name: Move rolling nightly tag to this commit
@@ -102,6 +102,6 @@ jobs:
             Target: Linux x64, Node.js >= 20.19.
             The package contains compiled `dist/`, `out/`, production dependencies, and an editable `config.toml`.
           files: |
-            release/scardice-story-painter-nightly-linux-x64.tar.gz
-            release/scardice-story-painter-nightly-linux-x64.zip
+            release/lorana-tales-nightly-linux-x64.tar.gz
+            release/lorana-tales-nightly-linux-x64.zip
             release/SHA256SUMS.txt

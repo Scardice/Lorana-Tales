@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { spawn } from "node:child_process";
 import { lookup } from "node:dns/promises";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -21,6 +22,8 @@ export type CqResourceCacheOptions = {
 	max_file_mb?: number;
 	max_resources_per_log?: number;
 	image_quality?: number;
+	audio_bitrate_kbps?: number;
+	ffmpeg_path?: string;
 	allowed_hosts?: string[];
 	allow_public_hosts?: boolean;
 	download_timeout_seconds?: number;
@@ -33,6 +36,8 @@ type NormalizedOptions = {
 	maxFileBytes: number;
 	maxResourcesPerLog: number;
 	imageQuality: number;
+	audioBitrateKbps: number;
+	ffmpegPath: string;
 	allowedHosts: string[];
 	allowPublicHosts: boolean;
 	downloadTimeoutMs: number;
@@ -154,7 +159,9 @@ function normalizeOptions(options: CqResourceCacheOptions = {}): NormalizedOptio
 		retentionDays: clampNumber(options.retention_days, 60, 1, 3650),
 		maxFileBytes: clampNumber(options.max_file_mb, 12, 1, 128) * 1024 * 1024,
 		maxResourcesPerLog: clampNumber(options.max_resources_per_log, 40, 1, 200),
-		imageQuality: clampNumber(options.image_quality, 65, 1, 100),
+			imageQuality: clampNumber(options.image_quality, 65, 1, 100),
+			audioBitrateKbps: clampNumber(options.audio_bitrate_kbps, 128, 32, 320),
+			ffmpegPath: String(options.ffmpeg_path || "ffmpeg").trim() || "ffmpeg",
 		allowedHosts: Array.isArray(options.allowed_hosts)
 			? options.allowed_hosts.map((host) => String(host).trim().toLowerCase()).filter(Boolean)
 			: ["*.qq.com", "*.qlogo.cn", "*.qpic.cn", "*.gtimg.cn"],
@@ -168,7 +175,7 @@ function inferKind(type: string): ResourceKind | null {
 	const value = type.toLowerCase();
 	if (["image", "face"].includes(value)) return "image";
 	if (["record", "voice", "audio"].includes(value)) return "audio";
-	if (value === "video") return "video";
+	if (["video", "shortvideo"].includes(value)) return "video";
 	if (value === "file") return "file";
 	return null;
 }
@@ -336,6 +343,25 @@ async function optimizeImage(bytes: Buffer, mime: string, quality: number): Prom
 	}
 }
 
+async function optimizeAudio(bytes: Buffer, mime: string, options: NormalizedOptions): Promise<{ bytes: Buffer; mime: string }> {
+	return new Promise((resolve) => {
+		const child = spawn(options.ffmpegPath, [
+			"-hide_banner", "-loglevel", "error", "-i", "pipe:0", "-map_metadata", "-1", "-vn",
+			"-c:a", "libopus", "-b:a", `${options.audioBitrateKbps}k`, "-vbr", "on",
+			"-compression_level", "10", "-application", "audio", "-flags:a", "+bitexact",
+			"-fflags", "+bitexact", "-f", "ogg", "pipe:1",
+		], { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+		const output: Buffer[] = []; let outputBytes = 0; let stderr = ""; let settled = false;
+		const finish = (value: { bytes: Buffer; mime: string }) => { if (settled) return; settled = true; resolve(value); };
+		const timer = setTimeout(() => { child.kill(); finish({ bytes, mime: inferMime(bytes, mime) }); }, 120_000);
+		child.stdout.on("data", (chunk: Buffer) => { outputBytes += chunk.byteLength; if (outputBytes <= options.maxFileBytes) output.push(chunk); else child.kill(); });
+		child.stderr.on("data", (chunk: Buffer) => { if (stderr.length < 2048) stderr += chunk.toString("utf-8"); });
+		child.once("error", (error) => { clearTimeout(timer); console.warn(`[resource-cache] Audio optimization skipped: ${error.message}`); finish({ bytes, mime: inferMime(bytes, mime) }); });
+		child.once("close", (code) => { clearTimeout(timer); const encoded = Buffer.concat(output); if (code === 0 && encoded.byteLength && encoded.byteLength < bytes.byteLength) finish({ bytes: encoded, mime: "audio/ogg" }); else { if (code !== 0) console.warn(`[resource-cache] Audio optimization skipped: ${stderr.trim() || `FFmpeg exited with ${code}`}`); finish({ bytes, mime: inferMime(bytes, mime) }); } });
+		child.stdin.end(bytes);
+	});
+}
+
 export class CqResourceCache {
 	readonly options: NormalizedOptions;
 	private lastCleanupAt = 0;
@@ -349,9 +375,15 @@ export class CqResourceCache {
 	}
 
 	async cacheRemoteImage(remoteUrl: string): Promise<string> {
-		const resourceId = await this.cacheCandidate({ source: remoteUrl, remoteUrl, kind: "image" });
+		const { resourceId } = await this.cacheCandidate({ source: remoteUrl, remoteUrl, kind: "image" });
 		this.cleanupExpired().catch((error) => console.warn(`[resource-cache] Cleanup failed: ${error instanceof Error ? error.message : String(error)}`));
 		return resourceId;
+	}
+
+	async cacheUploadedResource(bytes: Buffer, kind: "image" | "audio", declaredMime = ""): Promise<{ resourceId: string; reused: boolean }> {
+		if (!this.enabled) throw new Error("resource cache is disabled");
+		if (!bytes.byteLength || bytes.byteLength > this.options.maxFileBytes) throw new Error("resource exceeds configured size limit");
+		return this.cacheCandidate({ source: "upload", kind }, { bytes, mime: declaredMime });
 	}
 
 	resourceUrl(resourceId: string, resourceBaseUrl = ""): string {
@@ -375,7 +407,7 @@ export class CqResourceCache {
 		let videoCount = 0;
 		const replaceVideos = (value: unknown): unknown => {
 			if (typeof value === "string") {
-				return value.replace(/\[CQ:video,(?:[^\[\]]|\[[^\]]*\])*\]/gi, () => {
+				return value.replace(/\[CQ:(?:video|shortvideo),(?:[^\[\]]|\[[^\]]*\])*\]/gi, () => {
 					videoCount += 1;
 					return "【视频】";
 				});
@@ -405,7 +437,7 @@ export class CqResourceCache {
 				replacements.set(
 					candidate.source,
 					this.publicResourceUrl(
-						await this.cacheCandidate(candidate),
+							(await this.cacheCandidate(candidate)).resourceId,
 						resourceBaseUrl,
 					),
 				);
@@ -438,33 +470,37 @@ export class CqResourceCache {
 		return `${base}/cq-resources/${resourceId}`;
 	}
 
-	private async cacheCandidate(candidate: ResourceCandidate): Promise<string> {
-		const downloaded = candidate.base64
+	private async cacheCandidate(candidate: ResourceCandidate, supplied?: { bytes: Buffer; mime: string }): Promise<{ resourceId: string; reused: boolean }> {
+		const downloaded = supplied || (candidate.base64
 			? { bytes: Buffer.from(candidate.base64.replaceAll(/\s+/g, ""), "base64"), mime: "" }
-			: await readRemoteResource(candidate.remoteUrl || "", this.options);
+			: await readRemoteResource(candidate.remoteUrl || "", this.options));
 		if (!downloaded.bytes.byteLength || downloaded.bytes.byteLength > this.options.maxFileBytes) throw new Error("resource exceeds configured size limit");
 		let mime = inferMime(downloaded.bytes, downloaded.mime);
 		if (mime === "text/html" || mime === "application/xhtml+xml") throw new Error("resource is not media");
-		let normalized = candidate.kind === "image" ? await optimizeImage(downloaded.bytes, mime, this.options.imageQuality) : { bytes: downloaded.bytes, mime };
+		let normalized = candidate.kind === "image"
+			? await optimizeImage(downloaded.bytes, mime, this.options.imageQuality)
+			: candidate.kind === "audio"
+				? await optimizeAudio(downloaded.bytes, mime, this.options)
+				: { bytes: downloaded.bytes, mime };
 		mime = normalized.mime;
 		const extension = extensionForMime(mime, candidate.kind);
 		const resourceId = `${crypto.createHash("sha256").update(normalized.bytes).digest("hex")}.${extension}`;
-		await this.writeResource(resourceId, normalized.bytes);
-		return resourceId;
+		const reused = await this.writeResource(resourceId, normalized.bytes);
+		return { resourceId, reused };
 	}
 
-	private async writeResource(resourceId: string, bytes: Buffer) {
+	private async writeResource(resourceId: string, bytes: Buffer): Promise<boolean> {
 		await fs.mkdir(this.options.storagePath, { recursive: true });
 		const rawPath = path.join(this.options.storagePath, resourceId);
 		const brPath = `${rawPath}.br`;
-		try { await fs.access(rawPath); await fs.utimes(rawPath, new Date(), new Date()); return; } catch { /* try Brotli path */ }
-		try { await fs.access(brPath); await fs.utimes(brPath, new Date(), new Date()); return; } catch { /* write below */ }
+		try { await fs.access(rawPath); await fs.utimes(rawPath, new Date(), new Date()); return true; } catch { /* try Brotli path */ }
+		try { await fs.access(brPath); await fs.utimes(brPath, new Date(), new Date()); return true; } catch { /* write below */ }
 		const compressed = brotliCompressSync(bytes, { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 11 } });
 		const target = compressed.byteLength < bytes.byteLength ? brPath : rawPath;
 		const body = compressed.byteLength < bytes.byteLength ? compressed : bytes;
 		const temporary = `${target}.${crypto.randomUUID()}.tmp`;
 		await fs.writeFile(temporary, body, { flag: "wx" });
-		try { await fs.rename(temporary, target); } catch (error) { await fs.unlink(temporary).catch(() => undefined); if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+		try { await fs.rename(temporary, target); return false; } catch (error) { await fs.unlink(temporary).catch(() => undefined); if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; return true; }
 	}
 
 	async readResource(resourceId: string, acceptsBrotli: boolean): Promise<ResourceResponse | null> {

@@ -10,7 +10,7 @@ export interface StorySyncResult {
 }
 
 function sourceText(message: StoryMessage): string {
-  if (message.kind === "image") return message.asset.sourceUrl || message.asset.id;
+  if (message.kind !== "text") return message.asset.sourceUrl || message.asset.id;
   return message.text;
 }
 

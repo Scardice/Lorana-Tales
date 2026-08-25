@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import net from "node:net";
 import type { Express, Request, Response } from "express";
 import { getClientIp } from "../server/client-ip.js";
-import { AccountStore, type AccountUser, normalizeEmail } from "./account-store.js";
+import { AccountStore, type AccountUser, isValidUsername, normalizeEmail } from "./account-store.js";
 import { CaptchaService } from "./captcha.js";
 import { AccountMailer } from "./mailer.js";
 import type { LogStore } from "../storage/log-store.js";
@@ -63,6 +63,17 @@ function validPassword(value: string) {
 	return value.length >= 10 && value.length <= 256;
 }
 
+function validNickname(value: string) {
+	return value.trim().length >= 1 && value.trim().length <= 80;
+}
+
+function validAvatarUrl(value: string) {
+	if (!value) return true;
+	if (/^\/api\/editor\/resource\/[A-Za-z0-9._-]+$/.test(value)) return true;
+	try { return new URL(value).protocol === "https:"; }
+	catch { return false; }
+}
+
 function validateProjectDocument(value: unknown, config): "project_too_large" | "asset_too_large" | "" {
 	const encoded = Buffer.byteLength(JSON.stringify(value ?? null));
 	if (encoded > Number(config.max_project_mb || 25) * 1024 * 1024) return "project_too_large";
@@ -82,15 +93,37 @@ export class AccountService {
 	readonly mailer: AccountMailer | null;
 	readonly trustProxy: boolean;
 	readonly logStore: LogStore | null;
+	readonly branding: { siteTitle: string; logoUrl: string };
 	private captchaChallengeTimes = new Map<string, number[]>();
 
-	constructor(store: AccountStore, config, trustProxy = false, logStore: LogStore | null = null) {
+	constructor(store: AccountStore, config, trustProxy = false, logStore: LogStore | null = null, branding = { siteTitle: "Lorana Tales", logoUrl: "" }) {
 		this.store = store;
 		this.config = config;
 		this.captcha = new CaptchaService(config);
 		this.trustProxy = trustProxy;
 		this.logStore = logStore;
+		this.branding = branding;
 		this.mailer = config.smtp?.host && config.smtp?.from ? new AccountMailer(config.smtp) : null;
+	}
+
+	async ensureInitialAdmin() {
+		if (this.store.activeAdminCount() > 0) return;
+		const username = String(this.config.initial_admin_username || "").trim();
+		const password = String(this.config.initial_admin_password || "");
+		if (!username || username.length > 80 || !validPassword(password)) {
+			throw new Error("accounts.initial_admin_username and a 10+ character accounts.initial_admin_password are required when no administrator exists");
+		}
+		const configuredEmail = normalizeEmail(this.config.initial_admin_email);
+		const email = validEmail(configuredEmail) ? configuredEmail : `${crypto.createHash("sha256").update(username).digest("hex").slice(0, 16)}@bootstrap.invalid`;
+		const existing = this.store.getUserByEmail(email);
+		if (existing) {
+			this.store.updateUser(existing.id, { username, nickname: username, role: "admin" });
+			await this.store.updatePassword(existing.id, password, true);
+			this.store.audit("system", "account.bootstrap-admin", existing.id);
+			return;
+		}
+		const user = await this.store.createUser({ email, password, username, nickname: username, role: "admin", mustChangePassword: true });
+		this.store.audit("system", "account.bootstrap-admin", user.id);
 	}
 
 	private secure(req: Request) {
@@ -127,11 +160,12 @@ export class AccountService {
 		return { ...session, user };
 	}
 
-	isAdmin(req: Request) { return this.getSession(req)?.user.role === "admin"; }
+	isAdmin(req: Request) { const user = this.getSession(req)?.user; return user?.role === "admin" && !user.mustChangePassword; }
 
-	private requireSession(req: Request, res: Response, mutate = false) {
+	private requireSession(req: Request, res: Response, mutate = false, allowInitialChange = false) {
 		const session = this.getSession(req);
 		if (!session) { json(res, 401, { error: "authentication_required" }); return null; }
+		if (session.user.mustChangePassword && !allowInitialChange) { json(res, 428, { error: "credentials_change_required" }); return null; }
 		if (mutate && !this.store.verifyCsrf(session, String(req.headers["x-csrf-token"] || ""))) {
 			json(res, 403, { error: "csrf_failed" }); return null;
 		}
@@ -219,10 +253,11 @@ export class AccountService {
 			try {
 				const body = readJson(req);
 				const email = normalizeEmail(body.email);
-				const purpose = ["register", "login", "reset-password"].includes(String(body.purpose)) ? String(body.purpose) : "login";
+				const purpose = ["register", "login", "reset-password", "change-email"].includes(String(body.purpose)) ? String(body.purpose) : "login";
 				if (!validEmail(email) || !this.emailAllowed(email)) { json(res, 400, { error: "email_not_allowed" }); return; }
 				if (purpose === "register" && (this.config.registration_enabled === false || this.store.getUserByEmail(email))) { json(res, 409, { error: "registration_unavailable" }); return; }
-				const subject = `${email}:${this.prefix(req)}`;
+				const currentSession = this.getSession(req);
+				const subject = currentSession ? `${currentSession.user.id}:${this.prefix(req)}` : `${email}:${this.prefix(req)}`;
 				if (!this.captcha.consumeClearance(String(body.captchaClearance || ""), subject, "verification-send")) { json(res, 428, { error: "captcha_required", scope: "verification-send" }); return; }
 				const counts = this.store.verificationSendCounts(email, this.prefix(req), Date.now() - 3600000);
 				const resendMs = Math.max(1, Number(this.config.email_code_resend_seconds || 60)) * 1000;
@@ -234,18 +269,25 @@ export class AccountService {
 				if (!this.mailer) { json(res, 503, { error: "smtp_not_configured" }); return; }
 				const code = crypto.randomInt(100000, 1000000).toString();
 				const id = this.store.createVerificationCode(email, purpose, code, this.prefix(req), Number(this.config.email_code_ttl_minutes || 10));
-				await this.mailer.sendCode(email, code, purpose);
+				const account = this.store.getUserByEmail(email) || currentSession?.user;
+				await this.mailer.sendCode(email, code, purpose, {
+					username: account?.username || String(body.username || ""),
+					nickname: account?.nickname || String(body.nickname || ""),
+					site_title: this.branding.siteTitle,
+					logo_url: this.branding.logoUrl,
+					expires_minutes: String(this.config.email_code_ttl_minutes || 10),
+				});
 				json(res, 200, { id, resendAfterSeconds: Number(this.config.email_code_resend_seconds || 60) });
 			} catch (error) { console.error("[accounts] verification send failed", error); json(res, 400, { error: "verification_send_failed" }); }
 		});
 
 		app.post("/api/account/register", async (req, res) => {
 			try {
-				const body = readJson(req); const email = normalizeEmail(body.email); const password = String(body.password || "");
+				const body = readJson(req); const email = normalizeEmail(body.email); const password = String(body.password || ""); const username = String(body.username || "").trim(); const nickname = String(body.nickname || "").trim();
 				if (this.config.registration_enabled === false) { json(res, 403, { error: "registration_disabled" }); return; }
-				if (!validEmail(email) || !this.emailAllowed(email) || !validPassword(password)) { json(res, 400, { error: "invalid_registration" }); return; }
+				if (!validEmail(email) || !this.emailAllowed(email) || !validPassword(password) || !isValidUsername(username) || nickname.length < 1 || nickname.length > 80) { json(res, 400, { error: "invalid_registration" }); return; }
 				if (!this.store.verifyCode(String(body.codeId || ""), email, "register", String(body.code || ""))) { json(res, 400, { error: "verification_invalid" }); return; }
-				const user = await this.store.createUser({ email, password, displayName: String(body.displayName || "") });
+				const user = await this.store.createUser({ email, password, username, nickname });
 				this.store.audit(user.id, "account.register", user.id);
 				const device = this.store.createTrustedDevice(user.id, this.prefix(req), this.userAgent(req), Number(this.config.trusted_device_days || 90));
 				const session = this.store.createSession(user, { sessionDays: Number(this.config.session_days || 30), deviceToken: device, ipPrefix: this.prefix(req), userAgent: this.userAgent(req) });
@@ -255,17 +297,17 @@ export class AccountService {
 
 		app.post("/api/account/login", async (req, res) => {
 			try {
-				const body = readJson(req); const email = normalizeEmail(body.email); const known = this.store.getUserByEmail(email);
+				const body = readJson(req); const identity = String(body.email || body.username || "").trim(); const known = this.store.getUserByIdentity(identity);
 				if (known && !this.requireRiskClearance(known.id, "login", req, res)) return;
-				const user = await this.store.verifyPassword(email, String(body.password || ""));
-				if (!user) { const known = this.store.getUserByEmail(email); this.store.recordRisk(known?.id || "", this.prefix(req), "login-failed", email); json(res, 401, { error: "invalid_credentials" }); return; }
+				const user = await this.store.verifyPasswordIdentity(identity, String(body.password || ""));
+				if (!user) { this.store.recordRisk(known?.id || "", this.prefix(req), "login-failed", identity); json(res, 401, { error: "invalid_credentials" }); return; }
 				const current = this.store.refreshExpiredBan(user);
 				if (current.status === "banned") { json(res, 403, { error: "account_banned", reason: current.banReason, until: current.banUntil }); return; }
 				if (current.status !== "active") { json(res, 403, { error: "account_disabled" }); return; }
 				const existingDevice = cookies(req).get(DEVICE_COOKIE) || "";
 				const trusted = this.store.isTrustedDevice(current.id, existingDevice, this.prefix(req), this.userAgent(req));
-				if (!trusted && !this.store.verifyCode(String(body.codeId || ""), email, "login", String(body.code || ""))) {
-					json(res, 428, { error: "email_verification_required", email }); return;
+				if (!current.mustChangePassword && !trusted && !this.store.verifyCode(String(body.codeId || ""), current.email, "login", String(body.code || ""))) {
+					json(res, 428, { error: "email_verification_required", email: current.email }); return;
 				}
 				const device = trusted ? existingDevice : this.store.createTrustedDevice(current.id, this.prefix(req), this.userAgent(req), Number(this.config.trusted_device_days || 90));
 				const session = this.store.createSession(current, { sessionDays: Number(this.config.session_days || 30), deviceToken: device, ipPrefix: this.prefix(req), userAgent: this.userAgent(req) });
@@ -274,12 +316,56 @@ export class AccountService {
 			} catch { json(res, 400, { error: "invalid_request" }); }
 		});
 
+		app.post("/api/account/login/code", async (req, res) => {
+			try {
+				const body = readJson(req); const email = normalizeEmail(body.email); const user = this.store.getUserByEmail(email);
+				if (!user) { json(res, 401, { error: "verification_invalid" }); return; }
+				if (!this.requireRiskClearance(user.id, "login-code", req, res)) return;
+				if (!this.store.verifyCode(String(body.codeId || ""), email, "login", String(body.code || ""))) { json(res, 401, { error: "verification_invalid" }); return; }
+				const current = this.store.refreshExpiredBan(user);
+				if (current.status === "banned") { json(res, 403, { error: "account_banned", reason: current.banReason, until: current.banUntil }); return; }
+				if (current.status !== "active") { json(res, 403, { error: "account_disabled" }); return; }
+				const device = this.store.createTrustedDevice(current.id, this.prefix(req), this.userAgent(req), Number(this.config.trusted_device_days || 90));
+				const session = this.store.createSession(current, { sessionDays: Number(this.config.session_days || 30), deviceToken: device, ipPrefix: this.prefix(req), userAgent: this.userAgent(req) });
+				this.setAuthCookies(req, res, session, device); this.store.audit(current.id, "account.login-code", current.id);
+				json(res, 200, { user: this.publicUser(current), csrfToken: session.csrfToken });
+			} catch { json(res, 400, { error: "invalid_request" }); }
+		});
+
 		app.get("/api/account/me", (req, res) => {
 			const session = this.getSession(req); json(res, 200, session ? { authenticated: true, user: this.publicUser(session.user) } : { authenticated: false });
 		});
 
+		app.patch("/api/account/profile", (req, res) => {
+			const session = this.requireSession(req, res, true); if (!session || !this.requireRiskClearance(session.user.id, "profile-change", req, res)) return;
+			try {
+				const body = readJson(req); const nickname = String(body.nickname ?? session.user.nickname).trim(); const email = normalizeEmail(body.email ?? session.user.email); const avatarUrl = String(body.avatarUrl ?? session.user.avatarUrl).trim();
+				if (!validNickname(nickname) || !validEmail(email) || !this.emailAllowed(email) || !validAvatarUrl(avatarUrl)) { json(res, 400, { error: "profile_invalid" }); return; }
+				if (email !== session.user.email && !this.store.verifyCode(String(body.codeId || ""), email, "change-email", String(body.code || ""))) { json(res, 400, { error: "verification_invalid" }); return; }
+				const duplicate = this.store.getUserByEmail(email); if (duplicate && duplicate.id !== session.user.id) { json(res, 409, { error: "account_exists" }); return; }
+				const user = this.store.updateUser(session.user.id, { email, nickname, avatarUrl });
+				this.store.audit(session.user.id, "account.profile-update", session.user.id, { emailChanged: email !== session.user.email, avatarChanged: avatarUrl !== session.user.avatarUrl });
+				json(res, 200, { user: this.publicUser(user as AccountUser) });
+			} catch { json(res, 400, { error: "profile_invalid" }); }
+		});
+
+		app.post("/api/account/bootstrap/complete", async (req, res) => {
+			const session = this.getSession(req);
+			if (!session) { json(res, 401, { error: "authentication_required" }); return; }
+			if (!this.store.verifyCsrf(session, String(req.headers["x-csrf-token"] || ""))) { json(res, 403, { error: "csrf_failed" }); return; }
+			if (!session.user.mustChangePassword || session.user.role !== "admin") { json(res, 409, { error: "initial_credentials_already_replaced" }); return; }
+			try {
+				const body = readJson(req); const email = normalizeEmail(body.email); const username = String(body.username || "").trim(); const nickname = String(body.nickname || username).trim(); const password = String(body.password || "");
+				const checked = await this.store.verifyPassword(session.user.email, String(body.currentPassword || ""));
+				if (!checked || !validEmail(email) || !this.emailAllowed(email) || !isValidUsername(username) || !validNickname(nickname) || !validPassword(password)) { json(res, 400, { error: "initial_credentials_invalid" }); return; }
+				const duplicate = this.store.getUserByEmail(email); const duplicateName = this.store.getUserByIdentity(username); if ((duplicate && duplicate.id !== session.user.id) || (duplicateName && duplicateName.id !== session.user.id)) { json(res, 409, { error: "account_exists" }); return; }
+				await this.store.completeInitialCredentials(session.user.id, { email, username, nickname, password });
+				this.clearAuthCookies(req, res); this.store.audit(session.user.id, "account.bootstrap-complete", session.user.id); json(res, 200, { reloginRequired: true });
+			} catch { json(res, 400, { error: "initial_credentials_invalid" }); }
+		});
+
 		app.post("/api/account/logout", (req, res) => {
-			const session = this.requireSession(req, res, true); if (!session) return;
+			const session = this.requireSession(req, res, true, true); if (!session) return;
 			this.store.revokeSession(session.token); this.clearAuthCookies(req, res); json(res, 200, { authenticated: false });
 		});
 
@@ -292,7 +378,7 @@ export class AccountService {
 		});
 
 		app.post("/api/account/password", async (req, res) => {
-			const session = this.requireSession(req, res, true); if (!session || !this.requireRiskClearance(session.user.id, "password-change", req, res)) return;
+			const session = this.requireSession(req, res, true, true); if (!session || !this.requireRiskClearance(session.user.id, "password-change", req, res)) return;
 			try {
 				const body = readJson(req); const checked = await this.store.verifyPassword(session.user.email, String(body.currentPassword || "")); const password = String(body.password || "");
 				if (!checked || !validPassword(password)) { json(res, 400, { error: "password_invalid" }); return; }

@@ -3,7 +3,7 @@ import type { CharItem, LogItem } from "../types";
 import { LogImporter, type TextInfo } from "./_logImpoter";
 
 export const reEditLogTest =
-	/^([^(<\n]+)(\(([^(\n]+)\)|<[^(\n]+>)?(\s+)(\d{4}\/\d{1,2}\/\d{1,2} )?(\d{1,2}:\d{1,2}:\d{2})( #\d+)?$/m;
+	/^([^(<\n]+)(\(([^(\n]+)\)|<[^(\n]+>)?(\s+)(\d{4,6}\/\d{1,2}\/\d{1,2} )?(\d{1,2}:\d{1,2}:\d{2})( #\d+)?$/m;
 export const reEditLog = new RegExp(reEditLogTest, "gm");
 
 export class EditLogImporter extends LogImporter {

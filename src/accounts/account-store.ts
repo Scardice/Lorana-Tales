@@ -16,6 +16,9 @@ export type AccountStatus = "active" | "disabled" | "banned";
 export interface AccountUser {
 	id: string;
 	email: string;
+	username: string;
+	nickname: string;
+	avatarUrl: string;
 	displayName: string;
 	role: AccountRole;
 	status: AccountStatus;
@@ -61,11 +64,28 @@ export function normalizeEmail(value: unknown): string {
 	return String(value || "").trim().toLowerCase();
 }
 
+export function isValidUsername(value: unknown): boolean {
+	return /^[A-Za-z0-9_-]{3,32}$/.test(String(value || "").trim());
+}
+
+function fallbackUsername(value: unknown, id: string): string {
+	const normalized = String(value || "user")
+		.normalize("NFKD")
+		.replace(/[^A-Za-z0-9_-]+/g, "_")
+		.replace(/^_+|_+$/g, "")
+		.slice(0, 24);
+	const base = normalized.length >= 3 ? normalized : "user";
+	return `${base}_${id.replace(/-/g, "").slice(0, 7)}`.slice(0, 32);
+}
+
 function rowToUser(row: SqlRow): AccountUser {
 	return {
 		id: String(row.id || ""),
 		email: String(row.email || ""),
-		displayName: String(row.display_name || ""),
+		username: String(row.username || ""),
+		nickname: String(row.nickname || row.display_name || row.username || ""),
+		avatarUrl: String(row.avatar_url || ""),
+		displayName: String(row.nickname || row.display_name || row.username || ""),
 		role: row.role === "admin" ? "admin" : "user",
 		status:
 			row.status === "banned" ? "banned" : row.status === "disabled" ? "disabled" : "active",
@@ -112,6 +132,9 @@ export class AccountStore {
 			CREATE TABLE IF NOT EXISTS account_users (
 				id TEXT PRIMARY KEY,
 				email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+				username TEXT NOT NULL DEFAULT '' COLLATE NOCASE,
+				nickname TEXT NOT NULL DEFAULT '',
+				avatar_url TEXT NOT NULL DEFAULT '',
 				display_name TEXT NOT NULL DEFAULT '',
 				password_hash TEXT NOT NULL,
 				role TEXT NOT NULL DEFAULT 'user',
@@ -199,27 +222,52 @@ export class AccountStore {
 			);
 			CREATE INDEX IF NOT EXISTS idx_account_risk_user ON account_risk_events(user_id, created_at_ms DESC);
 		`);
+		const columns = new Set((this.db.prepare("PRAGMA table_info(account_users)").all() as SqlRow[]).map((row) => String(row.name || "")));
+		if (!columns.has("username")) this.db.exec("ALTER TABLE account_users ADD COLUMN username TEXT NOT NULL DEFAULT '' COLLATE NOCASE");
+		if (!columns.has("nickname")) this.db.exec("ALTER TABLE account_users ADD COLUMN nickname TEXT NOT NULL DEFAULT ''");
+		if (!columns.has("avatar_url")) this.db.exec("ALTER TABLE account_users ADD COLUMN avatar_url TEXT NOT NULL DEFAULT ''");
+		const legacyUsers = this.db.prepare("SELECT id, email, display_name, username, nickname FROM account_users").all() as SqlRow[];
+		const updateLegacy = this.db.prepare("UPDATE account_users SET username = ?, nickname = ?, display_name = ? WHERE id = ?");
+		for (const row of legacyUsers) {
+			const id = String(row.id || "");
+			let username = String(row.username || "").trim();
+			if (!isValidUsername(username)) username = fallbackUsername(String(row.display_name || String(row.email || "").split("@")[0]), id);
+			while (this.db.prepare("SELECT 1 FROM account_users WHERE username = ? COLLATE NOCASE AND id <> ? LIMIT 1").get(username, id)) {
+				username = fallbackUsername(username, crypto.randomUUID());
+			}
+			const nickname = String(row.nickname || row.display_name || username).trim().slice(0, 80) || username;
+			updateLegacy.run(username, nickname, nickname, id);
+		}
+		this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_account_users_username ON account_users(username COLLATE NOCASE)");
 	}
 
 	async createUser(input: {
 		email: string;
 		password: string;
-		displayName?: string;
+		username: string;
+		nickname?: string;
+		avatarUrl?: string;
 		role?: AccountRole;
 		mustChangePassword?: boolean;
 	}): Promise<AccountUser> {
 		const email = normalizeEmail(input.email);
+		const username = String(input.username || "").trim();
+		if (!isValidUsername(username)) throw new Error("invalid_username");
+		const nickname = String(input.nickname || username).trim().slice(0, 80) || username;
 		const now = nowIso();
 		const id = crypto.randomUUID();
 		this.db.prepare(`
 			INSERT INTO account_users (
-				id, email, display_name, password_hash, role, status,
+				id, email, username, nickname, avatar_url, display_name, password_hash, role, status,
 				must_change_password, created_at, updated_at
-			) VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?)
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
 		`).run(
 			id,
 			email,
-			String(input.displayName || email.split("@")[0]).slice(0, 80),
+			username,
+			nickname,
+			String(input.avatarUrl || "").slice(0, 2048),
+			nickname,
 			await passwordHash(input.password),
 			input.role === "admin" ? "admin" : "user",
 			input.mustChangePassword ? 1 : 0,
@@ -239,6 +287,24 @@ export class AccountStore {
 		return row ? rowToUser(row) : null;
 	}
 
+	getUserByIdentity(identity: string): AccountUser | null {
+		const value = String(identity || "").trim();
+		if (!value) return null;
+		const row = this.db.prepare(`SELECT * FROM account_users
+			WHERE email = ? COLLATE NOCASE
+				OR username = ? COLLATE NOCASE
+			ORDER BY CASE WHEN email = ? COLLATE NOCASE THEN 0 ELSE 1 END LIMIT 1`)
+			.get(normalizeEmail(value), value, normalizeEmail(value)) as SqlRow | undefined;
+		return row ? rowToUser(row) : null;
+	}
+
+	getAdminByDisplayName(displayName: string): AccountUser | null {
+		const value = String(displayName || "").trim();
+		if (!value) return null;
+		const row = this.db.prepare("SELECT * FROM account_users WHERE role = 'admin' AND username = ? COLLATE NOCASE LIMIT 1").get(value) as SqlRow | undefined;
+		return row ? rowToUser(row) : null;
+	}
+
 	refreshExpiredBan(user: AccountUser): AccountUser {
 		if (user.status === "banned" && user.banUntil && Date.parse(user.banUntil) <= Date.now()) {
 			return this.setStatus(user.id, "active") as AccountUser;
@@ -252,21 +318,42 @@ export class AccountStore {
 		return rowToUser(row);
 	}
 
+	async verifyPasswordIdentity(identity: string, password: string): Promise<AccountUser | null> {
+		const user = this.getUserByIdentity(identity);
+		if (!user) return null;
+		const row = this.db.prepare("SELECT password_hash FROM account_users WHERE id = ?").get(user.id) as SqlRow | undefined;
+		if (!row || !(await passwordMatches(password, String(row.password_hash || "")))) return null;
+		return user;
+	}
+
 	async updatePassword(userId: string, password: string, mustChange = false): Promise<void> {
 		this.db.prepare("UPDATE account_users SET password_hash = ?, must_change_password = ?, updated_at = ? WHERE id = ?")
 			.run(await passwordHash(password), mustChange ? 1 : 0, nowIso(), userId);
 		this.revokeSessions(userId);
 	}
 
-	updateUser(userId: string, input: Partial<{ email: string; displayName: string; role: AccountRole }>) {
+	async completeInitialCredentials(userId: string, input: { email: string; username: string; nickname?: string; password: string }) {
+		const email = normalizeEmail(input.email);
+		const username = String(input.username || "").trim();
+		const nickname = String(input.nickname || username).trim().slice(0, 80) || username;
+		this.db.prepare(`UPDATE account_users SET email = ?, username = ?, nickname = ?, display_name = ?, password_hash = ?,
+			must_change_password = 0, updated_at = ? WHERE id = ?`)
+			.run(email, username, nickname, nickname, await passwordHash(input.password), nowIso(), userId);
+		this.revokeSessions(userId);
+		return this.getUserById(userId);
+	}
+
+	updateUser(userId: string, input: Partial<{ email: string; username: string; nickname: string; displayName: string; avatarUrl: string; role: AccountRole }>) {
 		const current = this.getUserById(userId);
 		if (!current) return null;
 		const email = input.email ? normalizeEmail(input.email) : current.email;
-		const displayName = input.displayName === undefined ? current.displayName : String(input.displayName).slice(0, 80);
+		const username = input.username === undefined ? current.username : String(input.username).trim();
+		const nicknameInput = input.nickname === undefined ? input.displayName : input.nickname;
+		const nickname = nicknameInput === undefined ? current.nickname : String(nicknameInput).trim().slice(0, 80) || username;
+		const avatarUrl = input.avatarUrl === undefined ? current.avatarUrl : String(input.avatarUrl).trim().slice(0, 2048);
 		const role = input.role || current.role;
-		this.db.prepare("UPDATE account_users SET email = ?, display_name = ?, role = ?, updated_at = ? WHERE id = ?")
-			.run(email, displayName, role, nowIso(), userId);
-		if (input.email) this.revokeSessions(userId);
+		this.db.prepare("UPDATE account_users SET email = ?, username = ?, nickname = ?, avatar_url = ?, display_name = ?, role = ?, updated_at = ? WHERE id = ?")
+			.run(email, username, nickname, avatarUrl, nickname, role, nowIso(), userId);
 		return this.getUserById(userId);
 	}
 
@@ -283,7 +370,7 @@ export class AccountStore {
 
 	listUsers(query = "", page = 1, pageSize = 20) {
 		const normalized = query.trim().toLowerCase();
-		const where = normalized ? "WHERE lower(email) LIKE @like OR lower(display_name) LIKE @like" : "";
+		const where = normalized ? "WHERE lower(email) LIKE @like OR lower(username) LIKE @like OR lower(nickname) LIKE @like" : "";
 		const params = normalized ? { like: `%${normalized.replace(/[\\%_]/g, "\\$&")}%` } : {};
 		const total = Number((this.db.prepare(`SELECT COUNT(*) AS total FROM account_users ${where}`).get(params) as SqlRow).total || 0);
 		const rows = this.db.prepare(`SELECT * FROM account_users ${where} ORDER BY created_at DESC LIMIT @limit OFFSET @offset`)
@@ -426,6 +513,30 @@ export class AccountStore {
 				sourceKey: String(row.source_key || ""), sourceRevision: String(row.source_revision || ""),
 				createdAt: String(row.created_at), updatedAt: String(row.updated_at),
 			}));
+	}
+
+	listAllProjects(page = 1, pageSize = 50) {
+		const limit = Math.min(100, Math.max(1, pageSize));
+		const offset = Math.max(0, page - 1) * limit;
+		const total = Number((this.db.prepare("SELECT COUNT(*) AS total FROM editor_projects WHERE archived = 0").get() as SqlRow).total || 0);
+		const rows = this.db.prepare(`SELECT p.id, p.title, p.revision, p.source_key, p.source_revision,
+			p.created_at, p.updated_at, p.user_id, u.username, u.nickname, u.email
+			FROM editor_projects p LEFT JOIN account_users u ON u.id = p.user_id
+			WHERE p.archived = 0 ORDER BY p.updated_at DESC LIMIT ? OFFSET ?`).all(limit, offset) as SqlRow[];
+		return { items: rows.map((row) => ({
+			id: String(row.id), title: String(row.title), revision: Number(row.revision), sourceKey: String(row.source_key || ""),
+			sourceRevision: String(row.source_revision || ""), createdAt: String(row.created_at), updatedAt: String(row.updated_at),
+			userId: String(row.user_id || ""), username: String(row.username || ""), nickname: String(row.nickname || ""), email: String(row.email || ""),
+		})), total, page, pageSize: limit };
+	}
+
+	getProjectAsAdmin(id: string) {
+		const row = this.db.prepare(`SELECT p.*, u.username, u.nickname, u.email FROM editor_projects p
+			LEFT JOIN account_users u ON u.id = p.user_id WHERE p.id = ? AND p.archived = 0`).get(id) as SqlRow | undefined;
+		if (!row) return null;
+		return { id: String(row.id), title: String(row.title), revision: Number(row.revision), document: decompressDocument(row.document_blob as Buffer),
+			owner: { id: String(row.user_id || ""), username: String(row.username || ""), nickname: String(row.nickname || ""), email: String(row.email || "") },
+			createdAt: String(row.created_at), updatedAt: String(row.updated_at) };
 	}
 
 	getProject(userId: string, id: string) {

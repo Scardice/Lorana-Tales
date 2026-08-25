@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="referrer" content="never" />
+    <title>文档中心</title>
+    <link rel="icon" href="/favicon.ico" />
+    <style>
+      :root{color-scheme:dark;--bg:#0d1514;--panel:#17201f;--panel2:#202a29;--line:#34413f;--text:#edf3f2;--muted:#98a6a3;--accent:#38bfc8;--code:#1e1e1e}*{box-sizing:border-box}[hidden]{display:none!important}body{margin:0;min-width:320px;min-height:100dvh;background:var(--bg);color:var(--text);font:15px/1.65 system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif}button,a{font:inherit}.shell{width:min(1080px,calc(100% - 32px));margin:auto;padding:24px 0 56px}.topbar{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding-bottom:20px;border-bottom:1px solid var(--line)}.brand{display:flex;align-items:center;gap:.75rem;color:inherit;text-decoration:none}.brand img{width:34px;height:34px;border-radius:9px;object-fit:contain}.brand span{display:grid}.brand small{color:var(--muted)}.back{border:1px solid var(--line);border-radius:10px;padding:.5rem .75rem;background:var(--panel);color:inherit;text-decoration:none}.intro{padding:42px 0 24px}.intro h1{margin:0;font-size:clamp(2rem,6vw,4rem);line-height:1}.intro p{max-width:680px;margin:1rem 0 0;color:var(--muted)}.sections{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.section-card{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:1rem;border:1px solid var(--line);border-radius:16px;padding:1.2rem;background:var(--panel);color:inherit;text-align:left;cursor:pointer;transition:.18s}.section-card:hover,.section-card.active{border-color:var(--accent);background:#1b2827;transform:translateY(-1px)}.section-card i{display:grid;width:44px;height:44px;place-items:center;border-radius:12px;background:var(--panel2);color:var(--accent);font-style:normal;font-weight:800}.section-card span{display:grid}.section-card small{color:var(--muted)}.section-card b{color:var(--muted);font-size:1.25rem}.content{margin-top:18px;border:1px solid var(--line);border-radius:16px;background:var(--panel);overflow:hidden}.content header{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:1rem 1.2rem;border-bottom:1px solid var(--line)}.content header div{display:grid}.content header small{color:var(--muted)}.content a{border-radius:9px;padding:.5rem .75rem;background:#187f86;color:white;text-decoration:none}.content-body{padding:1.2rem}.api-list{display:grid;gap:.75rem}.api-list article{padding:1rem;border:1px solid var(--line);border-radius:12px;background:#111817}.api-list h3{margin:0 0 .35rem}.api-list p{margin:0;color:var(--muted)}pre{max-height:62dvh;margin:0;overflow:auto;padding:1rem;border-radius:12px;background:var(--code);color:#d4d4d4;white-space:pre-wrap;font:13px/1.7 "Cascadia Code",Consolas,monospace;scrollbar-width:thin;scrollbar-color:#465956 transparent}@media(max-width:650px){.shell{width:100%;padding:0}.topbar{padding:max(.75rem,env(safe-area-inset-top)) .8rem .75rem}.brand small{display:none}.intro{padding:28px .9rem 18px}.sections{grid-template-columns:1fr;padding:0 .75rem}.content{margin:14px 0 0;border-right:0;border-left:0;border-radius:0}.content header{align-items:flex-start;padding:.85rem}.content-body{padding:.75rem}pre{max-height:none}.section-card{padding:.9rem}}
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar"><a class="brand" href="/story"><img src="/branding/logo" alt="" /><span><strong>文档中心</strong><small>API 与故事语言教程</small></span></a><a class="back" href="/story">返回编辑器</a></header>
+      <section class="intro"><h1>选择文档分区</h1><p>API 与故事语言保持为独立分区，后续教程可以直接追加到对应目录，不再挤进编辑器的小弹窗。</p></section>
+      <nav class="sections" aria-label="文档分区">
+        <button class="section-card" data-section="api"><i>API</i><span><strong>服务端 API</strong><small>上传、读取、管理与响应格式</small></span><b>›</b></button>
+        <button class="section-card" data-section="language"><i>&lt;/&gt;</i><span><strong>故事语言</strong><small>角色、消息、资源与演出语法</small></span><b>›</b></button>
+      </nav>
+      <section class="content" hidden>
+        <header><div><strong data-title></strong><small data-subtitle></small></div><a data-api-link href="/api-docs">打开完整 API 参考</a></header>
+        <div class="content-body"><div class="api-list" data-api-content><article><h3>日志接口</h3><p>兼容 <code>/api/dice</code> 与 <code>/dice/api</code> 两套路径前缀。</p></article><article><h3>账户与工程</h3><p>注册、登录、验证码、账户工程与管理员接口。</p></article><article><h3>资源服务</h3><p>头像、CQ 图片与语音资源的缓存、压缩和读取。</p></article></div><pre data-language-content></pre></div>
+      </section>
+    </main>
+    <script type="module" src="/src/pages/docs.ts"></script>
+  </body>
+</html>

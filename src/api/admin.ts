@@ -153,7 +153,7 @@ export function createAdminRouter({
 	function requireMutationAuth(req, res) {
 		if (getSession(req)) return true;
 		const session = accountService?.getSession(req);
-		if (session?.user.role === "admin" && accountService?.store.verifyCsrf(session, String(req.headers["x-csrf-token"] || ""))) return true;
+		if (session?.user.role === "admin" && !session.user.mustChangePassword && accountService?.store.verifyCsrf(session, String(req.headers["x-csrf-token"] || ""))) return true;
 		sendJson(res, session ? 403 : 401, { error: session ? "csrf_failed" : "admin authentication required" });
 		return false;
 	}
@@ -243,10 +243,11 @@ export function createAdminRouter({
 
 	app.get("/admin/api/session", (req, res) => {
 		const account = accountService?.getSession(req);
-		sendJson(res, 200, { authenticated: isAuthenticated(req), mode: getSession(req) ? "root" : account?.user.role === "admin" ? "account" : "none", user: account?.user.role === "admin" ? account.user : null });
+		sendJson(res, 200, { authenticated: isAuthenticated(req), accountMode: !!accountService, mode: getSession(req) ? "root" : account?.user.role === "admin" && !account.user.mustChangePassword ? "account" : "none", user: account?.user.role === "admin" && !account.user.mustChangePassword ? account.user : null });
 	});
 
 	app.post("/admin/api/login", async (req, res) => {
+		if (accountService) { sendJson(res, 410, { error: "root_login_disabled", message: "请从编辑器顶栏登录管理员账号。" }); return; }
 		if (!loginAllowed(req)) {
 			sendJson(res, 429, { error: "too many failed login attempts" });
 			return;
@@ -303,13 +304,27 @@ export function createAdminRouter({
 		sendJson(res, 200, accountService.store.listAudit(clampInt(req.query.page, 1, 1, Number.MAX_SAFE_INTEGER), clampInt(req.query.pageSize, 50, 1, 100)));
 	});
 
+	app.get("/admin/api/projects", (req, res) => {
+		if (!requireAuth(req, res)) return;
+		if (!accountService) { sendJson(res, 404, { error: "accounts_disabled" }); return; }
+		sendJson(res, 200, accountService.store.listAllProjects(clampInt(req.query.page, 1, 1, Number.MAX_SAFE_INTEGER), clampInt(req.query.pageSize, 50, 1, 100)));
+	});
+
+	app.get("/admin/api/projects/:id", (req, res) => {
+		if (!requireAuth(req, res)) return;
+		if (!accountService) { sendJson(res, 404, { error: "accounts_disabled" }); return; }
+		const project = accountService.store.getProjectAsAdmin(req.params.id);
+		sendJson(res, project ? 200 : 404, project || { error: "project_not_found" });
+	});
+
 	app.post("/admin/api/users", async (req, res) => {
 		if (!requireMutationAuth(req, res)) return;
 		if (!accountService) { sendJson(res, 404, { error: "accounts_disabled" }); return; }
 		try {
-			const body = readJsonBody(req); const email = String(body.email || ""); const newPassword = String(body.password || "");
+			const body = readJsonBody(req); const email = String(body.email || ""); const newPassword = String(body.password || ""); const username = String(body.username || body.displayName || email.split("@")[0]).trim(); const nickname = String(body.nickname || body.displayName || username).trim();
 			if (!email.includes("@") || newPassword.length < 10) { sendJson(res, 400, { error: "invalid_user" }); return; }
-			const user = await accountService.store.createUser({ email, password: newPassword, displayName: String(body.displayName || ""), role: body.role === "admin" ? "admin" : "user", mustChangePassword: body.mustChangePassword !== false });
+			if (accountService.store.getUserByIdentity(username)) { sendJson(res, 409, { error: "user_exists" }); return; }
+			const user = await accountService.store.createUser({ email, password: newPassword, username, nickname, role: body.role === "admin" ? "admin" : "user", mustChangePassword: body.mustChangePassword !== false });
 			accountService.store.audit(actor(req), "admin.user-create", user.id, { email: user.email, role: user.role }); sendJson(res, 201, user);
 		} catch (error) { console.error("[admin] create user failed", error); sendJson(res, 409, { error: "user_exists" }); }
 	});
@@ -321,7 +336,9 @@ export function createAdminRouter({
 			const current = accountService.store.getUserById(req.params.id); if (!current) { sendJson(res, 404, { error: "user_not_found" }); return; }
 			const body = readJsonBody(req);
 			if (current.role === "admin" && body.role === "user" && current.status === "active" && accountService.store.activeAdminCount() <= 1) { sendJson(res, 409, { error: "last_admin" }); return; }
-			const user = accountService.store.updateUser(current.id, { email: typeof body.email === "string" ? body.email : undefined, displayName: typeof body.displayName === "string" ? body.displayName : undefined, role: body.role === "admin" || body.role === "user" ? body.role : undefined });
+			const nextRole = body.role === "admin" || body.role === "user" ? body.role : current.role; const nextName = typeof body.username === "string" ? body.username.trim() : current.username; const duplicateName = accountService.store.getUserByIdentity(nextName);
+			if (duplicateName && duplicateName.id !== current.id) { sendJson(res, 409, { error: "user_update_failed" }); return; }
+			const user = accountService.store.updateUser(current.id, { email: typeof body.email === "string" ? body.email : undefined, username: typeof body.username === "string" ? body.username : undefined, nickname: typeof body.nickname === "string" ? body.nickname : typeof body.displayName === "string" ? body.displayName : undefined, role: body.role === "admin" || body.role === "user" ? body.role : undefined });
 			accountService.store.audit(actor(req), "admin.user-update", current.id, body); sendJson(res, 200, user);
 		} catch { sendJson(res, 409, { error: "user_update_failed" }); }
 	});

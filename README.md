@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="web/public/icon.png" width="96" alt="Scardice Story Painter logo">
+  <img src="web/public/icon.png" width="96" alt="Lorana Tales logo">
 </p>
 
-# Scardice Story Painter
+# Lorana Tales
 
 [![Node](https://img.shields.io/badge/node-%3E=20.19-green)](https://nodejs.org/)
 [![pnpm](https://img.shields.io/badge/pnpm-latest-orange)](https://pnpm.io/)
@@ -57,7 +57,7 @@ pnpm start
 API 说明页：`http://localhost:3000/api-docs`。
 管理后台：`http://localhost:3000/admin`。
 
-如果没有在 `config.toml` 配置管理密码，服务启动时会生成一个仅本次进程有效的 UUID，并打印在启动日志中。
+账号模式关闭且没有在 `config.toml` 配置管理密码时，服务启动会生成一个仅本次进程有效的 UUID，并打印在启动日志中。账号模式开启后不再使用这套旧管理密码。
 
 ### 开发模式
 
@@ -89,13 +89,13 @@ pnpm dev
 
 ### Nightly Release
 
-每次 `main` 分支有新提交时，GitHub Actions 会重新构建并更新 [Nightly Release](https://github.com/Scardice/Scardice-story-painter/releases/tag/nightly)。它是一个滚动的预发布版本，固定使用 `nightly` 标签，不会创建大量按提交分裂的 Release。
+每次 `main` 分支有新提交时，GitHub Actions 会重新构建并更新 [Nightly Release](https://github.com/Scardice/Lorana-Tales/releases/tag/nightly)。它是一个滚动的预发布版本，固定使用 `nightly` 标签，不会创建大量按提交分裂的 Release。
 
 Nightly 包面向 Linux x64，使用 Node.js `>=20.19`，已经包含服务端 `dist/`、前端 `out/`、生产依赖和 `better-sqlite3` 原生模块，不需要再编译源码。下载 `.tar.gz` 或 `.zip` 后：
 
 ```bash
 # 解压后进入目录
-cd scardice-story-painter-nightly
+cd lorana-tales-nightly
 
 # 直接编辑已经准备好的运行配置；不要把真实密码或域名提交回源码仓库
 $EDITOR config.toml
@@ -136,6 +136,15 @@ allowed_hosts = ["localhost", "127.0.0.1", "::1"] # 加入用户实际访问的�
 [storage]
 sqlite_path = "./data/scardice.db" # SQLite 数据库路径
 
+[editor]
+default_mode = "story" # 裸路径默认进入 story（新版）或 legacy（旧版）
+enable_story_mode = true # 关闭后隐藏新版入口，/story 自动回落旧版
+
+[branding]
+site_title = "Lorana Tales" # 浏览器标题及上顶栏最右侧的网站名
+logo_path = "" # PNG/SVG 本地路径；相对路径以项目根目录为准，留空使用内置图标
+favicon_path = "" # ICO/PNG/SVG 本地路径；留空沿用前端默认 favicon
+
 [resource_cache]
 enabled = false # 上传时归档 CQ 图片、语音和附件；视频仅保留【视频】占位且不下载
 path = "./data/cq-resources" # 本地媒体目录
@@ -143,13 +152,18 @@ retention_days = 60 # 资源归档保留天数，和日志保留天数独立
 max_file_mb = 12 # 单个远程/内嵌资源的最大体积
 max_resources_per_log = 40 # 单份日志最多下载的资源数
 image_quality = 65 # PNG/JPEG/WebP 转 WebP 时的有损质量（1-100）
-allowed_hosts = ["*.qq.com", "*.qlogo.cn", "*.qpic.cn", "*.gtimg.cn"] # 可信上游资源域名与 QQ 头像
+audio_bitrate_kbps = 128 # 语音转为 Ogg Opus 的目标码率
+ffmpeg_path = "ffmpeg" # 系统 FFmpeg 路径；项目不捆绑 GPL 二进制
+allowed_hosts = ["*.qq.com", "*.qlogo.cn", "*.qpic.cn", "*.gtimg.cn", "*.discordapp.com", "*.kookapp.cn", "*.kookcdn.com", "*.kaiheila.cn"] # 可信上游资源与平台头像域名
 allow_public_hosts = false # 不建议开启；true 时允许任意公网域名
 download_timeout_seconds = 15 # 单资源下载超时
 
 [accounts]
 enabled = false # 开启账号注册、登录与云端工程
 registration_enabled = true
+initial_admin_username = "" # 第一次启动时创建的临时管理员用户名
+initial_admin_password = "" # 至少 10 字符；首次登录后必须立刻更换
+initial_admin_email = "" # 可留空，首次登录时仍必须填写正式邮箱
 encryption_key = "" # 开启时必填，至少 32 个随机字符
 captcha_provider = "image" # image / altcha / turnstile / hcaptcha
 
@@ -159,7 +173,9 @@ port = 587
 secure = false
 user = "no-reply@example.com"
 password = ""
-from = "余烬染色器 <no-reply@example.com>"
+from = "Lorana Tales <no-reply@example.com>"
+subject_template = "{{site_title}} {{purpose}}验证码"
+html_template_path = "./email/verification.html" # 可选 .html/.htm 文件；支持 code、username、nickname、site_title、logo/logo_url、purpose、expires_minutes
 
 [app]
 frontend_url = ""        # 留空时使用代理解析后的外部域名；跨域/CDN 托管前端时固定填写公开 URL
@@ -170,7 +186,7 @@ cleanup_after_upload = true # 上传后后台清理过期日志
 backup_upload_api = ""   # 备用上传API（可选）
 
 [admin]
-password = ""            # 管理后台密码；留空则启动时生成一次性 UUID
+password = ""            # 仅账号模式关闭时使用；留空则启动时生成进程内 UUID
 
 [metrics]
 enabled = false           # 默认关闭 /metrics
@@ -200,17 +216,26 @@ admin_bruteforce_block_seconds = 60 # 触发后的封禁时长；期间访问会
 | `ALLOWED_HOSTS`                   | 允许的 Host 头列表，逗号分隔                               |
 | `SQLITE_PATH`                     | SQLite 数据库路径                                          |
 | `DATABASE_PATH`                   | SQLite 数据库路径兼容变量；和 `SQLITE_PATH` 同时设置时优先 |
+| `EDITOR_DEFAULT_MODE`             | 裸路径默认编辑器：`story` 或 `legacy`                      |
+| `EDITOR_ENABLE_STORY_MODE`        | 是否开放并显示新版沉浸式染色器                             |
+| `SITE_TITLE`                      | 浏览器标题及上顶栏网站名                                   |
+| `SITE_LOGO_PATH`                  | 顶栏 PNG/SVG Logo 的本地路径                               |
+| `SITE_FAVICON_PATH`               | ICO/PNG/SVG favicon 的本地路径                             |
 | `CQ_RESOURCE_CACHE_ENABLED`        | 是否归档 CQ 资源                                           |
 | `CQ_RESOURCE_CACHE_PATH`           | CQ 资源存储目录                                            |
 | `CQ_RESOURCE_CACHE_RETENTION_DAYS` | CQ 资源保留天数                                            |
 | `CQ_RESOURCE_CACHE_MAX_FILE_MB`    | 单资源体积限制                                             |
 | `CQ_RESOURCE_CACHE_MAX_RESOURCES_PER_LOG` | 单日志资源数量上限                                  |
 | `CQ_RESOURCE_CACHE_IMAGE_QUALITY`  | WebP 有损压缩质量（1-100）                                |
+| `CQ_RESOURCE_CACHE_AUDIO_BITRATE_KBPS` | Ogg Opus 语音目标码率（kbps）                         |
 | `CQ_RESOURCE_CACHE_ALLOWED_HOSTS`  | 可信上游域名，逗号分隔                                     |
 | `CQ_RESOURCE_CACHE_ALLOW_PUBLIC_HOSTS` | 是否允许任意公网域名                                  |
 | `CQ_RESOURCE_CACHE_DOWNLOAD_TIMEOUT_SECONDS` | 单资源下载超时秒数                              |
 | `ACCOUNTS_ENABLED`                | 是否开启账号与云端工程                                   |
 | `ACCOUNTS_REGISTRATION_ENABLED`   | 是否开放自行注册                                         |
+| `ACCOUNTS_INITIAL_ADMIN_USERNAME` | 首次启动临时管理员用户名                                 |
+| `ACCOUNTS_INITIAL_ADMIN_PASSWORD` | 首次启动临时管理员密码；首次登录后强制更换               |
+| `ACCOUNTS_INITIAL_ADMIN_EMAIL`    | 临时管理员初始邮箱，可留空                               |
 | `ACCOUNTS_ENCRYPTION_KEY`         | 工程源密钥加密主密钥，至少 32 字符                       |
 | `ACCOUNTS_CAPTCHA_PROVIDER`       | `image`、`altcha`、`turnstile` 或 `hcaptcha`             |
 | `SMTP_HOST` / `SMTP_PORT`         | SMTP 主机与端口                                           |
@@ -226,7 +251,7 @@ admin_bruteforce_block_seconds = 60 # 触发后的封禁时长；期间访问会
 | `CLEANUP_ON_START`                | 启动时清理过期日志                                         |
 | `CLEANUP_AFTER_UPLOAD`            | 上传后后台清理过期日志                                     |
 | `BACKUP_UPLOAD_API`               | 备用上传API                                                |
-| `ADMIN_PASSWORD`                  | 管理后台密码                                               |
+| `ADMIN_PASSWORD`                  | 仅账号模式关闭时使用的旧管理后台密码                       |
 | `METRICS_ENABLED`                 | 是否开启 `/metrics`                                        |
 | `METRICS_TOKEN`                   | `/metrics` Bearer token                                    |
 | `INJECTION_GUARD_ENABLED`         | 是否开启上传内容注入拦截                                   |
@@ -262,15 +287,25 @@ trust_proxy = true
 
 开启 `[resource_cache].enabled` 后，服务会在上传时解压日志，提取 `CQ:image`、`face`、`record`、`voice`、`audio` 和 `file` 中的 URL 或 base64 资源，下载后将日志引用改为本站 `/cq-resources/...`。`CQ:video` 永远不会下载或写入硬盘，而会改成 `【视频】` 占位，避免视频耗尽服务端空间。默认只允许腾讯 QQ/QLogo/QPic/GTImg 域名；如日志确实使用其他图床，应将对应域名加入 `allowed_hosts`，而不是直接开启 `allow_public_hosts`。
 
-PNG、JPEG 和 WebP 会以 `image_quality` 重编码为 WebP；只有更小才替换原文件。GIF 会保持原格式和动画。所有保存后的资源还会使用最高质量 Brotli 无损压缩；支持 Brotli 的浏览器直接得到压缩流，其他客户端由服务端即时解压。音频和其他附件不进行有损转码，避免改变可播放性。
+PNG、JPEG 和 WebP 会以 `image_quality` 重编码为 WebP；只有更小才替换原文件。GIF 会保持原格式和动画。语音会通过系统 FFmpeg 转为 128kbps（或 `audio_bitrate_kbps`）的 Ogg Opus；如果输出反而更大则保留较小的原文件。项目只调用运维环境提供的 FFmpeg，不捆绑其二进制，从而不把 GPL 分发义务混入 MIT 发布包。所有保存后的资源还会使用最高质量 Brotli 无损压缩；支持 Brotli 的浏览器直接得到压缩流，其他客户端由服务端即时解压。
 
-`retention_days` 从资源归档成功时计算，与日志的 `log_retention_days` 独立。被拒绝、超限、超时或下载失败的资源会保留原上游 URL，且不会导致日志上传失败。
+资源在有损处理后以 SHA-256 命名，相同内容只保存一份；编辑器上传重复文件时会提示并复用现有资源。`retention_days` 从资源归档成功时计算，与日志的 `log_retention_days` 独立。未归档的 CQ 图片和语音在新版界面只显示 `【图片】` / `【语音】`，不会暴露 CQ 原文；用户也可以主动填写并验证一个 HTTP(S) 直链，这类资源直接由浏览器读取、不写入服务端。被拒绝、超限、超时或下载失败的 CQ 资源不会导致日志上传失败。
+
+### QQ、Discord 与 KOOK 头像
+
+新版会根据日志中的数字身份长度推断平台，并把获取到的头像转存到本地资源缓存。QQ 无需鉴权；Discord 与 KOOK 必须分别开启 `[avatar_providers].discord_enabled` / `kook_enabled` 并在服务端配置 Bot Token。Token 不会进入前端响应。平台返回用户名时会与日志昵称做弱匹配；匹配成功优先使用对应平台，候选都不匹配时优先 QQ。明显属于 Discord 的长 ID 若鉴权失败则保持无头像，不会硬套 QQ 头像。角色上传自定义头像后，可在角色编辑中点击“使用/刷新平台头像”恢复并重新拉取。
+
+生产环境优先用 `DISCORD_BOT_TOKEN`、`KOOK_BOT_TOKEN` 环境变量注入密钥，不要把真实 Token 写入 Git。Discord Token 应按密码保护；这里只调用只读用户资料接口，不要求额外消息权限。
 
 ### 沉浸编辑、SSP 与账号
 
-高级编辑模式会把旧格式日志无损映射为版本化的 `StoryDocument`，旁白角色固定存在且不可删除。修改会保存在当前浏览器的 IndexedDB，刷新或再次打开相同日志时会询问是否恢复；“删除本地修改”需要二次确认。`Ctrl+S` 下载 `.ssp`：它是带清单、SHA-256 校验与内嵌资源的高压缩 ZIP 工程包，可重新导入继续编辑。传统文本和三种标准 DOCX 导出仍然可用。
+新版沉浸式染色器位于 `/story`，旧版位于 `/legacy`；裸路径 `/` 服从 `[editor].default_mode`。关闭 `[editor].enable_story_mode` 后会隐藏新版入口并让 `/story` 回落旧版。新版是独立的固定视口 Web App，旧版配置区不会混入其中。
 
-开启 `[accounts].enabled` 后，用户可用邮箱和密码注册/登录，并把自有编辑副本保存为云端工程；登录状态下从网页上传的旧日志会自动归入账号，骰子机器人上传的匿名日志仍可由用户另存为自己的工程。新设备、浏览器指纹或 IP 网段变化（IPv4 `/24`、IPv6 `/64`）需要邮件验证码；发送验证码以及异常行为会要求 CAPTCHA。风控只要求验证或冷却，不会自动永久封号。管理员可以在 `/admin` 新增、删除、编辑、升降管理员、改密码、停用或带理由封禁用户；系统阻止移除最后一个可用管理员。原来的 `[admin].password` 仍作为应急 root 登录。
+新版会把旧格式日志无损映射为故事工程，旁白角色固定存在且不可删除。修改会保存在当前浏览器的 IndexedDB，刷新或再次打开相同日志时会询问是否恢复。`Ctrl+S` 下载 `.ssp`：它是包含 `story.lorana` 与 `assets/` 的高压缩 ZIP 工程包，不保存 JSON 故事文档。`story.lorana` 使用用户可直接编辑的 Lorana Tales Story Language，例如 `<time:2000ms>` 控制消息停留时间、`<wt:100ms>文字<wt/>` 控制局部逐词停顿；语音转写或声音描述保存在同一条音频消息正文中。编辑器内置语法文档和应用前校验。SSP 会校验压缩包路径、文件数和解压体积，旧版染色器日志也可直接导入新版。
+
+预览支持手动/自动演出、逐词动画、录制编排、组内头像跟随滚动、图片查看、语音波形播放、按消息边界分页的长图导出，以及尽可能把资源内嵌为 Data URL 的独立 HTML。传统 Word 导出仍采用原先的角色名与正文排版，不导出聊天气泡。
+
+开启 `[accounts].enabled` 后，注册时会分别填写只允许字母、数字、`_`、`-` 的登录用户名和可自由显示的昵称；登录既支持“用户名或邮箱 + 密码”，也支持邮箱验证码免密登录。用户可在个人中心修改昵称、头像和邮箱，并把自有编辑副本保存为云端工程；登录状态下从网页上传的旧日志会自动归入账号，骰子机器人上传的匿名日志仍可由用户另存为自己的工程。新设备、浏览器指纹或 IP 网段变化（IPv4 `/24`、IPv6 `/64`）以及异常行为会要求邮件验证码或 CAPTCHA。风控只要求验证或冷却，不会自动永久封号。管理员既能访问原有的全部服务端日志，也能在 `/admin` 查看所有用户云端工程副本，并可新增、删除、编辑、升降管理员、改邮箱和密码、停用或带理由封禁用户；系统阻止移除最后一个可用管理员。账号模式使用配置中的初始管理员账号完成首次引导，首次登录必须更换正式用户名、邮箱和密码；完成后初始凭据和旧 `[admin].password` 都不能再登录。
 
 账号开启时 `accounts.encryption_key` 必须至少 32 字符。注册与新设备登录还需要可用 SMTP；建议生产环境使用 HTTPS，并保护配置文件中的 SMTP 密码、CAPTCHA 密钥与加密主密钥。
 

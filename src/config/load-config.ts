@@ -30,20 +30,41 @@ const DEFAULT_CONFIG = {
 	storage: {
 		sqlite_path: "./data/scardice.db",
 	},
+	editor: {
+		default_mode: "story",
+		enable_story_mode: true,
+	},
+	branding: {
+		site_title: "Lorana Tales",
+		logo_path: "",
+		favicon_path: "",
+	},
+	avatar_providers: {
+		discord_enabled: false,
+		discord_bot_token: "",
+		kook_enabled: false,
+		kook_bot_token: "",
+	},
 	resource_cache: {
 		enabled: false,
 		path: "./data/cq-resources",
+		cq_face_path: "",
 		retention_days: 60,
 		max_file_mb: 12,
 		max_resources_per_log: 40,
 		image_quality: 65,
-		allowed_hosts: ["*.qq.com", "*.qlogo.cn", "*.qpic.cn", "*.gtimg.cn"],
+		audio_bitrate_kbps: 128,
+		ffmpeg_path: "ffmpeg",
+		allowed_hosts: ["*.qq.com", "*.qlogo.cn", "*.qpic.cn", "*.gtimg.cn", "*.discordapp.com", "*.kookapp.cn", "*.kookcdn.com", "*.kaiheila.cn"],
 		allow_public_hosts: false,
 		download_timeout_seconds: 15,
 	},
 	accounts: {
 		enabled: false,
 		registration_enabled: true,
+		initial_admin_username: "",
+		initial_admin_password: "",
+		initial_admin_email: "",
 		encryption_key: "",
 		session_days: 30,
 		trusted_device_days: 90,
@@ -59,13 +80,18 @@ const DEFAULT_CONFIG = {
 		email_code_resend_seconds: 60,
 		email_code_per_hour: 5,
 		ip_email_code_per_hour: 10,
-		smtp: {
+			smtp: {
 			host: "",
 			port: 587,
 			secure: false,
 			user: "",
 			password: "",
-			from: "",
+				from: "",
+				subject_template: "{{site_title}} {{purpose}}验证码",
+				text_template: "",
+				html_template: "",
+				text_template_path: "",
+				html_template_path: "",
 		},
 		altcha: {
 			hmac_key: "",
@@ -198,6 +224,10 @@ export function loadConfig() {
 		...DEFAULT_CONFIG.accounts.hcaptcha,
 		...(fileConfig.accounts?.hcaptcha || {}),
 	};
+	config.avatar_providers = {
+		...DEFAULT_CONFIG.avatar_providers,
+		...(fileConfig.avatar_providers || {}),
+	};
 
 	// Environment variable overrides (highest priority)
 	if (process.env.HOST) config.server.host = process.env.HOST;
@@ -216,6 +246,27 @@ export function loadConfig() {
 		config.storage.sqlite_path = process.env.SQLITE_PATH;
 	if (process.env.DATABASE_PATH)
 		config.storage.sqlite_path = process.env.DATABASE_PATH;
+	if (process.env.EDITOR_DEFAULT_MODE)
+		config.editor.default_mode = process.env.EDITOR_DEFAULT_MODE;
+	if (process.env.EDITOR_ENABLE_STORY_MODE !== undefined)
+		config.editor.enable_story_mode = parseBoolean(
+			process.env.EDITOR_ENABLE_STORY_MODE,
+			config.editor.enable_story_mode,
+		);
+	if (process.env.SITE_TITLE)
+		config.branding.site_title = process.env.SITE_TITLE;
+	if (process.env.SITE_LOGO_PATH !== undefined)
+		config.branding.logo_path = process.env.SITE_LOGO_PATH;
+	if (process.env.SITE_FAVICON_PATH !== undefined)
+		config.branding.favicon_path = process.env.SITE_FAVICON_PATH;
+	if (process.env.DISCORD_AVATAR_ENABLED !== undefined)
+		config.avatar_providers.discord_enabled = parseBoolean(process.env.DISCORD_AVATAR_ENABLED, config.avatar_providers.discord_enabled);
+	if (process.env.DISCORD_BOT_TOKEN)
+		config.avatar_providers.discord_bot_token = process.env.DISCORD_BOT_TOKEN;
+	if (process.env.KOOK_AVATAR_ENABLED !== undefined)
+		config.avatar_providers.kook_enabled = parseBoolean(process.env.KOOK_AVATAR_ENABLED, config.avatar_providers.kook_enabled);
+	if (process.env.KOOK_BOT_TOKEN)
+		config.avatar_providers.kook_bot_token = process.env.KOOK_BOT_TOKEN;
 	if (process.env.CQ_RESOURCE_CACHE_ENABLED !== undefined)
 		config.resource_cache.enabled = parseBoolean(
 			process.env.CQ_RESOURCE_CACHE_ENABLED,
@@ -223,6 +274,8 @@ export function loadConfig() {
 		);
 	if (process.env.CQ_RESOURCE_CACHE_PATH)
 		config.resource_cache.path = process.env.CQ_RESOURCE_CACHE_PATH;
+	if (process.env.CQ_FACE_RESOURCE_PATH !== undefined)
+		config.resource_cache.cq_face_path = process.env.CQ_FACE_RESOURCE_PATH;
 	if (process.env.CQ_RESOURCE_CACHE_RETENTION_DAYS) {
 		const d = parseInt(process.env.CQ_RESOURCE_CACHE_RETENTION_DAYS, 10);
 		if (!Number.isNaN(d) && d > 0) config.resource_cache.retention_days = d;
@@ -240,6 +293,12 @@ export function loadConfig() {
 		const value = parseInt(process.env.CQ_RESOURCE_CACHE_IMAGE_QUALITY, 10);
 		if (!Number.isNaN(value)) config.resource_cache.image_quality = value;
 	}
+	if (process.env.CQ_RESOURCE_CACHE_AUDIO_BITRATE_KBPS) {
+		const value = parseInt(process.env.CQ_RESOURCE_CACHE_AUDIO_BITRATE_KBPS, 10);
+		if (!Number.isNaN(value)) config.resource_cache.audio_bitrate_kbps = value;
+	}
+	if (process.env.CQ_RESOURCE_CACHE_FFMPEG_PATH)
+		config.resource_cache.ffmpeg_path = process.env.CQ_RESOURCE_CACHE_FFMPEG_PATH;
 	if (process.env.CQ_RESOURCE_CACHE_ALLOWED_HOSTS)
 		config.resource_cache.allowed_hosts = parseList(
 			process.env.CQ_RESOURCE_CACHE_ALLOWED_HOSTS,
@@ -261,6 +320,12 @@ export function loadConfig() {
 			process.env.ACCOUNTS_REGISTRATION_ENABLED,
 			config.accounts.registration_enabled,
 		);
+	if (process.env.ACCOUNTS_INITIAL_ADMIN_USERNAME)
+		config.accounts.initial_admin_username = process.env.ACCOUNTS_INITIAL_ADMIN_USERNAME;
+	if (process.env.ACCOUNTS_INITIAL_ADMIN_PASSWORD)
+		config.accounts.initial_admin_password = process.env.ACCOUNTS_INITIAL_ADMIN_PASSWORD;
+	if (process.env.ACCOUNTS_INITIAL_ADMIN_EMAIL)
+		config.accounts.initial_admin_email = process.env.ACCOUNTS_INITIAL_ADMIN_EMAIL;
 	if (process.env.ACCOUNTS_ENCRYPTION_KEY)
 		config.accounts.encryption_key = process.env.ACCOUNTS_ENCRYPTION_KEY;
 	if (process.env.ACCOUNTS_SESSION_DAYS)
@@ -280,6 +345,9 @@ export function loadConfig() {
 	if (process.env.SMTP_USER) config.accounts.smtp.user = process.env.SMTP_USER;
 	if (process.env.SMTP_PASSWORD) config.accounts.smtp.password = process.env.SMTP_PASSWORD;
 	if (process.env.SMTP_FROM) config.accounts.smtp.from = process.env.SMTP_FROM;
+	if (process.env.SMTP_SUBJECT_TEMPLATE) config.accounts.smtp.subject_template = process.env.SMTP_SUBJECT_TEMPLATE;
+	if (process.env.SMTP_TEXT_TEMPLATE_PATH) config.accounts.smtp.text_template_path = process.env.SMTP_TEXT_TEMPLATE_PATH;
+	if (process.env.SMTP_HTML_TEMPLATE_PATH) config.accounts.smtp.html_template_path = process.env.SMTP_HTML_TEMPLATE_PATH;
 	if (process.env.ALTCHA_HMAC_KEY) config.accounts.altcha.hmac_key = process.env.ALTCHA_HMAC_KEY;
 	if (process.env.TURNSTILE_SITE_KEY) config.accounts.turnstile.site_key = process.env.TURNSTILE_SITE_KEY;
 	if (process.env.TURNSTILE_SECRET_KEY) config.accounts.turnstile.secret_key = process.env.TURNSTILE_SECRET_KEY;
@@ -349,6 +417,7 @@ export function loadConfig() {
 
 	config.server.allowed_hosts = parseList(config.server.allowed_hosts);
 	config.resource_cache.allowed_hosts = parseList(config.resource_cache.allowed_hosts);
+	config.editor.default_mode = String(config.editor.default_mode).toLowerCase() === "legacy" ? "legacy" : "story";
 	config.accounts.allowed_email_domains = parseList(config.accounts.allowed_email_domains);
 	config.security.warning_quotes = parseList(config.security.warning_quotes);
 
@@ -366,6 +435,19 @@ export function loadConfig() {
 	}
 	if (!path.isAbsolute(config.resource_cache.path)) {
 		config.resource_cache.path = path.resolve(PROJECT_ROOT, config.resource_cache.path);
+	}
+	if (config.resource_cache.cq_face_path && !path.isAbsolute(config.resource_cache.cq_face_path)) {
+		config.resource_cache.cq_face_path = path.resolve(PROJECT_ROOT, config.resource_cache.cq_face_path);
+	}
+	for (const field of ["logo_path", "favicon_path"]) {
+		const configuredPath = String(config.branding[field] || "").trim();
+		if (configuredPath && !path.isAbsolute(configuredPath)) {
+			config.branding[field] = path.resolve(PROJECT_ROOT, configuredPath);
+		}
+	}
+	for (const field of ["text_template_path", "html_template_path"]) {
+		const configuredPath = String(config.accounts.smtp[field] || "").trim();
+		if (configuredPath && !path.isAbsolute(configuredPath)) config.accounts.smtp[field] = path.resolve(PROJECT_ROOT, configuredPath);
 	}
 
 	return config;

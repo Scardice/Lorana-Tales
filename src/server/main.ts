@@ -41,6 +41,41 @@ type SecurityBlockRecord = {
 	expiresAt: number;
 };
 
+type BrandingAsset = {
+	filePath: string;
+	contentType: string;
+};
+
+const BRANDING_CONTENT_TYPES = new Map([
+	[".png", "image/png"],
+	[".svg", "image/svg+xml"],
+	[".ico", "image/x-icon"],
+]);
+
+function resolveBrandingAsset(
+	configuredPath: unknown,
+	allowedExtensions: Set<string>,
+	label: string,
+): BrandingAsset | null {
+	const filePath = String(configuredPath || "").trim();
+	if (!filePath) return null;
+	const extension = path.extname(filePath).toLowerCase();
+	if (!allowedExtensions.has(extension)) {
+		console.warn(`[branding] Ignoring ${label}: unsupported file type ${extension || "(none)"}`);
+		return null;
+	}
+	try {
+		if (!fs.statSync(filePath).isFile()) throw new Error("not a file");
+	} catch {
+		console.warn(`[branding] Ignoring ${label}: configured file is unavailable`);
+		return null;
+	}
+	return {
+		filePath,
+		contentType: BRANDING_CONTENT_TYPES.get(extension) || "application/octet-stream",
+	};
+}
+
 const ADMIN_BRUTEFORCE_REASON =
 	"检测到管理员登录页面疑似爆破行为，当前来源已被安全系统临时封禁。请求内容以及IP已经被记录，请规范个人行为。";
 
@@ -219,14 +254,25 @@ export async function startServer(
 	config = loadConfig(),
 ): Promise<StartServerResult> {
 	const configuredAdminPassword = String(config.admin?.password || "").trim();
-	const adminPassword = configuredAdminPassword || crypto.randomUUID();
-	const isGeneratedAdminPassword = !configuredAdminPassword;
+	const accountMode = !!config.accounts?.enabled;
+	const adminPassword = accountMode ? "" : configuredAdminPassword || crypto.randomUUID();
+	const isGeneratedAdminPassword = !accountMode && !configuredAdminPassword;
 	const trustProxy = !!config.server?.trust_proxy;
 	const allowedHosts = getAllowedHosts(config);
+	const brandingLogo = resolveBrandingAsset(
+		config.branding?.logo_path,
+		new Set([".png", ".svg"]),
+		"logo",
+	);
+	const brandingFavicon = resolveBrandingAsset(
+		config.branding?.favicon_path,
+		new Set([".ico", ".png", ".svg"]),
+		"favicon",
+	);
 	const securityBlocksByIp = new Map<string, SecurityBlockRecord>();
 	const securityBlocksById = new Map<string, SecurityBlockRecord>();
 	const editorAssetFetches = new Map<string, { startedAt: number; count: number }>();
-	function takeEditorFetchQuota(kind: "asset" | "avatar", clientIp: string, limit: number) {
+	function takeEditorFetchQuota(kind: "asset" | "avatar" | "avatar-candidates", clientIp: string, limit: number) {
 		const key = `${kind}:${clientIp}`;
 		const now = Date.now();
 		const current = editorAssetFetches.get(key);
@@ -301,7 +347,12 @@ export async function startServer(
 		if (String(config.accounts.encryption_key || "").length < 32) {
 			throw new Error("accounts.encryption_key must contain at least 32 characters when accounts are enabled");
 		}
-		accountService = new AccountService(new AccountStore(store.db), config.accounts, trustProxy, store);
+		const publicBase = String(config.app.frontend_url || "").replace(/\/$/, "");
+		accountService = new AccountService(new AccountStore(store.db), config.accounts, trustProxy, store, {
+			siteTitle: String(config.branding.site_title || "Lorana Tales"),
+			logoUrl: config.branding.logo_path && publicBase ? `${publicBase}/branding/logo` : "",
+		});
+		await accountService.ensureInitialAdmin();
 	}
 	const resourceCache = new CqResourceCache(config.resource_cache);
 	if (resourceCache.enabled) {
@@ -364,7 +415,8 @@ export async function startServer(
 	// Parse raw body for all content types (up to 10 MB to handle the default
 	// 5 MB upload limit plus multipart overhead).
 	const accountBodyLimitMb = config.accounts?.enabled ? Number(config.accounts.max_project_mb || 25) + 2 : 0;
-	const rawLimitMb = Math.max(10, Number(config.app.max_upload_mb || 5) * 2, accountBodyLimitMb);
+	const resourceBodyLimitMb = resourceCache.enabled ? Number(config.resource_cache?.max_file_mb || 12) + 2 : 0;
+	const rawLimitMb = Math.max(10, Number(config.app.max_upload_mb || 5) * 2, accountBodyLimitMb, resourceBodyLimitMb);
 	app.use(express.raw({ type: "*/*", limit: `${rawLimitMb}mb` }));
 	accountService?.register(app);
 
@@ -417,6 +469,58 @@ export async function startServer(
 		);
 	});
 
+	function sendBrandingAsset(res, asset: BrandingAsset | null) {
+		if (!asset) {
+			res.status(404).type("text/plain").send("Not Found");
+			return;
+		}
+		res.setHeader("Cache-Control", "public, max-age=3600");
+		res.setHeader("X-Content-Type-Options", "nosniff");
+		if (asset.contentType === "image/svg+xml") {
+			res.setHeader("Content-Security-Policy", "sandbox; default-src 'none'; style-src 'unsafe-inline'");
+		}
+		res.type(asset.contentType).sendFile(asset.filePath);
+	}
+
+	app.get("/branding/logo", (_req, res) => sendBrandingAsset(res, brandingLogo));
+	app.get("/favicon.ico", (_req, res) => sendBrandingAsset(res, brandingFavicon));
+
+	app.get("/api/editor/config", (_req, res) => {
+		res.status(200);
+		res.setHeader("Cache-Control", "no-store");
+		res.setHeader("Content-Type", "application/json; charset=utf-8");
+		res.send(JSON.stringify({
+			defaultMode: config.editor?.default_mode === "legacy" ? "legacy" : "story",
+			storyModeEnabled: config.editor?.enable_story_mode !== false,
+			siteTitle: String(config.branding?.site_title || "Lorana Tales").trim() || "Lorana Tales",
+			logoUrl: brandingLogo ? "/branding/logo" : "",
+			faviconUrl: brandingFavicon ? "/favicon.ico" : "",
+		}));
+	});
+
+	app.post("/api/editor/resources", async (req, res) => {
+		if (!resourceCache.enabled) {
+			res.status(503).type("application/json").send(JSON.stringify({ error: "服务端资源存储未开启" }));
+			return;
+		}
+		const kind = String(req.headers["x-resource-kind"] || "").toLowerCase();
+		if (kind !== "image" && kind !== "audio") {
+			res.status(400).type("application/json").send(JSON.stringify({ error: "只允许图片或语音" }));
+			return;
+		}
+		const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+		try {
+			const result = await resourceCache.cacheUploadedResource(body, kind, String(req.headers["content-type"] || ""));
+			res.status(200).type("application/json").send(JSON.stringify({
+				id: result.resourceId,
+				url: resourceCache.resourceUrl(result.resourceId),
+				reused: result.reused,
+			}));
+		} catch (error) {
+			res.status(422).type("application/json").send(JSON.stringify({ error: error instanceof Error ? error.message : "资源处理失败" }));
+		}
+	});
+
 	app.get("/cq-resources/:resourceId", async (req, res) => {
 		try {
 			const acceptsBrotli = /(?:^|,)\s*br(?:;q=(?!0(?:\.0+)?$)[0-9.]+)?\s*(?:,|$)/i.test(
@@ -442,10 +546,123 @@ export async function startServer(
 		}
 	});
 
+	app.get("/api/editor/cq-face/:faceId", async (req, res) => {
+		const faceId = String(req.params.faceId || "");
+		const configuredRoot = String(config.resource_cache.cq_face_path || "").trim();
+		if (!/^\d{1,4}$/.test(faceId) || !configuredRoot) {
+			res.status(404).type("text/plain").send("Not Found");
+			return;
+		}
+		const root = path.resolve(configuredRoot);
+		const candidates = [
+			path.join(root, "faces", faceId, "apng", `${faceId}.png`),
+			path.join(root, faceId, "apng", `${faceId}.png`),
+			path.join(root, `${faceId}.png`),
+		];
+		for (const candidate of candidates) {
+			try {
+				const resolved = path.resolve(candidate);
+				if (resolved !== root && !resolved.startsWith(`${root}${path.sep}`)) continue;
+				const body = await fs.promises.readFile(resolved);
+				res.status(200).setHeader("Cache-Control", "public, max-age=31536000, immutable");
+				res.type("image/png").send(body);
+				return;
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "ENOENT") console.warn("[server] CQ face read failed:", error);
+			}
+		}
+		res.status(404).type("text/plain").send("Not Found");
+	});
+
+	type AvatarCandidate = { platform: "discord" | "kook" | "qq"; imageUrl: string; names: string[] };
+	const avatarName = (value: unknown) => String(value || "").trim().toLocaleLowerCase().replace(/[\s_\-·「」『』]/g, "");
+	async function fetchPlatformAvatar(platform: "discord" | "kook", userId: string): Promise<AvatarCandidate> {
+		const providers = config.avatar_providers;
+		const enabled = platform === "discord" ? providers.discord_enabled : providers.kook_enabled;
+		const token = String(platform === "discord" ? providers.discord_bot_token : providers.kook_bot_token || "").trim();
+		if (!enabled || !token) throw new Error(`${platform} avatar provider disabled`);
+		const url = platform === "discord"
+			? `https://discord.com/api/v10/users/${encodeURIComponent(userId)}`
+			: `https://www.kookapp.cn/api/v3/user/view?user_id=${encodeURIComponent(userId)}`;
+		const response = await fetch(url, { headers: { Authorization: `Bot ${token}`, "User-Agent": "Lorana-Tales/1.0" }, signal: AbortSignal.timeout(10_000) });
+		if (!response.ok) throw new Error(`${platform} user lookup failed (${response.status})`);
+		const payload: any = await response.json();
+		const user = platform === "discord" ? payload : payload?.data;
+		if (!user || String(user.id || "") !== userId) throw new Error(`${platform} user id mismatch`);
+		if (platform === "discord") {
+			const avatarHash = String(user.avatar || "");
+			const defaultIndex = Number((BigInt(userId) >> 22n) % 6n);
+			return { platform, imageUrl: avatarHash ? `https://cdn.discordapp.com/avatars/${userId}/${avatarHash}.webp?size=256` : `https://cdn.discordapp.com/embed/avatars/${defaultIndex}.png`, names: [user.global_name, user.username].filter(Boolean).map(String) };
+		}
+		if (!user.avatar) throw new Error("kook avatar missing");
+		return { platform, imageUrl: String(user.avatar), names: [user.nickname, user.username].filter(Boolean).map(String) };
+	}
+	async function resolveUserAvatar(userId: string, expectedName: string): Promise<AvatarCandidate> {
+		const length = userId.length;
+		const order: Array<"discord" | "kook" | "qq"> = length >= 16 ? ["discord"] : length >= 13 ? ["discord", "kook"] : length >= 9 ? ["kook", "qq"] : ["qq"];
+		const resolved: AvatarCandidate[] = [];
+		for (const platform of order) {
+			try {
+				resolved.push(platform === "qq" ? { platform, imageUrl: `http://q1.qlogo.cn/g?b=qq&nk=${encodeURIComponent(userId)}&s=100`, names: [] } : await fetchPlatformAvatar(platform, userId));
+			} catch { /* Try the next configured provider. */ }
+		}
+		if (!resolved.length) throw new Error("No avatar provider resolved this identity");
+		const expected = avatarName(expectedName);
+		const nameMatch = expected && resolved.find((item) => item.names.some((name) => avatarName(name) === expected || avatarName(name).includes(expected) || expected.includes(avatarName(name))));
+		return nameMatch || (expected ? resolved.find((item) => item.platform === "qq") : undefined) || resolved[0];
+	}
+	async function resolveAvatarCandidates(userId: string, expectedName: string) {
+		const probes: Array<Promise<AvatarCandidate>> = [Promise.resolve({ platform: "qq" as const, imageUrl: `http://q1.qlogo.cn/g?b=qq&nk=${encodeURIComponent(userId)}&s=100`, names: [] })];
+		if (config.avatar_providers.discord_enabled && config.avatar_providers.discord_bot_token) probes.push(fetchPlatformAvatar("discord", userId));
+		if (config.avatar_providers.kook_enabled && config.avatar_providers.kook_bot_token) probes.push(fetchPlatformAvatar("kook", userId));
+		const settled = await Promise.allSettled(probes);
+		const expected = avatarName(expectedName);
+		const candidates = settled.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
+		const weighted = candidates.map((candidate) => ({ candidate, nameMatch: !!expected && candidate.names.some((name) => avatarName(name) === expected || avatarName(name).includes(expected) || expected.includes(avatarName(name))) }))
+			.sort((left, right) => Number(right.nameMatch) - Number(left.nameMatch) || Number(right.candidate.platform === "qq") - Number(left.candidate.platform === "qq"));
+		const result: Array<{ platform: AvatarCandidate["platform"]; url: string; names: string[]; nameMatch: boolean }> = [];
+		for (const item of weighted) {
+			try {
+				const resourceId = await resourceCache.cacheRemoteImage(item.candidate.imageUrl);
+				result.push({ platform: item.candidate.platform, url: resourceCache.resourceUrl(resourceId), names: item.candidate.names, nameMatch: item.nameMatch });
+			} catch { /* A platform response without a usable image is not a candidate. */ }
+		}
+		return result;
+	}
+
+	app.get("/api/editor/avatar/candidates/:id", async (req, res) => {
+		const userId = String(req.params.id || "");
+		if (!/^\d{5,20}$/.test(userId)) { res.status(400).type("application/json").send(JSON.stringify({ error: "invalid_platform_user_id" })); return; }
+		if (!takeEditorFetchQuota("avatar-candidates", getClientIp(req, trustProxy), 30)) { res.status(429).type("application/json").send(JSON.stringify({ error: "avatar_fetch_rate_limited" })); return; }
+		try {
+			const candidates = await resolveAvatarCandidates(userId, String(req.query.name || ""));
+			res.status(200).set({ "Cache-Control": "no-store", "Content-Type": "application/json; charset=utf-8" }).send(JSON.stringify({ candidates }));
+		} catch (error) {
+			console.error("[server] avatar candidates failed:", error instanceof Error ? error.message : error);
+			res.status(200).type("application/json").send(JSON.stringify({ candidates: [] }));
+		}
+	});
+
+	app.get("/api/editor/avatar/user/:id", async (req, res) => {
+		const userId = String(req.params.id || "");
+		if (!/^\d{5,20}$/.test(userId)) { res.status(400).type("text/plain").send("Invalid platform user id"); return; }
+		if (!takeEditorFetchQuota("avatar", getClientIp(req, trustProxy), 120)) { res.status(429).type("text/plain").send("Avatar fetch rate limited"); return; }
+		try {
+			const candidate = await resolveUserAvatar(userId, String(req.query.name || ""));
+			const resourceId = await resourceCache.cacheRemoteImage(candidate.imageUrl);
+			res.setHeader("Cache-Control", req.query.refresh == null ? "public, max-age=86400" : "no-store");
+			res.setHeader("X-Avatar-Provider", candidate.platform);
+			res.redirect(302, resourceCache.resourceUrl(resourceId));
+		} catch (error) {
+			console.error("[server] platform avatar resolution failed:", error instanceof Error ? error.message : error);
+			res.status(502).type("text/plain").send("Avatar unavailable");
+		}
+	});
+
 	app.get("/api/editor/avatar/qq/:uin", async (req, res) => {
 		const uin = String(req.params.uin || "");
-		if (!/^\d{5,12}$/.test(uin)) {
-			res.status(400).type("text/plain").send("Invalid QQ number");
+		if (!/^\d{5,20}$/.test(uin)) {
+			res.status(400).type("text/plain").send("Invalid user id");
 			return;
 		}
 		if (!takeEditorFetchQuota("avatar", getClientIp(req, trustProxy), 120)) {
@@ -453,8 +670,10 @@ export async function startServer(
 			return;
 		}
 		try {
-			const resourceId = await resourceCache.cacheRemoteImage(`http://q1.qlogo.cn/g?b=qq&nk=${encodeURIComponent(uin)}&s=100`);
-			res.setHeader("Cache-Control", "public, max-age=86400");
+			const candidate = await resolveUserAvatar(uin, String(req.query.name || ""));
+			const resourceId = await resourceCache.cacheRemoteImage(candidate.imageUrl);
+			res.setHeader("Cache-Control", req.query.refresh == null ? "public, max-age=86400" : "no-store");
+			res.setHeader("X-Avatar-Provider", candidate.platform);
 			res.redirect(302, resourceCache.resourceUrl(resourceId));
 		} catch (error) {
 			console.error("[server] QQ avatar cache failed:", error);
@@ -483,6 +702,9 @@ export async function startServer(
 	if (fs.existsSync(staticDir)) {
 		console.log(`[server] Serving static files from: ${staticDir}`);
 		app.use(express.static(staticDir));
+		for (const route of ["/story", "/story/", "/legacy", "/legacy/"]) {
+			app.get(route, (_req, res) => res.sendFile(path.join(staticDir, "index.html")));
+		}
 	}
 
 	createAdminRouter({
@@ -511,6 +733,15 @@ export async function startServer(
 			return res.sendFile(docsFile);
 		}
 		res.status(404).type("text/plain").send("API docs have not been built yet");
+	});
+
+	app.get(["/docs", "/docs/"], (_req, res) => {
+		const docsFile = path.resolve(staticDir, "docs.html");
+		if (fs.existsSync(docsFile)) {
+			res.setHeader("Cache-Control", "no-store");
+			return res.sendFile(docsFile);
+		}
+		res.status(404).type("text/plain").send("Docs have not been built yet");
 	});
 
 	app.all(/^\/(?:api\/dice|dice\/api)\//, async (req, res) => {
@@ -587,7 +818,7 @@ export async function startServer(
 	const { host, port } = config.server;
 	const server = app.listen(port, host, () => {
 		console.log(
-			`[server] Scardice Log Backend running at http://${host}:${port}`,
+			`[server] Lorana Tales Backend running at http://${host}:${port}`,
 		);
 		console.log(
 			`[server] SQLite database: ${path.resolve(config.storage.sqlite_path)}`,
@@ -620,7 +851,7 @@ export async function startServer(
 			console.log(
 				`[admin] Generated one-time admin password: ${adminPassword}`,
 			);
-		} else {
+		} else if (!accountMode) {
 			console.log(`[admin] Admin password loaded from configuration`);
 		}
 	});

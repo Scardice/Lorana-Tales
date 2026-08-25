@@ -1,4 +1,4 @@
-# Scardice Story Painter 配置示例
+# Lorana Tales 配置示例
 # 环境变量会覆盖本文件中的同名配置。生产环境建议复制到
 # /etc/scardice-story-painter/config.toml 后按实际域名和存储路径修改。
 
@@ -29,6 +29,30 @@ allowed_hosts = ["localhost", "127.0.0.1", "::1"]
 # 相对路径会以项目根目录为基准；系统服务部署建议使用 /var/lib/scardice-story-painter/scardice.db，避免工作目录变化导致新建空库。
 sqlite_path = "./data/scardice.db"
 
+[editor]
+# 裸路径 / 使用的默认编辑器：story（新版沉浸式）或 legacy（旧版）。
+# /story 和 /legacy 始终可直接进入对应页面。
+default_mode = "story"
+
+# 是否开放新版沉浸式染色器。关闭后会隐藏新版入口，/story 也会回落到旧版。
+enable_story_mode = true
+
+[branding]
+# 顶栏最右侧显示的网站标题。
+site_title = "Lorana Tales"
+# 顶栏 Logo 的本地 PNG 或 SVG 路径；相对路径以项目目录为基准，留空使用内置图标。
+logo_path = ""
+# 浏览器图标的本地 ICO、PNG 或 SVG 路径；相对路径以项目目录为基准，留空使用前端默认图标。
+favicon_path = ""
+
+[avatar_providers]
+# Discord 与 KOOK 用户资料接口都需要 Bot Token；Token 只在服务端使用，绝不会返回给前端。
+# 开关关闭或 Token 留空时不会请求对应平台。也可使用 DISCORD_BOT_TOKEN / KOOK_BOT_TOKEN 环境变量。
+discord_enabled = false
+discord_bot_token = ""
+kook_enabled = false
+kook_bot_token = ""
+
 [resource_cache]
 # 是否在上传时归档 CQ 码中的图片、语音和附件资源。
 # CQ 视频不会下载，只会在日志中保留“【视频】”占位，避免占满硬盘。
@@ -37,6 +61,10 @@ enabled = false
 
 # CQ 资源存储目录。相对路径以项目根目录为基准；不要与其他程序共用，缓存清理只会删除本功能生成的文件。
 path = "./data/cq-resources"
+
+# 可选：QQ 内置 CQ 表情资源目录。为避免把腾讯素材误标为 MIT，本项目不重新分发素材。
+# 请将资源包解压后填写包含 faces/0/apng/0.png 这类路径的根目录；留空时 [CQ:face] 显示【图片】占位。
+cq_face_path = ""
 
 # CQ 资源的保留天数（从成功归档时开始计算）。超过此范围会在启动及后续上传时自动清理；日志本身的保留天数由 app.log_retention_days 单独控制。
 retention_days = 60
@@ -49,9 +77,11 @@ max_resources_per_log = 40
 
 # PNG/JPEG/WebP 图片重编码为 WebP 时的有损质量（1-100）。数值越低越省流量和磁盘，65 是兼顾文字与普通聊天图片的默认值；如果重编码反而更大，会保留原文件。
 image_quality = 65
+audio_bitrate_kbps = 128 # 语音上传和归档时转为 Ogg Opus；较小的原文件不会被反向放大
+ffmpeg_path = "ffmpeg" # 使用系统 FFmpeg，不随 MIT 项目捆绑 GPL 二进制；可填写绝对路径
 
 # 允许下载的上游域名，支持 *.example.com 后缀匹配。默认仅覆盖 QQ/Tencent 常见媒体域名；需要其他图床时显式加入，避免日志 URL 被用于服务端请求探测。
-allowed_hosts = ["*.qq.com", "*.qlogo.cn", "*.qpic.cn", "*.gtimg.cn"]
+allowed_hosts = ["*.qq.com", "*.qlogo.cn", "*.qpic.cn", "*.gtimg.cn", "*.discordapp.com", "*.kookapp.cn", "*.kookcdn.com", "*.kaiheila.cn"]
 
 # 是否允许 allowed_hosts 以外的任意公网地址。保持 false 更安全；true 时仍会拒绝内网、环回和链路本地地址，但不建议在不受信任上传环境开启。
 allow_public_hosts = false
@@ -64,6 +94,12 @@ download_timeout_seconds = 15
 enabled = false
 # 是否允许访客自行注册；关闭后管理员仍可在 /admin 创建用户。
 registration_enabled = true
+# 首次启用且数据库中没有管理员时，用这组一次性凭据创建初始管理员。
+# 首次登录必须立即改成正式用户名、邮箱和密码；完成后本配置凭据无法再次登录。
+initial_admin_username = "admin"
+initial_admin_password = "change-this-initial-password"
+# 可留空；首次登录会强制填写正式邮箱。若填写，仍需在首次登录确认或修改。
+initial_admin_email = ""
 # 用于 AES-256-GCM 加密日志源访问密钥，启用账号时必须设置至少 32 个随机字符。
 # 可用 `openssl rand -base64 48` 生成；修改后旧工程中的加密源密钥将无法解密。
 encryption_key = ""
@@ -91,7 +127,18 @@ port = 587
 secure = false
 user = ""
 password = ""
-from = "余烬染色器 <no-reply@example.com>"
+from = "Lorana Tales <no-reply@example.com>"
+# 主题与正文都支持 {{code}}、{{username}}、{{nickname}}、{{site_title}}、
+# {{logo_url}}（也可写 {{logo}}）、{{purpose}}、{{expires_minutes}} 占位符；
+# 内置 HTML 还会使用 {{logo_block}} 输出安全的可选 Logo 图片标签。
+subject_template = "{{site_title}} {{purpose}}验证码"
+# 可直接在 TOML 中写模板；留空时使用内置的响应式 HTML 与纯文本版本。
+text_template = ""
+html_template = ""
+# 也可以把正文放在单独的 .txt/.html/.htm 文件。相对路径以项目根目录为准；
+# 配置文件路径后会优先于上面的内联正文。HTML 中的占位符会安全转义。
+text_template_path = ""
+html_template_path = ""
 
 [accounts.altcha]
 # 使用 ALTCHA 时设置独立随机 HMAC 密钥；留空会退回 accounts.encryption_key。
@@ -133,8 +180,8 @@ cleanup_after_upload = true
 backup_upload_api = ""
 
 [admin]
-# 管理后台密码。
-# 留空时服务启动会生成一次性 UUID 并打印在启动日志中；设置固定值后重启不变，但需要自行保护配置文件权限。
+# 仅在 accounts.enabled=false 时使用的旧式管理后台密码。
+# 账号模式开启后此项完全忽略，管理后台只接受管理员账号会话。
 password = ""
 
 [metrics]

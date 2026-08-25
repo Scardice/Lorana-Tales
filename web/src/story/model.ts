@@ -9,6 +9,8 @@ import {
 } from "./types";
 
 const cqSingleImage = /^\s*\[CQ:(?:image|face),([\s\S]+)\]\s*$/i;
+const cqSingleAudio = /^\s*\[CQ:(?:record|voice|audio),([\s\S]+)\]\s*$/i;
+const cqSingleVideo = /^\s*\[CQ:(?:video|shortvideo),[^\]]*\]\s*$/i;
 const bracketSingleImage = /^\s*\[(?:image|图):base64:\/\/([A-Za-z0-9+/=\s]+)\]\s*$/i;
 const obsoleteDemoImage = "[CQ:image,file=base64://iVBORw0KGgoAAAANSUhEUgAAABkAAAAZCAYAAADE6YVjAAAAJklEQVR42u3NIQEAAAgDsPdPQ8OTAtTE9NJJr0UikUgkEolE8pIsTbqLKR00etoAAAAASUVORK5CYII=]";
 
@@ -57,6 +59,17 @@ function parseCqAttrs(value: string): Map<string, string> {
   return attrs;
 }
 
+function cqUnescape(value: string): string {
+  return value.replace(/&#44;/gi, ",").replace(/&#91;/gi, "[").replace(/&#93;/gi, "]").replace(/&amp;/gi, "&");
+}
+
+function cqReplySourceId(value: string): string {
+  const match = /\[CQ:reply(?:,([^\]]*))?\]/i.exec(value);
+  if (!match) return "";
+  const attrs = parseCqAttrs(match[1] || "");
+  return cqUnescape(attrs.get("id") || attrs.get("message_id") || attrs.get("msg_id") || "");
+}
+
 function imageMessageFromLog(
   item: LogItem,
   base: Omit<StoryMessage, "kind">,
@@ -84,6 +97,11 @@ function imageMessageFromLog(
   }
   if (!match) return null;
   const attrs = parseCqAttrs(body);
+  const face = /^\s*\[CQ:face,/i.test(item.message || "") ? attrs.get("id") || attrs.get("face_id") || "" : "";
+  if (/^\d{1,4}$/.test(face)) {
+    const source = `/api/editor/cq-face/${face}`;
+    return { ...base, kind: "image", asset: { id: source, mime: "image/png", sourceUrl: source, name: `QQ 表情 ${face}` }, alt: `QQ 表情 ${face}` };
+  }
   const urlMatch = /\burl=(?:\[(https?:\/\/[^\]]+)\]\(https?:\/\/[^)]+\)|\[?(https?:\/\/[^,\]\s]+))/i.exec(body);
   const fileUrlMatch = /\bfile=(https?:\/\/[^,\]\s]+)/i.exec(body);
   const source = urlMatch?.[1] || urlMatch?.[2] || fileUrlMatch?.[1] || attrs.get("url") || attrs.get("file") || "";
@@ -101,14 +119,24 @@ function imageMessageFromLog(
   };
 }
 
+function audioMessageFromLog(item: LogItem, base: Omit<StoryMessage, "kind">): StoryMessage | null {
+  const match = cqSingleAudio.exec(item.message || ""); if (!match) return null;
+  const attrs = parseCqAttrs(match[1]);
+  const urlMatch = /\burl=(?:\[(https?:\/\/[^\]]+)\]\(https?:\/\/[^)]+\)|\[?(https?:\/\/[^,\]\s]+))/i.exec(match[1]);
+  const fileUrlMatch = /\bfile=(https?:\/\/[^,\]\s]+)/i.exec(match[1]);
+  const source = urlMatch?.[1] || urlMatch?.[2] || fileUrlMatch?.[1] || attrs.get("url") || attrs.get("file") || "";
+  if (!/^https?:\/\//i.test(source) && !source.startsWith("/cq-resources/")) return null;
+  return { ...base, kind: "audio", asset: { id: source, mime: "audio/*", sourceUrl: source, name: attrs.get("file") || "语音" }, alt: "语音" };
+}
+
 interface SourceMessagePart {
-  kind: "text" | "image";
+  kind: "text" | "image" | "audio" | "video";
   value: string;
 }
 
 function splitCqImageParts(message: string): SourceMessagePart[] {
   const parts: SourceMessagePart[] = [];
-  const marker = /\[CQ:(?:image|face),/gi;
+  const marker = /\[CQ:(image|face|record|voice|audio|video|shortvideo),/gi;
   let cursor = 0;
   let match: RegExpExecArray | null;
   while ((match = marker.exec(message))) {
@@ -127,7 +155,8 @@ function splitCqImageParts(message: string): SourceMessagePart[] {
     if (end < 0) break;
     const before = message.slice(cursor, match.index).trim();
     if (before) parts.push({ kind: "text", value: before });
-    parts.push({ kind: "image", value: message.slice(match.index, end) });
+    const cqKind = match[1].toLowerCase();
+    parts.push({ kind: ["record","voice","audio"].includes(cqKind) ? "audio" : ["video","shortvideo"].includes(cqKind) ? "video" : "image", value: message.slice(match.index, end) });
     cursor = end;
     marker.lastIndex = end;
   }
@@ -142,7 +171,7 @@ function messagesFromLogItem(
   assets?: Map<string, Uint8Array>,
 ): StoryMessage[] {
   const parts = splitCqImageParts(item.message || "");
-  if (parts.some((part) => part.kind === "image") && parts.length > 1) {
+  if (parts.some((part) => part.kind !== "text") && parts.length > 1) {
     const messages: StoryMessage[] = [];
     for (const [index, part] of parts.entries()) {
       const sourceFingerprint = `${base.sourceFingerprint}-part-${index + 1}`;
@@ -152,25 +181,37 @@ function messagesFromLogItem(
         sourceFingerprint,
       };
       if (part.kind === "text") {
-        messages.push({ ...partBase, kind: "text", text: part.value, sourcePartText: part.value });
+        messages.push({ ...partBase, kind: "text", text: part.value.trim(), sourcePartText: part.value });
         continue;
       }
-      const image = imageMessageFromLog(
+      if (part.kind === "video") {
+        messages.push({ ...partBase, kind: "text", text: "【视频】", sourcePartText: part.value });
+        continue;
+      }
+      const resource = part.kind === "audio" ? audioMessageFromLog(
+        { ...item, message: part.value },
+        partBase as Omit<StoryMessage, "kind">,
+      ) : imageMessageFromLog(
         { ...item, message: part.value },
         partBase as Omit<StoryMessage, "kind">,
         assets,
       );
-      if (image) {
-        messages.push({ ...image, sourcePartText: image.kind === "image" ? image.asset.sourceUrl || image.asset.id : part.value });
+      if (resource) {
+        messages.push({ ...resource, sourcePartText: resource.kind !== "text" ? resource.asset.sourceUrl || resource.asset.id : part.value });
       } else {
-        messages.push({ ...partBase, kind: "text", text: part.value, sourcePartText: part.value });
+        messages.push({ ...partBase, kind: "text", text: part.kind === "audio" ? "【语音】" : "【图片】", sourcePartText: part.value });
       }
     }
     return messages;
   }
   const image = imageMessageFromLog(item, base, assets);
   if (image) return [image];
-  return [{ ...base, kind: "text", text: item.message || "" }];
+  const audio = audioMessageFromLog(item, base);
+  if (audio) return [audio];
+  if (cqSingleImage.test(item.message || "")) return [{ ...base, kind: "text", text: "【图片】" }];
+  if (cqSingleAudio.test(item.message || "")) return [{ ...base, kind: "text", text: "【语音】" }];
+  if (cqSingleVideo.test(item.message || "")) return [{ ...base, kind: "text", text: "【视频】" }];
+  return [{ ...base, kind: "text", text: (item.message || "").trim() }];
 }
 
 export function storyFromLogItems(
@@ -219,6 +260,8 @@ export function storyFromLogItems(
 
   const occurrence = new Map<string, number>();
   const messages: StoryMessage[] = [];
+  const sourceMessageIds = new Map<string, string>();
+  const pendingReplies: Array<{ messageId: string; sourceId: string }> = [];
   for (const item of items) {
     if (item.isRaw) continue;
     const key = characterKey(item.nickname || "未知角色", item.IMUserId || "");
@@ -236,12 +279,21 @@ export function storyFromLogItems(
       sourceFingerprint: fingerprint,
       sourceItem: { ...item },
     };
-    messages.push(...messagesFromLogItem(item, base as Omit<StoryMessage, "kind">, options.assets));
+    const imported = messagesFromLogItem(item, base as Omit<StoryMessage, "kind">, options.assets);
+    messages.push(...imported);
+    if (item.id !== undefined && item.id !== null && imported[0]) sourceMessageIds.set(String(item.id), imported[0].id);
+    const replySourceId = cqReplySourceId(item.message || "");
+    if (replySourceId && imported[0]) pendingReplies.push({ messageId: imported[0].id, sourceId: replySourceId });
+  }
+  for (const pending of pendingReplies) {
+    const targetId = sourceMessageIds.get(pending.sourceId);
+    const message = messages.find((item) => item.id === pending.messageId);
+    if (message && targetId) message.replyToId = targetId;
   }
 
   const now = new Date().toISOString();
   return {
-    format: "scardice-story-document",
+    format: "lorana-tales-document",
     schemaVersion: STORY_SCHEMA_VERSION,
     id: createStoryId("document"),
     title: options.title || "跑团记录",
@@ -249,6 +301,7 @@ export function storyFromLogItems(
     updatedAt: now,
     characters,
     messages,
+    effectTracks: [],
     settings: defaultStorySettings(),
     source: options.sourceKey
       ? {
@@ -265,10 +318,7 @@ export function storyToLogItems(document: StoryDocument): LogItem[] {
   const characterMap = new Map(document.characters.map((item) => [item.id, item]));
   return document.messages.map((message, index) => {
     const character = characterMap.get(message.characterId) || document.characters[0];
-    const text =
-      message.kind === "text"
-        ? message.text
-        : `[CQ:image,file=${message.asset.sourceUrl || message.asset.id}]`;
+    const text = message.kind === "text" ? message.text : message.kind === "audio" ? `[CQ:record,file=${message.asset.sourceUrl || message.asset.id}]` : `[CQ:image,file=${message.asset.sourceUrl || message.asset.id}]`;
     return {
       ...(message.sourceItem || {}),
       id: message.sourcePartText !== undefined ? index + 1 : message.sourceItem?.id ?? index + 1,
@@ -296,7 +346,7 @@ export function normalizeStoryDocument(input: StoryDocument): StoryDocument {
   const settings = {
     ...defaults,
     ...(input.settings || {}),
-    ...((input.schemaVersion || 0) < 3 && (!input.settings?.canvasWidth || input.settings.canvasWidth === 720)
+    ...((input.schemaVersion || 0) < 7
       ? { canvasWidth: defaults.canvasWidth }
       : {}),
   };
@@ -323,7 +373,7 @@ export function normalizeStoryDocument(input: StoryDocument): StoryDocument {
   }
   return {
     ...input,
-    format: "scardice-story-document",
+    format: "lorana-tales-document",
     schemaVersion: STORY_SCHEMA_VERSION,
     id: input.id || createStoryId("document"),
     title: input.title || "跑团记录",
@@ -351,6 +401,9 @@ export function normalizeStoryDocument(input: StoryDocument): StoryDocument {
           return migrated.some((item) => item.kind === "image") ? migrated : [message];
         })
       : [],
+    effectTracks: Array.isArray(input.effectTracks)
+      ? input.effectTracks.filter((track) => track && typeof track.id === "string" && typeof track.startMessageId === "string" && typeof track.endMessageId === "string")
+      : [],
     settings,
     source: input.source || { kind: "none" },
   };
@@ -377,13 +430,54 @@ export function storyMessageGroupPosition(document: StoryDocument, index: number
 }
 
 export function storyDisplayText(text: string, preserveLineBreaks: boolean): string {
-  const normalized = text.replace(/\r\n?/g, "\n");
+  const normalized = text.replace(/\[CQ:reply(?:,[^\]]*)?\]/gi, "").replace(/\r\n?/g, "\n").trim();
   if (preserveLineBreaks) return normalized;
   return normalized
     .split(/\n{2,}/)
     .map((paragraph) => paragraph.split("\n").map((line) => line.trim()).filter(Boolean).join(" "))
     .filter(Boolean)
     .join("\n\n");
+}
+
+export interface StoryTextSegment {
+  text: string;
+  character?: StoryCharacter;
+}
+
+export function storyTextSegments(text: string, characters: readonly StoryCharacter[], preserveLineBreaks: boolean): StoryTextSegment[] {
+  const source = storyDisplayText(text, preserveLineBreaks);
+  const byQq = new Map(characters.filter((item) => item.imUserId).map((item) => [String(item.imUserId), item]));
+  const byName = [...characters].filter((item) => item.name).sort((left, right) => right.name.length - left.name.length);
+  const result: StoryTextSegment[] = [];
+  const appendPlain = (value: string) => {
+    let cursor = 0;
+    const names = byName.map((item) => item.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+    if (!names.length) { if (value) result.push({ text: value }); return; }
+    const mention = new RegExp(`@(${names.join("|")})(?![\\p{L}\\p{N}_])`, "gu");
+    for (const match of value.matchAll(mention)) {
+      if (match.index! > cursor) result.push({ text: value.slice(cursor, match.index) });
+      const character = byName.find((item) => item.name === match[1]);
+      result.push({ text: match[0], character });
+      cursor = match.index! + match[0].length;
+    }
+    if (cursor < value.length) result.push({ text: value.slice(cursor) });
+  };
+  let cursor = 0;
+  for (const match of source.matchAll(/\[CQ:at,([^\]]+)\]/gi)) {
+    appendPlain(source.slice(cursor, match.index));
+    const attrs = parseCqAttrs(match[1]);
+    const qq = cqUnescape(attrs.get("qq") || "");
+    const character = byQq.get(qq);
+    const fallback = cqUnescape(attrs.get("name") || qq || "未知用户");
+    result.push({ text: `@${character?.name || (qq === "all" ? "全体成员" : fallback)}`, character });
+    cursor = match.index! + match[0].length;
+  }
+  appendPlain(source.slice(cursor));
+  return result.filter((item) => item.text);
+}
+
+export function storyPlainText(text: string, characters: readonly StoryCharacter[], preserveLineBreaks: boolean): string {
+  return storyTextSegments(text, characters, preserveLineBreaks).map((item) => item.text).join("");
 }
 
 export function playbackDelay(message: StoryMessage, document: StoryDocument): number {
@@ -408,30 +502,54 @@ export function playbackDelay(message: StoryMessage, document: StoryDocument): n
 export interface StoryStreamToken {
   index: number;
   text: string;
+  start: number;
+  end: number;
   wordLike: boolean;
   pauseEligible: boolean;
+  custom: boolean;
 }
 
 /**
  * Segment text without shipping a language dictionary. Intl.Segmenter keeps
  * English words intact and uses the browser's locale-aware Chinese word data.
  */
-export function segmentStoryText(text: string): StoryStreamToken[] {
+export function segmentStoryText(text: string, customGroups: Array<{ start: number; end: number }> = []): StoryStreamToken[] {
   type Segment = { segment: string; isWordLike?: boolean };
   type Segmenter = { segment: (value: string) => Iterable<Segment> };
   const SegmenterCtor = (Intl as unknown as {
     Segmenter?: new (locale?: string | string[], options?: { granularity: "word" }) => Segmenter;
   }).Segmenter;
-  const segments: Segment[] = SegmenterCtor
-    ? Array.from(new SegmenterCtor(["zh-CN", "en"], { granularity: "word" }).segment(text))
-    : Array.from(text.matchAll(/[A-Za-z0-9]+(?:['’-][A-Za-z0-9]+)*|\s+|[\u3400-\u9fff]|./gu), (match) => ({
-        segment: match[0],
-        isWordLike: /[A-Za-z0-9\u3400-\u9fff]/u.test(match[0]),
-      }));
-  return segments.map((item, index) => ({
+  const automatic = (value: string, baseOffset: number) => {
+    const segments: Segment[] = SegmenterCtor
+      ? Array.from(new SegmenterCtor(["zh-CN", "en"], { granularity: "word" }).segment(value))
+      : Array.from(value.matchAll(/[A-Za-z0-9]+(?:['’-][A-Za-z0-9]+)*|\s+|[\u3400-\u9fff]|./gu), (match) => ({
+          segment: match[0],
+          isWordLike: /[A-Za-z0-9\u3400-\u9fff]/u.test(match[0]),
+        }));
+    let offset = baseOffset;
+    return segments.map((item) => {
+      const start = offset;
+      offset += item.segment.length;
+      return { text: item.segment, start, end: offset, wordLike: !!item.isWordLike, custom: false };
+    });
+  };
+  const groups = customGroups
+    .map((group) => ({ start: Math.max(0, Math.min(text.length, Math.round(group.start))), end: Math.max(0, Math.min(text.length, Math.round(group.end))) }))
+    .filter((group) => group.end > group.start)
+    .sort((left, right) => left.start - right.start || left.end - right.end)
+    .filter((group, index, all) => index === 0 || group.start >= all[index - 1].end);
+  const tokens: Array<{ text: string; start: number; end: number; wordLike: boolean; custom: boolean }> = [];
+  let cursor = 0;
+  for (const group of groups) {
+    if (group.start > cursor) tokens.push(...automatic(text.slice(cursor, group.start), cursor));
+    const value = text.slice(group.start, group.end);
+    tokens.push({ text: value, start: group.start, end: group.end, wordLike: /\S/u.test(value), custom: true });
+    cursor = group.end;
+  }
+  if (cursor < text.length) tokens.push(...automatic(text.slice(cursor), cursor));
+  return tokens.map((item, index) => ({
+    ...item,
     index,
-    text: item.segment,
-    wordLike: !!item.isWordLike,
-    pauseEligible: !!item.isWordLike || /[，。！？；：,.!?;:]$/u.test(item.segment),
+    pauseEligible: item.wordLike || /[，。！？；：,.!?;:]$/u.test(item.text),
   }));
 }

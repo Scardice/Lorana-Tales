@@ -11,6 +11,25 @@ Lib (MIT). These licenses permit use, modification, redistribution, and
 commercial deployment subject to retaining their notices; no copyleft runtime
 dependency was added.
 
+The virtualized large-log interface uses TanStack Virtual (MIT). The editable
+Lorana Tales Story Language pane uses CodeMirror 6, Lezer Highlight, and the
+UIW Material theme (all MIT). Long-image export uses html-to-image (MIT), and
+Unicode token grouping uses grapheme-splitter (MIT). Their package license files
+are retained in the portable Nightly package's production `node_modules` tree.
+
+## @tanstack/vue-virtual 3.13.35
+
+Source: <https://github.com/TanStack/virtual>
+
+Copyright (c) 2021 Tanner Linsley
+
+## CodeMirror 6 packages and @uiw/codemirror-theme-material
+
+Sources: <https://github.com/codemirror/dev>, <https://github.com/uiwjs/react-codemirror>
+
+Copyright (C) 2018-2024 by Marijn Haverbeke and others
+Copyright (c) UIW
+
 ## @turbodocx/html-to-docx 1.22.2
 
 Source: <https://github.com/TurboDocx/html-to-docx>
