@@ -16,6 +16,7 @@ import {
 } from "../security/injection-guard.js";
 import type { LogStore } from "../storage/log-store.js";
 import { SqliteLogStore } from "../storage/sqlite-log-store.js";
+import { CqResourceCache } from "../storage/cq-resource-cache.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "../..");
@@ -124,6 +125,7 @@ function setSecurityHeaders(_req, res, next) {
 			"script-src 'self' 'wasm-unsafe-eval'",
 			"style-src 'self' 'unsafe-inline'",
 			"img-src 'self' data: blob: http: https:",
+			"media-src 'self' http: https:",
 			"font-src 'self' data:",
 			"connect-src 'self' https://dice-api.weizaima.com",
 			"object-src 'none'",
@@ -277,6 +279,11 @@ export async function startServer(
 	}
 
 	const store = new SqliteLogStore(config.storage.sqlite_path);
+	const resourceCache = new CqResourceCache(config.resource_cache);
+	if (resourceCache.enabled) {
+		const deleted = await resourceCache.cleanupExpired();
+		console.log(`[server] CQ resource cache startup cleanup: ${deleted} files removed`);
+	}
 
 	if (config.app.cleanup_on_start) {
 		const result = await store.cleanupOldLogs(config.app.log_retention_days);
@@ -298,6 +305,7 @@ export async function startServer(
 		SECURITY_WARNING_QUOTES: JSON.stringify(
 			config.security?.warning_quotes || [],
 		),
+		CQ_RESOURCE_CACHE: resourceCache,
 		LOG_STORE: store,
 	};
 
@@ -381,6 +389,31 @@ export async function startServer(
 				expiresAt: new Date(record.expiresAt).toISOString(),
 			}),
 		);
+	});
+
+	app.get("/cq-resources/:resourceId", async (req, res) => {
+		try {
+			const acceptsBrotli = /(?:^|,)\s*br(?:;q=(?!0(?:\.0+)?$)[0-9.]+)?\s*(?:,|$)/i.test(
+				String(req.headers["accept-encoding"] || ""),
+			);
+			const resource = await resourceCache.readResource(
+				String(req.params.resourceId || ""),
+				acceptsBrotli,
+			);
+			if (!resource) {
+				res.status(404).type("text/plain").send("Not Found");
+				return;
+			}
+			res.status(200);
+			res.setHeader("Content-Type", resource.contentType);
+			res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+			res.setHeader("Vary", "Accept-Encoding");
+			if (resource.contentEncoding) res.setHeader("Content-Encoding", resource.contentEncoding);
+			res.send(resource.body);
+		} catch (error) {
+			console.error("[server] CQ resource read failed:", error);
+			res.status(500).type("text/plain").send("Resource unavailable");
+		}
 	});
 
 	const staticDir = path.resolve(projectRoot, "out");
@@ -500,6 +533,9 @@ export async function startServer(
 			`[server] Log retention: ${config.app.log_retention_days} days`,
 		);
 		console.log(`[server] Max upload: ${config.app.max_upload_mb} MB`);
+		console.log(
+			`[server] CQ resource cache: ${resourceCache.enabled ? `enabled (${config.resource_cache.retention_days} days, ${config.resource_cache.path})` : "disabled"}`,
+		);
 		console.log(`[server] Trust proxy: ${trustProxy ? "enabled" : "disabled"}`);
 		console.log(
 			`[server] Allowed hosts: ${[...allowedHosts].join(", ") || "none"}`,

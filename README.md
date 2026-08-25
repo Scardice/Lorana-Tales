@@ -134,6 +134,17 @@ allowed_hosts = ["localhost", "127.0.0.1", "::1"] # 加入用户实际访问的�
 [storage]
 sqlite_path = "./data/scardice.db" # SQLite 数据库路径
 
+[resource_cache]
+enabled = false # 上传时归档 CQ 图片、语音、视频和附件；默认关闭
+path = "./data/cq-resources" # 本地媒体目录
+retention_days = 60 # 资源归档保留天数，和日志保留天数独立
+max_file_mb = 12 # 单个远程/内嵌资源的最大体积
+max_resources_per_log = 40 # 单份日志最多下载的资源数
+image_quality = 65 # PNG/JPEG/WebP 转 WebP 时的有损质量（1-100）
+allowed_hosts = ["*.qq.com", "*.qpic.cn", "*.gtimg.cn"] # 可信上游资源域名
+allow_public_hosts = false # 不建议开启；true 时允许任意公网域名
+download_timeout_seconds = 15 # 单资源下载超时
+
 [app]
 frontend_url = ""        # 留空时使用代理解析后的外部域名；跨域/CDN 托管前端时固定填写公开 URL
 log_retention_days = 60  # 日志保留天数
@@ -173,6 +184,15 @@ admin_bruteforce_block_seconds = 60 # 触发后的封禁时长；期间访问会
 | `ALLOWED_HOSTS`                   | 允许的 Host 头列表，逗号分隔                               |
 | `SQLITE_PATH`                     | SQLite 数据库路径                                          |
 | `DATABASE_PATH`                   | SQLite 数据库路径兼容变量；和 `SQLITE_PATH` 同时设置时优先 |
+| `CQ_RESOURCE_CACHE_ENABLED`        | 是否归档 CQ 资源                                           |
+| `CQ_RESOURCE_CACHE_PATH`           | CQ 资源存储目录                                            |
+| `CQ_RESOURCE_CACHE_RETENTION_DAYS` | CQ 资源保留天数                                            |
+| `CQ_RESOURCE_CACHE_MAX_FILE_MB`    | 单资源体积限制                                             |
+| `CQ_RESOURCE_CACHE_MAX_RESOURCES_PER_LOG` | 单日志资源数量上限                                  |
+| `CQ_RESOURCE_CACHE_IMAGE_QUALITY`  | WebP 有损压缩质量（1-100）                                |
+| `CQ_RESOURCE_CACHE_ALLOWED_HOSTS`  | 可信上游域名，逗号分隔                                     |
+| `CQ_RESOURCE_CACHE_ALLOW_PUBLIC_HOSTS` | 是否允许任意公网域名                                  |
+| `CQ_RESOURCE_CACHE_DOWNLOAD_TIMEOUT_SECONDS` | 单资源下载超时秒数                              |
 | `FRONTEND_URL`                    | 生成查看链接时使用的前端地址；留空则使用当前请求域名       |
 | `LOG_RETENTION_DAYS`              | 日志保留天数                                               |
 | `MAX_UPLOAD_MB`                   | 上传大小限制                                               |
@@ -210,6 +230,14 @@ trust_proxy = true
 ```
 
 如果使用 Cloudflare，通常保留 `CF-Connecting-IP`，并让 Cloudflare 转发到源站；如果使用普通反代，至少配置 `X-Forwarded-For` 或 `X-Real-IP`。真实 IP 会用于上传记录、限流、管理后台爆破防护和安全拦截关联。
+
+### CQ 资源本地归档
+
+开启 `[resource_cache].enabled` 后，服务会在上传时解压日志，提取 `CQ:image`、`face`、`record`、`voice`、`audio`、`video` 和 `file` 中的 URL 或 base64 资源，下载后将日志引用改为本站 `/cq-resources/...`。默认只允许腾讯 QQ/QPic/GTImg 域名；如日志确实使用其他图床，应将对应域名加入 `allowed_hosts`，而不是直接开启 `allow_public_hosts`。
+
+PNG、JPEG 和 WebP 会以 `image_quality` 重编码为 WebP；只有更小才替换原文件。所有保存后的资源还会使用最高质量 Brotli 无损压缩；支持 Brotli 的浏览器直接得到压缩流，其他客户端由服务端即时解压。音频、视频和其他附件不进行有损转码，避免改变可播放性。
+
+`retention_days` 从资源归档成功时计算，与日志的 `log_retention_days` 独立。被拒绝、超限、超时或下载失败的资源会保留原上游 URL，且不会导致日志上传失败。
 
 ### 备用API（可选）
 

@@ -16,7 +16,24 @@ type MentionPcItem = {
 };
 
 const cqMarkdownImageUrlRe =
-	/\[CQ:image,[^\]]+?url=\[(https?:\/\/[^\]]+)\]\(https?:\/\/[^)]+\)\]/g;
+	/\[CQ:image,[^\]]+?url=\[((?:https?:\/\/[^\]]+|\/cq-resources\/[a-f0-9]{64}\.[a-z0-9]+))\]\(https?:\/\/[^)]+\)\]/gi;
+const localCqResourceUrl = "(?:https?:\\/\\/[^\\]\\s]+\\/cq-resources\\/[a-f0-9]{64}\\.[a-z0-9]+|\\/cq-resources\\/[a-f0-9]{64}\\.[a-z0-9]+)";
+const cqLocalImageRe = new RegExp(
+	`\\[CQ:(?:image|face),[^\\]]*?(?:url|file|file_unique)=(${localCqResourceUrl})[^\\]]*\\]`,
+	"gi",
+);
+const cqLocalAudioRe = new RegExp(
+	`\\[CQ:(?:record|voice|audio),[^\\]]*?(?:url|file|data|path)=(${localCqResourceUrl})[^\\]]*\\]`,
+	"gi",
+);
+const cqLocalVideoRe = new RegExp(
+	`\\[CQ:video,[^\\]]*?(?:url|file|data|path)=(${localCqResourceUrl})[^\\]]*\\]`,
+	"gi",
+);
+const cqLocalFileRe = new RegExp(
+	`\\[CQ:file,[^\\]]*?(?:url|file|data|path)=(${localCqResourceUrl})[^\\]]*\\]`,
+	"gi",
+);
 const base64BodyRe = "([A-Za-z0-9+/=\\s]+)";
 const cqBase64ImageRe = new RegExp(
 	`\\[CQ:image,[^\\]]*?file=base64://${base64BodyRe}\\]`,
@@ -86,6 +103,9 @@ export function msgImageFormat(
 			/\[CQ:(image|face)(,summary=\[动画表情\])?,[^\]]+\]/g,
 			"",
 		);
+		msg = msg.replaceAll(cqLocalAudioRe, "");
+		msg = msg.replaceAll(cqLocalVideoRe, "");
+		msg = msg.replaceAll(cqLocalFileRe, "");
 	} else {
 		if (htmlText) {
 			msg = msg.replaceAll(cqBase64ImageRe, (_match, base64: string) => {
@@ -94,6 +114,22 @@ export function msgImageFormat(
 			msg = msg.replaceAll(
 				cqMarkdownImageUrlRe,
 				'<img style="max-width: min(300px, 100%); height: auto" src="$1" />',
+			);
+			msg = msg.replaceAll(
+				cqLocalImageRe,
+				'<img style="max-width: min(300px, 100%); height: auto" src="$1" />',
+			);
+			msg = msg.replaceAll(
+				cqLocalAudioRe,
+				'<audio controls preload="metadata" src="$1"></audio>',
+			);
+			msg = msg.replaceAll(
+				cqLocalVideoRe,
+				'<video controls preload="metadata" style="max-width: min(480px, 100%); height: auto" src="$1"></video>',
+			);
+			msg = msg.replaceAll(
+				cqLocalFileRe,
+				'<a href="$1" download>下载附件</a>',
 			);
 			// [CQ:image,summary=[动画表情],...,file_unique=...]
 			msg = msg.replaceAll(
@@ -112,7 +148,7 @@ export function msgImageFormat(
 			);
 			// [CQ:image,file=https?://...]
 			msg = msg.replaceAll(
-				/\[CQ:image,file=(https?:\/\/[^\]]+)\]/g,
+				new RegExp(`\\[CQ:image,file=((?:https?:\\/\\/[^\\]]+|${localCqResourceUrl}))\\]`, "gi"),
 				'<img style="max-width: min(300px, 100%); height: auto" src="$1" />',
 			);
 			// [CQ:image,file=725BAB58A963A84E1A3BO1F3FCA7F1DF.jpg]

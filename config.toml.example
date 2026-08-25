@@ -29,6 +29,35 @@ allowed_hosts = ["localhost", "127.0.0.1", "::1"]
 # 相对路径会以项目根目录为基准；系统服务部署建议使用 /var/lib/scardice-story-painter/scardice.db，避免工作目录变化导致新建空库。
 sqlite_path = "./data/scardice.db"
 
+[resource_cache]
+# 是否在上传时归档 CQ 码中的图片、语音、视频和附件资源。
+# 开启后服务会下载可信来源资源，替换日志中的上游 URL；关闭时日志保持原样。默认 false，避免未确认的带宽与磁盘占用。
+enabled = false
+
+# CQ 资源存储目录。相对路径以项目根目录为基准；不要与其他程序共用，缓存清理只会删除本功能生成的文件。
+path = "./data/cq-resources"
+
+# CQ 资源的保留天数（从成功归档时开始计算）。超过此范围会在启动及后续上传时自动清理；日志本身的保留天数由 app.log_retention_days 单独控制。
+retention_days = 60
+
+# 单个资源的下载/保存上限，单位 MB。响应头或实际下载内容超过上限都会跳过该资源，不影响日志上传。
+max_file_mb = 12
+
+# 每份日志最多归档多少个 CQ 资源，防止恶意或异常日志占用过多网络、内存和磁盘。
+max_resources_per_log = 40
+
+# PNG/JPEG/WebP 图片重编码为 WebP 时的有损质量（1-100）。数值越低越省流量和磁盘，65 是兼顾文字与普通聊天图片的默认值；如果重编码反而更大，会保留原文件。
+image_quality = 65
+
+# 允许下载的上游域名，支持 *.example.com 后缀匹配。默认仅覆盖 QQ/Tencent 常见媒体域名；需要其他图床时显式加入，避免日志 URL 被用于服务端请求探测。
+allowed_hosts = ["*.qq.com", "*.qpic.cn", "*.gtimg.cn"]
+
+# 是否允许 allowed_hosts 以外的任意公网地址。保持 false 更安全；true 时仍会拒绝内网、环回和链路本地地址，但不建议在不受信任上传环境开启。
+allow_public_hosts = false
+
+# 下载单个资源的超时时间，单位秒。超时资源会保留原上游链接，不影响本次日志上传。
+download_timeout_seconds = 15
+
 [app]
 # 生成日志查看链接时使用的前端地址。
 # 留空时使用当前请求经 trust_proxy 解析后的外部协议和域名，适合前后端一体部署；

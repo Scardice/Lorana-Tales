@@ -1,8 +1,9 @@
 # Third-party notices
 
-The standard DOCX export feature includes the following third-party browser
-components. They are used under the MIT License. This project does not elect
-the GPLv3 alternative offered by JSZip.
+The standard DOCX export and CQ resource archive features include the following
+third-party components. The CQ image codec stack contains only permissive
+Apache-2.0 and BSD-style licenses; no GPL/LGPL native dependency is bundled.
+This project does not elect the GPLv3 alternative offered by JSZip.
 
 ## @turbodocx/html-to-docx 1.22.2
 
@@ -25,6 +26,17 @@ JSZip is dual-licensed under MIT or GPLv3. This project uses the MIT option.
 
 Copyright (c) 2009-2016 Stuart Knightley, David Duponchel, Franz Buchinger,
 António Afonso
+
+## @jsquash/jpeg 1.6.0, @jsquash/png 3.1.1, @jsquash/webp 1.5.0, and wasm-feature-detect 1.9.0
+
+Source: <https://github.com/jamsinclair/jSquash>
+
+The JavaScript/WASM wrappers and `wasm-feature-detect` are licensed under
+Apache License 2.0. Their
+included codecs are permissively licensed: libwebp and the PNG codec use the
+BSD 3-Clause License, while the JPEG codec uses the compatible IJG, BSD 3-Clause
+and zlib licenses. The complete codec notices are shipped alongside the WASM
+files in each dependency's `codec/LICENSE.codec.md` file in the Nightly package.
 
 ## MIT License
 

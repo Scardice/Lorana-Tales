@@ -8,6 +8,7 @@ import {
 	writeSecurityAuditLog,
 } from "../security/injection-guard.js";
 import type { LogStore } from "../storage/log-store.js";
+import type { CqResourceCache } from "../storage/cq-resource-cache.js";
 
 const DEFAULT_FILE_SIZE_LIMIT_MB = 5;
 const API_PREFIXES = ["/api/dice", "/dice/api"];
@@ -366,6 +367,34 @@ function maybeCleanupAfterUpload(store: LogStore, env): void {
 	});
 }
 
+async function archiveCqResources(
+	env,
+	logContent: string,
+	request: Request,
+): Promise<string> {
+	const resourceCache = env?.CQ_RESOURCE_CACHE as CqResourceCache | undefined;
+	if (!resourceCache?.enabled) return logContent;
+	try {
+		const result = await resourceCache.archiveStoredLog(
+			logContent,
+			new URL(request.url).origin,
+		);
+		if (result.cachedCount > 0) {
+			console.log(
+				`[resource-cache] Archived ${result.cachedCount} CQ resources for uploaded log`,
+			);
+		}
+		return result.storedText;
+	} catch (error) {
+		// Resource retention is best effort: an expired or blocked upstream URL
+		// must not make the actual log upload fail.
+		console.warn(
+			`[resource-cache] Log resource archival skipped: ${error instanceof Error ? error.message : String(error)}`,
+		);
+		return logContent;
+	}
+}
+
 async function uploadToBackupApi(
 	backupApiUrl: string,
 	uniformId: string,
@@ -435,11 +464,12 @@ async function persistLogOrBackup({
 	corsHeaders,
 }) {
 	try {
+		const storedText = await archiveCqResources(env, logContent, request);
 		await store.addLogRecord({
 			publicKey: key,
 			password,
 			uniformId,
-			storedText: logContent,
+			storedText,
 		});
 		maybeCleanupAfterUpload(store, env);
 		return jsonResponse(
@@ -781,11 +811,12 @@ export async function handleDiceApiRequest({ request, env }) {
 			);
 
 			try {
+				const storedText = await archiveCqResources(env, logContent, request);
 				await store.addLogRecord({
 					publicKey: key,
 					password,
 					uniformId,
-					storedText: logContent,
+					storedText,
 				});
 				maybeCleanupAfterUpload(store, env);
 				return jsonResponse(
@@ -990,11 +1021,12 @@ export async function handleDiceApiRequest({ request, env }) {
 				),
 			);
 
+			const storedText = await archiveCqResources(env, logContent, request);
 			await store.addLogRecord({
 				publicKey: key,
 				password,
 				uniformId,
-				storedText: logContent,
+				storedText,
 			});
 			maybeCleanupAfterUpload(store, env);
 

@@ -29,6 +29,15 @@ importers:
       '@codemirror/view':
         specifier: ^6.34.2
         version: 6.43.5
+      '@jsquash/jpeg':
+        specifier: 1.6.0
+        version: 1.6.0
+      '@jsquash/png':
+        specifier: 3.1.1
+        version: 3.1.1
+      '@jsquash/webp':
+        specifier: 1.5.0
+        version: 1.5.0
       '@lezer/highlight':
         specifier: ^1.2.1
         version: 1.2.3
@@ -400,6 +409,15 @@ packages:
 
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
+
+  '@jsquash/jpeg@1.6.0':
+    resolution: {integrity: sha512-zwN46Awh1VM6gXlIcALwb5WzqK5H2e6+Awcs1QP8AvS8ohsK/sbE4esvmH4jhlhW7+CgiUUww66vg0aTnlSIMA==}
+
+  '@jsquash/png@3.1.1':
+    resolution: {integrity: sha512-C10pc+0H6j0h8fENOfnGOvkXCmvpSQTDGlfGd0sHphZhPSGTyLjIrHba0FaZZdsKqA/wlmhYicUHb92vfZphaw==}
+
+  '@jsquash/webp@1.5.0':
+    resolution: {integrity: sha512-KggLoj2MnRSfIqTeKe1EmbljTX2vuV7mh79k89PCL1pyqiDULcPM1L47twxXt0hkb68F70bXiL31MxsuoZtKFw==}
 
   '@juggle/resize-observer@3.4.0':
     resolution: {integrity: sha512-dfLbk+PwWvFzSxwk3n5ySL0hfBog779o8h68wK/7/APo/7cgyWp5jcXockbxdk5kFRkbeXWm4Fbi9FrdN381sA==}
@@ -2106,6 +2124,9 @@ packages:
   w3c-keyname@2.2.8:
     resolution: {integrity: sha512-dpojBhNsCNN7T82Tm7k26A6G9ML3NkhDsnw9n/eoxSRlVBB4CEtIQ/KTCLI2Fwf3ataSXRhYFkQi3SlnFwPvPQ==}
 
+  wasm-feature-detect@1.9.0:
+    resolution: {integrity: sha512-zonE+xlIIYtxPy++L24ow0hAD8CICb4+FgPyROd3buyXIqsJvUEDkBgfCCoXOd1Hu3DUr0GOfnPIdcGV+YpNaA==}
+
   webpack-sources@3.5.0:
     resolution: {integrity: sha512-HPuy+uuoTCaaoEoI1LQ3JN9+vrPBvEesnnX1jADHy728cHSMlq4wUc4afYqahq2B1mhQVZxCXOkNTnXltr+2vQ==}
     engines: {node: '>=10.13.0'}
@@ -2297,6 +2318,14 @@ snapshots:
     dependencies:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.4.14
+
+  '@jsquash/jpeg@1.6.0': {}
+
+  '@jsquash/png@3.1.1': {}
+
+  '@jsquash/webp@1.5.0':
+    dependencies:
+      wasm-feature-detect: 1.9.0
 
   '@juggle/resize-observer@3.4.0': {}
 
@@ -4058,6 +4087,8 @@ snapshots:
       vue: 3.5.39(typescript@5.6.3)
 
   w3c-keyname@2.2.8: {}
+
+  wasm-feature-detect@1.9.0: {}
 
   webpack-sources@3.5.0: {}
 

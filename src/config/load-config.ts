@@ -30,6 +30,17 @@ const DEFAULT_CONFIG = {
 	storage: {
 		sqlite_path: "./data/scardice.db",
 	},
+	resource_cache: {
+		enabled: false,
+		path: "./data/cq-resources",
+		retention_days: 60,
+		max_file_mb: 12,
+		max_resources_per_log: 40,
+		image_quality: 65,
+		allowed_hosts: ["*.qq.com", "*.qpic.cn", "*.gtimg.cn"],
+		allow_public_hosts: false,
+		download_timeout_seconds: 15,
+	},
 	app: {
 		frontend_url: "",
 		log_retention_days: 60,
@@ -150,6 +161,44 @@ export function loadConfig() {
 		config.storage.sqlite_path = process.env.SQLITE_PATH;
 	if (process.env.DATABASE_PATH)
 		config.storage.sqlite_path = process.env.DATABASE_PATH;
+	if (process.env.CQ_RESOURCE_CACHE_ENABLED !== undefined)
+		config.resource_cache.enabled = parseBoolean(
+			process.env.CQ_RESOURCE_CACHE_ENABLED,
+			config.resource_cache.enabled,
+		);
+	if (process.env.CQ_RESOURCE_CACHE_PATH)
+		config.resource_cache.path = process.env.CQ_RESOURCE_CACHE_PATH;
+	if (process.env.CQ_RESOURCE_CACHE_RETENTION_DAYS) {
+		const d = parseInt(process.env.CQ_RESOURCE_CACHE_RETENTION_DAYS, 10);
+		if (!Number.isNaN(d) && d > 0) config.resource_cache.retention_days = d;
+	}
+	if (process.env.CQ_RESOURCE_CACHE_MAX_FILE_MB) {
+		const mb = parseInt(process.env.CQ_RESOURCE_CACHE_MAX_FILE_MB, 10);
+		if (!Number.isNaN(mb) && mb > 0) config.resource_cache.max_file_mb = mb;
+	}
+	if (process.env.CQ_RESOURCE_CACHE_MAX_RESOURCES_PER_LOG) {
+		const value = parseInt(process.env.CQ_RESOURCE_CACHE_MAX_RESOURCES_PER_LOG, 10);
+		if (!Number.isNaN(value) && value > 0)
+			config.resource_cache.max_resources_per_log = value;
+	}
+	if (process.env.CQ_RESOURCE_CACHE_IMAGE_QUALITY) {
+		const value = parseInt(process.env.CQ_RESOURCE_CACHE_IMAGE_QUALITY, 10);
+		if (!Number.isNaN(value)) config.resource_cache.image_quality = value;
+	}
+	if (process.env.CQ_RESOURCE_CACHE_ALLOWED_HOSTS)
+		config.resource_cache.allowed_hosts = parseList(
+			process.env.CQ_RESOURCE_CACHE_ALLOWED_HOSTS,
+		);
+	if (process.env.CQ_RESOURCE_CACHE_ALLOW_PUBLIC_HOSTS !== undefined)
+		config.resource_cache.allow_public_hosts = parseBoolean(
+			process.env.CQ_RESOURCE_CACHE_ALLOW_PUBLIC_HOSTS,
+			config.resource_cache.allow_public_hosts,
+		);
+	if (process.env.CQ_RESOURCE_CACHE_DOWNLOAD_TIMEOUT_SECONDS) {
+		const value = parseInt(process.env.CQ_RESOURCE_CACHE_DOWNLOAD_TIMEOUT_SECONDS, 10);
+		if (!Number.isNaN(value) && value > 0)
+			config.resource_cache.download_timeout_seconds = value;
+	}
 	if (process.env.FRONTEND_URL)
 		config.app.frontend_url = process.env.FRONTEND_URL;
 	if (process.env.LOG_RETENTION_DAYS) {
@@ -213,6 +262,7 @@ export function loadConfig() {
 	}
 
 	config.server.allowed_hosts = parseList(config.server.allowed_hosts);
+	config.resource_cache.allowed_hosts = parseList(config.resource_cache.allowed_hosts);
 	config.security.warning_quotes = parseList(config.security.warning_quotes);
 
 	if (!path.isAbsolute(config.storage.sqlite_path)) {
@@ -226,6 +276,9 @@ export function loadConfig() {
 			PROJECT_ROOT,
 			config.security.audit_log_path,
 		);
+	}
+	if (!path.isAbsolute(config.resource_cache.path)) {
+		config.resource_cache.path = path.resolve(PROJECT_ROOT, config.resource_cache.path);
 	}
 
 	return config;
