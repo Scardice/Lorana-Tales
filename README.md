@@ -137,7 +137,7 @@ allowed_hosts = ["localhost", "127.0.0.1", "::1"] # 加入用户实际访问的�
 sqlite_path = "./data/scardice.db" # SQLite 数据库路径
 
 [resource_cache]
-enabled = false # 上传时归档 CQ 图片、语音、视频和附件；默认关闭
+enabled = false # 上传时归档 CQ 图片、语音和附件；视频仅保留【视频】占位且不下载
 path = "./data/cq-resources" # 本地媒体目录
 retention_days = 60 # 资源归档保留天数，和日志保留天数独立
 max_file_mb = 12 # 单个远程/内嵌资源的最大体积
@@ -260,9 +260,9 @@ trust_proxy = true
 
 ### CQ 资源本地归档
 
-开启 `[resource_cache].enabled` 后，服务会在上传时解压日志，提取 `CQ:image`、`face`、`record`、`voice`、`audio`、`video` 和 `file` 中的 URL 或 base64 资源，下载后将日志引用改为本站 `/cq-resources/...`。默认只允许腾讯 QQ/QLogo/QPic/GTImg 域名；如日志确实使用其他图床，应将对应域名加入 `allowed_hosts`，而不是直接开启 `allow_public_hosts`。
+开启 `[resource_cache].enabled` 后，服务会在上传时解压日志，提取 `CQ:image`、`face`、`record`、`voice`、`audio` 和 `file` 中的 URL 或 base64 资源，下载后将日志引用改为本站 `/cq-resources/...`。`CQ:video` 永远不会下载或写入硬盘，而会改成 `【视频】` 占位，避免视频耗尽服务端空间。默认只允许腾讯 QQ/QLogo/QPic/GTImg 域名；如日志确实使用其他图床，应将对应域名加入 `allowed_hosts`，而不是直接开启 `allow_public_hosts`。
 
-PNG、JPEG 和 WebP 会以 `image_quality` 重编码为 WebP；只有更小才替换原文件。所有保存后的资源还会使用最高质量 Brotli 无损压缩；支持 Brotli 的浏览器直接得到压缩流，其他客户端由服务端即时解压。音频、视频和其他附件不进行有损转码，避免改变可播放性。
+PNG、JPEG 和 WebP 会以 `image_quality` 重编码为 WebP；只有更小才替换原文件。GIF 会保持原格式和动画。所有保存后的资源还会使用最高质量 Brotli 无损压缩；支持 Brotli 的浏览器直接得到压缩流，其他客户端由服务端即时解压。音频和其他附件不进行有损转码，避免改变可播放性。
 
 `retention_days` 从资源归档成功时计算，与日志的 `log_retention_days` 独立。被拒绝、超限、超时或下载失败的资源会保留原上游 URL，且不会导致日志上传失败。
 

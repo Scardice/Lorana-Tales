@@ -388,6 +388,7 @@ export function storyDisplayText(text: string, preserveLineBreaks: boolean): str
 
 export function playbackDelay(message: StoryMessage, document: StoryDocument): number {
   const settings = document.settings;
+  if (message.performance?.durationMs && message.performance.durationMs > 0) return message.performance.durationMs;
   if (settings.playbackTiming === "fixed") return settings.fixedDelayMs;
   const text = message.kind === "text" ? message.text : message.alt || "图片";
   const chineseCount = (text.match(/[\u3400-\u9fff]/g) || []).length;
@@ -402,4 +403,35 @@ export function playbackDelay(message: StoryMessage, document: StoryDocument): n
     (englishWords / Math.max(1, settings.englishWordsPerMinute)) * 60_000 +
     punctuation * 120;
   return Math.max(1500, Math.min(15_000, Math.round(milliseconds || 1500)));
+}
+
+export interface StoryStreamToken {
+  index: number;
+  text: string;
+  wordLike: boolean;
+  pauseEligible: boolean;
+}
+
+/**
+ * Segment text without shipping a language dictionary. Intl.Segmenter keeps
+ * English words intact and uses the browser's locale-aware Chinese word data.
+ */
+export function segmentStoryText(text: string): StoryStreamToken[] {
+  type Segment = { segment: string; isWordLike?: boolean };
+  type Segmenter = { segment: (value: string) => Iterable<Segment> };
+  const SegmenterCtor = (Intl as unknown as {
+    Segmenter?: new (locale?: string | string[], options?: { granularity: "word" }) => Segmenter;
+  }).Segmenter;
+  const segments: Segment[] = SegmenterCtor
+    ? Array.from(new SegmenterCtor(["zh-CN", "en"], { granularity: "word" }).segment(text))
+    : Array.from(text.matchAll(/[A-Za-z0-9]+(?:['’-][A-Za-z0-9]+)*|\s+|[\u3400-\u9fff]|./gu), (match) => ({
+        segment: match[0],
+        isWordLike: /[A-Za-z0-9\u3400-\u9fff]/u.test(match[0]),
+      }));
+  return segments.map((item, index) => ({
+    index,
+    text: item.segment,
+    wordLike: !!item.isWordLike,
+    pauseEligible: !!item.isWordLike || /[，。！？；：,.!?;:]$/u.test(item.segment),
+  }));
 }

@@ -179,6 +179,9 @@ function resourceCandidates(message: string): ResourceCandidate[] {
 	for (const match of message.matchAll(cqRe)) {
 		const kind = inferKind(match[1]);
 		if (!kind) continue;
+		// Video archives grow without a practical upper bound. Keep a readable
+		// placeholder in the stored log, but never download or persist the video.
+		if (kind === "video") continue;
 		const attrs = match[2];
 		for (const value of attrs.matchAll(/\burl=\[(https?:\/\/[^\]]+)\]/gi)) {
 			candidates.push({ source: value[1], kind, remoteUrl: value[1] });
@@ -288,7 +291,7 @@ async function readRemoteResource(rawUrl: string, options: NormalizedOptions): P
 		const controller = new AbortController();
 		const timer = setTimeout(() => controller.abort(), options.downloadTimeoutMs);
 		try {
-			const response = await fetch(url, { redirect: "manual", signal: controller.signal, headers: { Accept: "image/*,audio/*,video/*,application/octet-stream;q=0.7" } });
+			const response = await fetch(url, { redirect: "manual", signal: controller.signal, headers: { Accept: "image/*,audio/*,application/octet-stream;q=0.7" } });
 			if ([301, 302, 303, 307, 308].includes(response.status)) {
 				const location = response.headers.get("location");
 				if (!location) throw new Error("resource redirect has no location");
@@ -369,6 +372,24 @@ export class CqResourceCache {
 		let payload: unknown;
 		try { payload = JSON.parse(decoded.toString("utf-8")); } catch { return { storedText, cachedCount: 0 }; }
 
+		let videoCount = 0;
+		const replaceVideos = (value: unknown): unknown => {
+			if (typeof value === "string") {
+				return value.replace(/\[CQ:video,(?:[^\[\]]|\[[^\]]*\])*\]/gi, () => {
+					videoCount += 1;
+					return "【视频】";
+				});
+			}
+			if (Array.isArray(value)) return value.map(replaceVideos);
+			if (value && typeof value === "object") {
+				for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+					(value as Record<string, unknown>)[key] = replaceVideos(child);
+				}
+			}
+			return value;
+		};
+		payload = replaceVideos(payload);
+
 		const messages: string[] = [];
 		const visit = (value: unknown) => {
 			if (typeof value === "string" && value.includes("[CQ:")) messages.push(value);
@@ -392,7 +413,7 @@ export class CqResourceCache {
 				console.warn(`[resource-cache] Resource skipped: ${error instanceof Error ? error.message : String(error)}`);
 			}
 		}
-		if (!replacements.size) return { storedText, cachedCount: 0 };
+		if (!replacements.size && !videoCount) return { storedText, cachedCount: 0 };
 
 		const rewrite = (value: unknown): unknown => {
 			if (typeof value === "string") {

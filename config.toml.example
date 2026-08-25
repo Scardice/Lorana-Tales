@@ -30,7 +30,8 @@ allowed_hosts = ["localhost", "127.0.0.1", "::1"]
 sqlite_path = "./data/scardice.db"
 
 [resource_cache]
-# 是否在上传时归档 CQ 码中的图片、语音、视频和附件资源。
+# 是否在上传时归档 CQ 码中的图片、语音和附件资源。
+# CQ 视频不会下载，只会在日志中保留“【视频】”占位，避免占满硬盘。
 # 开启后服务会下载可信来源资源，替换日志中的上游 URL；关闭时日志保持原样。默认 false，避免未确认的带宽与磁盘占用。
 enabled = false
 

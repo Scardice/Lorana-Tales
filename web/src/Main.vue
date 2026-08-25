@@ -424,6 +424,7 @@
         :show="isStoryPlayerVisible"
         :archive="storyArchive"
         :asset-url="storyAssetUrl"
+        @change="onStoryChange"
         @close="isStoryPlayerVisible = false"
       />
     </n-layout-content>

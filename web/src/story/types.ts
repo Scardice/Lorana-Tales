@@ -1,6 +1,6 @@
 import type { LogItem } from "~/logManager/types";
 
-export const STORY_SCHEMA_VERSION = 3;
+export const STORY_SCHEMA_VERSION = 4;
 
 export type StoryPosition = "left" | "right" | "narrator";
 export type StoryTheme = "auto" | "light" | "dark";
@@ -41,6 +41,21 @@ export interface StoryMessageBase {
   sourcePartText?: string;
   locallyInserted?: boolean;
   conflict?: "source-changed" | "source-deleted";
+  performance?: StoryMessagePerformance;
+}
+
+export interface StoryMessagePerformance {
+  /** How long autoplay waits after this message has fully appeared. */
+  durationMs?: number;
+  /** Override global streaming for this message. */
+  stream?: boolean;
+  /** Extra delay after an individual segmented token, keyed by token index. */
+  tokenDelays?: Record<number, number>;
+  /** Automatically open an image after it appears, then close it after the configured time. */
+  imagePreview?: {
+    openAfterMs: number;
+    durationMs: number;
+  };
 }
 
 export interface StoryTextMessage extends StoryMessageBase {
@@ -73,9 +88,16 @@ export interface StorySettings {
   theme: StoryTheme;
   density: "compact" | "comfortable" | "spacious";
   fontSize: number;
+  /** Avatar size for ordinary left/right speakers. */
   avatarSize: number;
+  /** Smaller independent avatar size for narrator identity rows. */
+  narratorAvatarSize: number;
   bubbleMaxWidth: number;
   canvasWidth: number;
+  centerGutterPercent: number;
+  /** Inline images are never enlarged; this only caps their rendered width against the canvas. */
+  imageMaxWidthPercent: number;
+  imageMaxHeightVh: number;
   animation: "none" | "fade" | "slide-fade";
   animationDurationMs: number;
   autoplay: boolean;
@@ -83,6 +105,14 @@ export interface StorySettings {
   fixedDelayMs: number;
   chineseCharsPerMinute: number;
   englishWordsPerMinute: number;
+  streamEnabled: boolean;
+  streamTokensPerSecond: number;
+  streamPauseMinMs: number;
+  streamPauseMaxMs: number;
+  typingIndicatorEnabled: boolean;
+  typingIndicatorText: string;
+  typingIndicatorEffect: "dots" | "pulse" | "wave";
+  typingIndicatorMs: number;
 }
 
 export interface StorySourceBinding {
@@ -142,8 +172,12 @@ export const defaultStorySettings = (): StorySettings => ({
   density: "comfortable",
   fontSize: 16,
   avatarSize: 42,
+  narratorAvatarSize: 28,
   bubbleMaxWidth: 78,
   canvasWidth: 1600,
+  centerGutterPercent: 8,
+  imageMaxWidthPercent: 72,
+  imageMaxHeightVh: 65,
   animation: "slide-fade",
   animationDurationMs: 220,
   autoplay: false,
@@ -151,4 +185,12 @@ export const defaultStorySettings = (): StorySettings => ({
   fixedDelayMs: 2500,
   chineseCharsPerMinute: 280,
   englishWordsPerMinute: 200,
+  streamEnabled: false,
+  streamTokensPerSecond: 8,
+  streamPauseMinMs: 40,
+  streamPauseMaxMs: 180,
+  typingIndicatorEnabled: false,
+  typingIndicatorText: "正在输入",
+  typingIndicatorEffect: "dots",
+  typingIndicatorMs: 700,
 });
