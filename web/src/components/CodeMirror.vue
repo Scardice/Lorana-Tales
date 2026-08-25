@@ -422,6 +422,17 @@ onMounted(() => {
   height: 50rem;
 }
 
+@media (max-width: 860px) {
+  .cm-editor,
+  .codemirror {
+    height: clamp(22rem, 70dvh, 50rem);
+  }
+
+  .cm-editor {
+    font-size: clamp(0.875rem, 1.8vw, 1.125rem);
+  }
+}
+
 .test {
   font-size: 2rem;
 }

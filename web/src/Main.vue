@@ -112,7 +112,9 @@
               />
 
               <n-color-picker
+                v-if="!isCompactViewport"
                 v-model:value="i.color"
+                placement="bottom-end"
                 :show-alpha="false"
                 show-preview
                 :modes="['hex', 'rgb', 'hsl', 'hsv']"
@@ -144,6 +146,23 @@
                   </button>
                 </template>
               </n-color-picker>
+
+              <button
+                v-else
+                class="pc-row__color"
+                type="button"
+                :style="{ '--pc-row-color': i.color }"
+                :aria-label="`设置 ${i.name || '角色'} 颜色`"
+                @click="openMobileColorPicker(i)"
+                :disabled="
+                  isShowPreview ||
+                  isShowPreviewBBS ||
+                  isShowPreviewBBSPineapple ||
+                  isShowPreviewTRG
+                "
+              >
+                <span></span>
+              </button>
             </div>
           </div>
 
@@ -222,7 +241,7 @@
               <n-button
                 secondary
                 @click="clearText"
-                id="btnCopyPreviewBBS"
+                id="btnClearEditor"
                 type="primary"
               >
                 <template #icon>
@@ -297,6 +316,49 @@
           </n-message-provider>
         </div>
       </div>
+
+      <n-modal
+        v-model:show="isMobileColorPickerVisible"
+        preset="card"
+        class="mobile-color-modal"
+        :title="`设置${mobileColorTarget?.name || '角色'}颜色`"
+        :style="{ width: 'min(22rem, calc(100vw - 2rem))' }"
+      >
+        <div v-if="mobileColorTarget" class="mobile-color-picker">
+          <n-text depth="3" class="mobile-color-picker__hint">
+            选择颜色后会自动保存。
+          </n-text>
+          <n-color-picker
+            :value="mobileColorTarget.color"
+            :show-alpha="false"
+            show-preview
+            :modes="['hex', 'rgb', 'hsl', 'hsv']"
+            :swatches="colors"
+            placement="bottom-start"
+            @update:value="updateMobileColor"
+          >
+            <template #trigger="{ onClick, ref: setTriggerRef }">
+              <button
+                :ref="setTriggerRef"
+                class="mobile-color-picker__trigger"
+                type="button"
+                :style="{ '--pc-row-color': mobileColorTarget.color }"
+                aria-label="打开颜色选择器"
+                @click="onClick"
+              >
+                <span></span>
+                <span>{{ mobileColorTarget.color }}</span>
+              </button>
+            </template>
+          </n-color-picker>
+        </div>
+
+        <template #footer>
+          <n-button type="primary" @click="isMobileColorPickerVisible = false">
+            完成
+          </n-button>
+        </template>
+      </n-modal>
     </n-layout-content>
   </n-layout>
 </template>
@@ -330,7 +392,16 @@ import {
 } from "naive-ui";
 import randomColor from "randomcolor";
 import uaParser from "ua-parser-js";
-import { computed, h, nextTick, onMounted, ref, render, watch } from "vue";
+import {
+  computed,
+  h,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  render,
+  watch,
+} from "vue";
 import PreviewItem from "./components/previews/preview-main-item.vue";
 import PreviewTableTR from "./components/previews/preview-table-tr.vue";
 import { useThemeDark } from "./composables/useTheme";
@@ -370,6 +441,7 @@ const notification = useNotification();
 const loading = ref<boolean>(false);
 
 const isMobile = ref(false);
+const isCompactViewport = ref(false);
 const downloadUsableRank = ref(0);
 
 const isShowPreview = ref(false);
@@ -378,6 +450,25 @@ const isShowPreviewBBSPineapple = ref(false);
 const isShowPreviewTRG = ref(false);
 
 const colors = ref<string[]>([]);
+const mobileColorTarget = ref<CharItem>();
+const isMobileColorPickerVisible = ref(false);
+
+const updateCompactViewport = () => {
+  isCompactViewport.value = window.matchMedia("(max-width: 520px)").matches;
+};
+
+const openMobileColorPicker = (target: CharItem) => {
+  mobileColorTarget.value = target;
+  isMobileColorPickerVisible.value = true;
+};
+
+const updateMobileColor = (value: string) => {
+  const target = mobileColorTarget.value;
+  if (!target) return;
+  target.color = value;
+  colorChanged(value, target);
+};
+
 const refreshColors = () => {
   colors.value = randomColor({ count: 16 });
   message.success("色板刷新成功！", { duration: 800 });
@@ -531,6 +622,7 @@ function setupUA() {
 }
 
 setupUA();
+updateCompactViewport();
 
 const applyQQImageRKey = async (text: string) => {
   if (!shouldApplyQQImageRKeyReplacement(text)) {
@@ -563,6 +655,7 @@ const browserAlert = () => {
 };
 
 onMounted(async () => {
+  window.addEventListener("resize", updateCompactViewport, { passive: true });
   const searchParams = new URLSearchParams(window.location.search);
   const key = searchParams.get("key");
   const password = location.hash.slice(1);
@@ -678,6 +771,10 @@ onMounted(async () => {
       doFlush();
     }, 3000);
   });
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener("resize", updateCompactViewport);
 });
 
 function exportRecordRaw() {
@@ -1259,6 +1356,8 @@ const _code = ref("");
   --home-grid-blue: rgba(34, 93, 168, 0.055);
   --home-grid-green: rgba(20, 113, 87, 0.055);
   --home-shadow: 0 18px 42px rgba(31, 39, 53, 0.08);
+  --home-radius: 8px;
+  --home-radius-sm: 6px;
   min-height: 100vh;
   min-height: 100dvh;
   color: var(--home-ink);
@@ -1341,8 +1440,10 @@ const _code = ref("");
   display: grid;
   gap: 0;
   border: 1px solid var(--home-line);
+  border-radius: var(--home-radius);
   margin: 0.75rem 0 1rem;
   box-shadow: var(--home-shadow);
+  overflow: hidden;
 }
 
 .pc-row {
@@ -1385,7 +1486,7 @@ const _code = ref("");
   width: 2.25rem;
   height: 2.25rem;
   border: 1px solid var(--home-line);
-  border-radius: 0;
+  border-radius: var(--home-radius-sm);
   background: var(--home-panel-solid);
   cursor: pointer;
   padding: 0.2rem;
@@ -1400,7 +1501,7 @@ const _code = ref("");
   display: block;
   width: 100%;
   height: 100%;
-  border-radius: 0;
+  border-radius: calc(var(--home-radius-sm) - 2px);
   background: var(--pc-row-color, #64748b);
 }
 
@@ -1413,9 +1514,10 @@ const _code = ref("");
 
 .action-card {
   border: 1px solid var(--home-line);
-  border-radius: 0;
+  border-radius: var(--home-radius);
   background: var(--home-panel);
   box-shadow: var(--home-shadow);
+  overflow: hidden;
   padding: 0;
 }
 
@@ -1460,7 +1562,7 @@ const _code = ref("");
   gap: 0.5rem;
   border: 1px solid var(--home-line);
   border-bottom: 0;
-  border-radius: 0;
+  border-radius: var(--home-radius) var(--home-radius) 0 0;
   background: var(--home-soft);
   padding: 0.625rem;
 }
@@ -1516,7 +1618,7 @@ const _code = ref("");
   border-top: 0;
   box-shadow: none;
   line-height: 1.6;
-  border-radius: 0;
+  border-radius: 0 0 var(--home-radius) var(--home-radius);
 }
 
 .editor-codemirror .cm-line {
@@ -1545,45 +1647,62 @@ const _code = ref("");
 
 @media (max-width: 520px) {
   .pc-row {
-    grid-template-columns: 2.25rem minmax(0, 1fr) 2.75rem;
+    grid-template-areas:
+      "name color delete"
+      "im im im"
+      "role role role";
+    grid-template-columns: minmax(0, 1fr) 2.75rem 2.25rem;
     padding: 0.5rem;
   }
 
-  .pc-row__name,
-  .pc-row__im,
-  .pc-row__role {
+  .pc-row__name { grid-area: name; }
+  .pc-row__im { grid-area: im; }
+  .pc-row__role { grid-area: role; }
+  .pc-row__delete { grid-area: delete; }
+
+  .pc-row__color {
+    grid-area: color;
+  }
+
+  .editor-toolbar {
+    align-items: center;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .action-card__controls--downloads {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .editor-toolbar .n-button,
+  .action-card__controls--downloads .n-button {
+    width: 100%;
+  }
+
+  .editor-toolbar .n-checkbox {
     grid-column: 1 / -1;
   }
 
-  .pc-row__color {
-    grid-column: 3;
-    grid-row: 1;
-  }
-
-  .action-card__controls,
-  .editor-toolbar {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .editor-toolbar .n-button {
-    width: 100%;
+  .editor-toolbar__spacer {
+    display: none;
   }
 }
 
 .preview {
   word-break: break-all;
-  padding: 10px;
-  box-shadow:
-    0 2px 4px rgba(0, 0, 0, 0.12),
-    0 0 6px rgba(0, 0, 0, 0.04);
+  border: 1px solid var(--home-line);
+  border-radius: var(--home-radius);
+  background: var(--home-panel);
+  box-shadow: var(--home-shadow);
+  padding: 0.75rem;
   position: relative;
-  // font-family: monospace;
 }
 
 .list-dynamic {
   width: 100%;
-  height: 500px;
+  height: min(75dvh, 50rem);
+  max-height: 50rem;
   overflow-y: auto;
 }
 
@@ -1591,10 +1710,62 @@ const _code = ref("");
   // display: flex;
   // align-items: center;
   padding: 0.5em 0;
-  border-color: lightgray;
+  border-color: var(--home-line);
 }
 
 .scroller {
-  height: 95vh;
+  height: min(75dvh, 50rem);
+}
+
+.preview-copy-tools {
+  align-items: flex-end;
+  color: var(--home-muted);
+  display: flex;
+  flex-direction: column;
+  font-size: 0.75rem;
+  gap: 0.25rem;
+  margin-bottom: 0.75rem;
+}
+
+.mobile-color-picker {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.mobile-color-picker__hint {
+  margin: 0;
+}
+
+.mobile-color-picker__trigger {
+  align-items: center;
+  background: var(--home-panel-solid);
+  border: 1px solid var(--home-line);
+  border-radius: var(--home-radius-sm);
+  color: var(--home-ink);
+  cursor: pointer;
+  display: flex;
+  font: inherit;
+  gap: 0.75rem;
+  min-height: 2.75rem;
+  padding: 0.5rem 0.625rem;
+  width: 100%;
+}
+
+.mobile-color-picker__trigger > span:first-child {
+  background: var(--pc-row-color, #64748b);
+  border-radius: calc(var(--home-radius-sm) - 2px);
+  display: block;
+  height: 1.75rem;
+  width: 1.75rem;
+}
+
+.mobile-color-modal {
+  align-self: flex-start;
+  margin-top: 1rem;
+  max-height: calc(100dvh - 2rem);
+}
+
+.mobile-color-modal .n-card__content {
+  overflow: visible;
 }
 </style>

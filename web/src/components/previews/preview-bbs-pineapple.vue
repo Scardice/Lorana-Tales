@@ -1,13 +1,12 @@
 <template>
   <div v-show="isShow">
     <div class="preview" id="preview-bbs-pineapple">
-      <div style="position: absolute; right: 2rem; direction: rtl">
+      <div class="preview-copy-tools">
         <n-button
           secondary
           type="primary"
           @click="copied"
           id="btnCopyPreviewBBSPineapple"
-          style="z-index: 100"
           >一键复制</n-button
         >
         <div class="mt-0.5 text-xs">注意: 长文本速度较慢</div>

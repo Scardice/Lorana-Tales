@@ -110,7 +110,7 @@ const previewMessageSolve = (i: LogItem) => {
   if (store.exportOptions.textIndentFirst) {
     if (canvasFontSize === "") {
       canvasFontSize = getCanvasFontSize(
-        document.getElementById("preview") ?? document.body,
+        document.getElementById("preview-main") ?? document.body,
       );
     }
     length = getTextWidth(prefix, canvasFontSize);
