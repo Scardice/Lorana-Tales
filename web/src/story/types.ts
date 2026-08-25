@@ -1,6 +1,6 @@
 import type { LogItem } from "~/logManager/types";
 
-export const STORY_SCHEMA_VERSION = 1;
+export const STORY_SCHEMA_VERSION = 2;
 
 export type StoryPosition = "left" | "right" | "narrator";
 export type StoryTheme = "auto" | "light" | "dark";
@@ -24,6 +24,8 @@ export interface StoryCharacter {
   color: string;
   avatar?: StoryAssetRef;
   avatarSource?: "qq" | "upload" | "package";
+  /** Show this character's avatar inside narration bubbles when positioned as narrator. */
+  narratorAvatar: boolean;
   isNarrator: boolean;
   isDice: boolean;
   hidden: boolean;
@@ -36,6 +38,7 @@ export interface StoryMessageBase {
   timeText?: string;
   sourceFingerprint?: string;
   sourceItem?: LogItem;
+  sourcePartText?: string;
   locallyInserted?: boolean;
   conflict?: "source-changed" | "source-deleted";
 }
@@ -65,9 +68,11 @@ export interface StorySettings {
   showQqInPreview: boolean;
   showNames: boolean;
   showTime: boolean;
+  preserveLineBreaks: boolean;
   theme: StoryTheme;
   density: "compact" | "comfortable" | "spacious";
   fontSize: number;
+  avatarSize: number;
   bubbleMaxWidth: number;
   canvasWidth: number;
   animation: "none" | "fade" | "slide-fade";
@@ -130,9 +135,11 @@ export const defaultStorySettings = (): StorySettings => ({
   showQqInPreview: false,
   showNames: true,
   showTime: false,
+  preserveLineBreaks: false,
   theme: "auto",
   density: "comfortable",
   fontSize: 16,
+  avatarSize: 42,
   bubbleMaxWidth: 78,
   canvasWidth: 720,
   animation: "slide-fade",

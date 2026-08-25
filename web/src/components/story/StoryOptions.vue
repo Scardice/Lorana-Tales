@@ -8,16 +8,17 @@
       <label><n-switch :value="model.mergeMessages" @update:value="set('mergeMessages', $event)" />融合连续消息</label>
       <label><n-switch :value="model.mergeNarration" @update:value="set('mergeNarration', $event)" />融合旁白</label>
       <label><n-switch :value="model.showAvatars" @update:value="set('showAvatars', $event)" />显示头像</label>
-      <label><n-switch :value="model.showNarratorAvatar" @update:value="set('showNarratorAvatar', $event)" />旁白小头像</label>
       <label><n-switch :value="model.showNames" @update:value="set('showNames', $event)" />显示角色名</label>
       <label><n-switch :value="model.showTime" @update:value="set('showTime', $event)" />显示时间</label>
+      <label><n-switch :value="model.preserveLineBreaks" @update:value="set('preserveLineBreaks', $event)" />保留消息内换行</label>
       <label><n-switch :value="model.showQqInEditor" @update:value="set('showQqInEditor', $event)" />编辑时显示 QQ 号</label>
       <label><n-switch :value="model.showQqInPreview" @update:value="set('showQqInPreview', $event)" />预览时显示 QQ 号</label>
       <label><n-switch :value="model.previewOnly" @update:value="set('previewOnly', $event)" />隐藏编辑按钮</label>
       <label>头像位置<n-select :value="model.avatarAlignment" :options="avatarOptions" @update:value="set('avatarAlignment', $event)" /></label>
       <label>主题<n-select :value="model.theme" :options="themeOptions" @update:value="set('theme', $event)" /></label>
       <label>显示密度<n-select :value="model.density" :options="densityOptions" @update:value="set('density', $event)" /></label>
-      <label>字号 <n-input-number :value="model.fontSize" :min="12" :max="28" @update:value="set('fontSize', $event || 16)" /></label>
+      <label class="size-option"><span>头像大小 {{ model.avatarSize }}px</span><n-slider :value="model.avatarSize" :min="28" :max="64" :step="2" @update:value="set('avatarSize', $event)" /></label>
+      <label class="size-option"><span>字体大小 {{ model.fontSize }}px</span><n-slider :value="model.fontSize" :min="12" :max="32" @update:value="set('fontSize', $event)" /></label>
       <label>气泡宽度 <n-slider :value="model.bubbleMaxWidth" :min="48" :max="96" @update:value="set('bubbleMaxWidth', $event)" /></label>
       <label>画布宽度 <n-slider :value="model.canvasWidth" :min="360" :max="1200" :step="20" @update:value="set('canvasWidth', $event)" /></label>
       <label>动画<n-select :value="model.animation" :options="animationOptions" @update:value="set('animation', $event)" /></label>
@@ -38,4 +39,5 @@ function set<K extends keyof StorySettings>(key: K, value: StorySettings[K]) { e
 
 <style scoped>
 .story-options{margin:1rem 0;padding:1rem;border:1px solid rgba(100,116,139,.22);border-radius:18px;background:linear-gradient(135deg,rgba(59,130,246,.08),rgba(168,85,247,.06))}.story-options header{display:flex;align-items:center;justify-content:space-between;gap:1rem}.story-options h3,.story-options p{margin:0}.story-options p{font-size:.82rem;opacity:.65;margin-top:.2rem}.story-options__grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:.8rem;margin-top:1rem}.story-options__grid label{display:flex;align-items:center;gap:.55rem;min-height:34px;font-size:.88rem}.story-options__grid :deep(.n-select),.story-options__grid :deep(.n-input-number),.story-options__grid :deep(.n-slider){flex:1;min-width:0}@media(max-width:560px){.story-options{border-radius:14px}.story-options__grid{grid-template-columns:1fr}}
+.story-options__grid .size-option{display:grid;grid-template-columns:auto minmax(90px,1fr)}
 </style>

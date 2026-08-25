@@ -115,13 +115,14 @@
               <n-select
                 v-if="storyArchive?.document.settings.enabled"
                 class="pc-row__position"
-                :value="storyPositionFor(i)"
+                :value="storyPlacementFor(i)"
                 :options="[
                   { value: 'left', label: '左侧' },
                   { value: 'right', label: '右侧' },
-                  { value: 'narrator', label: '旁白位' },
+                  { value: 'narrator', label: '旁白（无头像）' },
+                  { value: 'narrator-avatar', label: '旁白（有头像）' },
                 ]"
-                @update:value="setStoryPosition(i, $event)"
+                @update:value="setStoryPlacement(i, $event)"
               />
 
               <n-color-picker
@@ -471,7 +472,7 @@ import { setCharInfo, type TextInfo } from "./logManager/importers/_logImpoter";
 import { logMan } from "./logManager/logManager";
 import type { CharItem, LogItem } from "./logManager/types";
 import { deleteLocalStoryDraft, loadLocalStoryDraft, saveLocalStoryDraft } from "./story/local-storage";
-import { storyFromLogItems, storyToLogItems } from "./story/model";
+import { normalizeStoryDocument, storyFromLogItems, storyToLogItems } from "./story/model";
 import { createStoryPackage, readStoryPackage } from "./story/package";
 import { mergeStorySource } from "./story/sync";
 import type { StoryArchive, StoryPosition, StorySettings } from "./story/types";
@@ -578,11 +579,22 @@ function storyPositionFor(pc: CharItem): StoryPosition {
   return storyCharacterFor(pc)?.position || (pc.role === "主持人" ? "right" : pc.role === "骰子" ? "narrator" : "left");
 }
 
-function setStoryPosition(pc: CharItem, position: StoryPosition) {
+type StoryPlacement = StoryPosition | "narrator-avatar";
+
+function storyPlacementFor(pc: CharItem): StoryPlacement {
+  const character = storyCharacterFor(pc);
+  if (character?.position === "narrator" && character.narratorAvatar) return "narrator-avatar";
+  return storyPositionFor(pc);
+}
+
+function setStoryPlacement(pc: CharItem, placement: StoryPlacement) {
   if (!storyArchive.value) return;
   const archive = { document: structuredClone(toRaw(storyArchive.value.document)), assets: new Map(toRaw(storyArchive.value.assets)) };
   const target = archive.document.characters.find((item) => item.name === pc.name && item.imUserId === pc.IMUserId);
-  if (target) target.position = position;
+  if (target) {
+    target.position = placement === "narrator-avatar" ? "narrator" : placement;
+    target.narratorAvatar = placement === "narrator-avatar";
+  }
   onStoryChange(archive);
 }
 
@@ -1060,7 +1072,7 @@ onMounted(async () => {
   try {
     const draft = await loadLocalStoryDraft(storyDraftKey);
     if (draft && confirm("检测到这个日志在当前浏览器保存的高级编辑修改，是否恢复？")) {
-      onStoryChange(draft);
+      onStoryChange({ ...draft, document: normalizeStoryDocument(draft.document) });
       message.success("已恢复本地编辑修改");
     }
   } catch (error) {
@@ -1595,7 +1607,8 @@ const _code = ref("");
   display: grid;
   grid-template-columns:
     2.25rem minmax(9rem, 1.1fr) minmax(8rem, 1fr) minmax(7rem, 0.75fr)
-    2.75rem;
+    minmax(6.5rem, 0.65fr) 2.75rem;
+  grid-template-areas: "delete name im role position color";
   gap: 0.5rem;
   align-items: center;
   border-bottom: 1px solid var(--home-line);
@@ -1777,12 +1790,10 @@ const _code = ref("");
 
 @media (max-width: 860px) {
   .pc-row {
-    grid-template-columns: 2.25rem minmax(0, 1fr) 2.75rem;
-  }
-
-  .pc-row__im,
-  .pc-row__role {
-    grid-column: 2 / -1;
+    grid-template-columns: 2.25rem minmax(0, 1fr) minmax(6.5rem, 0.65fr) 2.75rem;
+    grid-template-areas:
+      "delete name name color"
+      "delete im role position";
   }
 
   .workbench-actions {
@@ -1795,7 +1806,8 @@ const _code = ref("");
     grid-template-areas:
       "name color delete"
       "im im im"
-      "role role role";
+      "role role role"
+      "position position position";
     grid-template-columns: minmax(0, 1fr) 2.75rem 2.25rem;
     padding: 0.5rem;
   }
@@ -1803,6 +1815,7 @@ const _code = ref("");
   .pc-row__name { grid-area: name; }
   .pc-row__im { grid-area: im; }
   .pc-row__role { grid-area: role; }
+  .pc-row__position { grid-area: position; }
   .pc-row__delete { grid-area: delete; }
 
   .pc-row__color {
@@ -1833,6 +1846,13 @@ const _code = ref("");
     display: none;
   }
 }
+
+.pc-row__delete { grid-area: delete; }
+.pc-row__name { grid-area: name; }
+.pc-row__im { grid-area: im; }
+.pc-row__role { grid-area: role; }
+.pc-row__position { grid-area: position; }
+.pc-row__color { grid-area: color; }
 
 .preview {
   word-break: break-all;

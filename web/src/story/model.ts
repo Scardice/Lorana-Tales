@@ -10,6 +10,7 @@ import {
 
 const cqSingleImage = /^\s*\[CQ:(?:image|face),([\s\S]+)\]\s*$/i;
 const bracketSingleImage = /^\s*\[(?:image|图):base64:\/\/([A-Za-z0-9+/=\s]+)\]\s*$/i;
+const obsoleteDemoImage = "[CQ:image,file=base64://iVBORw0KGgoAAAANSUhEUgAAABkAAAAZCAYAAADE6YVjAAAAJklEQVR42u3NIQEAAAgDsPdPQ8OTAtTE9NJJr0UikUgkEolE8pIsTbqLKR00etoAAAAASUVORK5CYII=]";
 
 export function createStoryId(prefix = "story"): string {
   const random = globalThis.crypto?.randomUUID?.() ||
@@ -100,6 +101,78 @@ function imageMessageFromLog(
   };
 }
 
+interface SourceMessagePart {
+  kind: "text" | "image";
+  value: string;
+}
+
+function splitCqImageParts(message: string): SourceMessagePart[] {
+  const parts: SourceMessagePart[] = [];
+  const marker = /\[CQ:(?:image|face),/gi;
+  let cursor = 0;
+  let match: RegExpExecArray | null;
+  while ((match = marker.exec(message))) {
+    let depth = 0;
+    let end = -1;
+    for (let index = match.index; index < message.length; index += 1) {
+      if (message[index] === "[") depth += 1;
+      if (message[index] === "]") {
+        depth -= 1;
+        if (depth === 0) {
+          end = index + 1;
+          break;
+        }
+      }
+    }
+    if (end < 0) break;
+    const before = message.slice(cursor, match.index).trim();
+    if (before) parts.push({ kind: "text", value: before });
+    parts.push({ kind: "image", value: message.slice(match.index, end) });
+    cursor = end;
+    marker.lastIndex = end;
+  }
+  const after = message.slice(cursor).trim();
+  if (after) parts.push({ kind: "text", value: after });
+  return parts;
+}
+
+function messagesFromLogItem(
+  item: LogItem,
+  base: Omit<StoryMessage, "kind">,
+  assets?: Map<string, Uint8Array>,
+): StoryMessage[] {
+  const parts = splitCqImageParts(item.message || "");
+  if (parts.some((part) => part.kind === "image") && parts.length > 1) {
+    const messages: StoryMessage[] = [];
+    for (const [index, part] of parts.entries()) {
+      const sourceFingerprint = `${base.sourceFingerprint}-part-${index + 1}`;
+      const partBase = {
+        ...base,
+        id: sourceFingerprint,
+        sourceFingerprint,
+      };
+      if (part.kind === "text") {
+        messages.push({ ...partBase, kind: "text", text: part.value, sourcePartText: part.value });
+        continue;
+      }
+      const image = imageMessageFromLog(
+        { ...item, message: part.value },
+        partBase as Omit<StoryMessage, "kind">,
+        assets,
+      );
+      if (image) {
+        messages.push({ ...image, sourcePartText: image.kind === "image" ? image.asset.sourceUrl || image.asset.id : part.value });
+      } else {
+        messages.push({ ...partBase, kind: "text", text: part.value, sourcePartText: part.value });
+      }
+    }
+    return messages;
+  }
+  const image = imageMessageFromLog(item, base, assets);
+  if (image) return [image];
+  return [{ ...base, kind: "text", text: item.message || "" }];
+}
+
 export function storyFromLogItems(
   items: readonly LogItem[],
   chars: readonly CharItem[],
@@ -117,6 +190,7 @@ export function storyFromLogItems(
     imUserId: "",
     position: "narrator",
     color: "#9ca3af",
+    narratorAvatar: false,
     isNarrator: true,
     isDice: false,
     hidden: false,
@@ -136,6 +210,7 @@ export function storyFromLogItems(
       imUserId: char?.IMUserId || item.IMUserId || "",
       position: rolePosition(char?.role || item.role || (item.isDice ? "骰子" : undefined)),
       color: char?.color || item.color || "#64748b",
+      narratorAvatar: false,
       isNarrator: false,
       isDice: !!item.isDice || char?.role === "骰子",
       hidden: char?.role === "隐藏" || item.role === "隐藏",
@@ -161,13 +236,7 @@ export function storyFromLogItems(
       sourceFingerprint: fingerprint,
       sourceItem: { ...item },
     };
-    messages.push(
-      imageMessageFromLog(item, base as Omit<StoryMessage, "kind">, options.assets) || {
-        ...base,
-        kind: "text",
-        text: item.message || "",
-      },
-    );
+    messages.push(...messagesFromLogItem(item, base as Omit<StoryMessage, "kind">, options.assets));
   }
 
   const now = new Date().toISOString();
@@ -202,7 +271,7 @@ export function storyToLogItems(document: StoryDocument): LogItem[] {
         : `[CQ:image,file=${message.asset.sourceUrl || message.asset.id}]`;
     return {
       ...(message.sourceItem || {}),
-      id: message.sourceItem?.id ?? index + 1,
+      id: message.sourcePartText !== undefined ? index + 1 : message.sourceItem?.id ?? index + 1,
       nickname: character?.name || "旁白",
       IMUserId: character?.imUserId || "",
       time: message.time || 0,
@@ -224,7 +293,14 @@ export function storyToLogItems(document: StoryDocument): LogItem[] {
 
 export function normalizeStoryDocument(input: StoryDocument): StoryDocument {
   const defaults = defaultStorySettings();
-  const characters = Array.isArray(input.characters) ? input.characters : [];
+  const inheritedNarratorAvatar = input.settings?.showNarratorAvatar ?? defaults.showNarratorAvatar;
+  const characters = Array.isArray(input.characters)
+    ? input.characters.map((item) => ({
+        ...item,
+        narratorAvatar:
+          item.narratorAvatar ?? (item.position === "narrator" && inheritedNarratorAvatar),
+      }))
+    : [];
   if (!characters.some((item) => item.isNarrator)) {
     characters.unshift({
       id: "character-narrator",
@@ -232,6 +308,7 @@ export function normalizeStoryDocument(input: StoryDocument): StoryDocument {
       imUserId: "",
       position: "narrator",
       color: "#9ca3af",
+      narratorAvatar: inheritedNarratorAvatar,
       isNarrator: true,
       isDice: false,
       hidden: false,
@@ -246,10 +323,60 @@ export function normalizeStoryDocument(input: StoryDocument): StoryDocument {
     createdAt: input.createdAt || new Date().toISOString(),
     updatedAt: input.updatedAt || new Date().toISOString(),
     characters,
-    messages: Array.isArray(input.messages) ? input.messages : [],
+    messages: Array.isArray(input.messages)
+      ? input.messages.flatMap((message) => {
+          if (message.kind === "image" && message.sourceItem?.message.trim() === obsoleteDemoImage) return [];
+          if (message.kind !== "text" || !/\[CQ:(?:image|face),/i.test(message.text) || /base64:\/\//i.test(message.text)) return [message];
+          const { kind: _kind, text, ...base } = message;
+          const source = message.sourceItem || {
+            id: 0,
+            nickname: "",
+            IMUserId: "",
+            time: message.time || 0,
+            message: text,
+            isDice: false,
+            commandId: 0,
+          };
+          const migrated = messagesFromLogItem(
+            { ...source, message: text },
+            base as Omit<StoryMessage, "kind">,
+          );
+          return migrated.some((item) => item.kind === "image") ? migrated : [message];
+        })
+      : [],
     settings: { ...defaults, ...(input.settings || {}) },
     source: input.source || { kind: "none" },
   };
+}
+
+export type StoryMessageGroupPosition = "single" | "first" | "middle" | "last";
+
+function canMergeAt(document: StoryDocument, leftIndex: number, rightIndex: number): boolean {
+  if (!document.settings.mergeMessages || leftIndex < 0 || rightIndex >= document.messages.length) return false;
+  const left = document.messages[leftIndex];
+  const right = document.messages[rightIndex];
+  if (!left || !right || left.characterId !== right.characterId) return false;
+  const character = document.characters.find((item) => item.id === right.characterId);
+  return character?.position !== "narrator" || document.settings.mergeNarration;
+}
+
+export function storyMessageGroupPosition(document: StoryDocument, index: number): StoryMessageGroupPosition {
+  const previous = canMergeAt(document, index - 1, index);
+  const next = canMergeAt(document, index, index + 1);
+  if (previous && next) return "middle";
+  if (previous) return "last";
+  if (next) return "first";
+  return "single";
+}
+
+export function storyDisplayText(text: string, preserveLineBreaks: boolean): string {
+  const normalized = text.replace(/\r\n?/g, "\n");
+  if (preserveLineBreaks) return normalized;
+  return normalized
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph.split("\n").map((line) => line.trim()).filter(Boolean).join(" "))
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 export function playbackDelay(message: StoryMessage, document: StoryDocument): number {

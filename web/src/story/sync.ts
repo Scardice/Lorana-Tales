@@ -15,7 +15,7 @@ function sourceText(message: StoryMessage): string {
 }
 
 function originalText(message: StoryMessage): string {
-  return message.sourceItem?.message || sourceText(message);
+  return message.sourcePartText || message.sourceItem?.message || sourceText(message);
 }
 
 function locallyChanged(message: StoryMessage): boolean {
