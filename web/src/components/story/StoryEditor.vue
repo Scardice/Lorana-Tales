@@ -3,7 +3,7 @@
     <Teleport to="#global-account-slot"><AccountPanel :archive="archive" @load="$emit('change',$event)" @sync="$emit('sync',$event)" /></Teleport>
     <Teleport to="#global-title-slot"><div class="story-title">
         <div><input v-if="titleEditing" ref="titleInput" v-model="titleDraft" class="story-title-input" maxlength="120" aria-label="故事名" @blur="saveTitle" @keydown.enter.prevent="saveTitle" @keydown.esc.prevent="cancelTitleEdit" /><strong v-else>{{ document.title }}</strong><button v-if="!titleEditing" class="title-edit" title="修改故事名" aria-label="修改故事名" @click="startTitleEdit">✎</button></div>
-        <small>{{ document.messages.length }} 条消息 · {{ document.characters.length - 1 }} 个角色</small>
+        <small>{{ document.messages.length }} 条消息 · {{ document.characters.length - 1 }} 个角色 · {{ readableCharacterCount }} 字</small>
       </div></Teleport>
     <Teleport to="#global-actions-slot"><div class="story-editor__header-actions">
         <button class="header-action" title="上传旧日志或 SSP" aria-label="上传旧日志或 SSP" @click="$emit('import')"><IconUpload aria-hidden="true" /><span>上传</span></button>
@@ -144,6 +144,7 @@ const commonEmoji=['😀','😄','😂','🥹','😊','😍','🤔','😴','😭
 const qqFaceIds=Array.from({length:199},(_,index)=>index);
 const isOffTopicMessage=(message:StoryMessage)=>message.kind==='text'&&/^\s*(?:@\S+\s+)*[（(]/.test(message.text);
 const displayMessages=computed(()=>document.value.settings.hideOffTopic?document.value.messages.filter(message=>!isOffTopicMessage(message)):document.value.messages);
+const readableCharacterCount=computed(()=>document.value.messages.reduce((total,message)=>{if(message.kind!=='text')return total;const readable=message.text.replace(/\[CQ:[^\]]*\]/gi,'').replace(/\s/gu,'');let count=0;for(const character of readable)count+=character.length>0?1:0;return total+count},0));
 const messageVirtualizer=useVirtualizer(computed(()=>({
 	count:displayMessages.value.length,
 	getScrollElement:()=>messageList.value||null,
