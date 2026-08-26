@@ -21,6 +21,7 @@ export interface AccountUser {
 	avatarUrl: string;
 	displayName: string;
 	role: AccountRole;
+	group: string;
 	status: AccountStatus;
 	banReason: string;
 	banUntil: string;
@@ -44,6 +45,7 @@ export interface EditorProjectSummary {
 	sourceRevision: string;
 	createdAt: string;
 	updatedAt: string;
+	storedBytes: number;
 }
 
 type SqlRow = Record<string, unknown>;
@@ -87,6 +89,7 @@ function rowToUser(row: SqlRow): AccountUser {
 		avatarUrl: String(row.avatar_url || ""),
 		displayName: String(row.nickname || row.display_name || row.username || ""),
 		role: row.role === "admin" ? "admin" : "user",
+		group: String(row.account_group || "default"),
 		status:
 			row.status === "banned" ? "banned" : row.status === "disabled" ? "disabled" : "active",
 		banReason: String(row.ban_reason || ""),
@@ -138,6 +141,7 @@ export class AccountStore {
 				display_name TEXT NOT NULL DEFAULT '',
 				password_hash TEXT NOT NULL,
 				role TEXT NOT NULL DEFAULT 'user',
+				account_group TEXT NOT NULL DEFAULT 'default',
 				status TEXT NOT NULL DEFAULT 'active',
 				ban_reason TEXT NOT NULL DEFAULT '',
 				ban_until TEXT NOT NULL DEFAULT '',
@@ -226,6 +230,7 @@ export class AccountStore {
 		if (!columns.has("username")) this.db.exec("ALTER TABLE account_users ADD COLUMN username TEXT NOT NULL DEFAULT '' COLLATE NOCASE");
 		if (!columns.has("nickname")) this.db.exec("ALTER TABLE account_users ADD COLUMN nickname TEXT NOT NULL DEFAULT ''");
 		if (!columns.has("avatar_url")) this.db.exec("ALTER TABLE account_users ADD COLUMN avatar_url TEXT NOT NULL DEFAULT ''");
+		if (!columns.has("account_group")) this.db.exec("ALTER TABLE account_users ADD COLUMN account_group TEXT NOT NULL DEFAULT 'default'");
 		const legacyUsers = this.db.prepare("SELECT id, email, display_name, username, nickname FROM account_users").all() as SqlRow[];
 		const updateLegacy = this.db.prepare("UPDATE account_users SET username = ?, nickname = ?, display_name = ? WHERE id = ?");
 		for (const row of legacyUsers) {
@@ -248,6 +253,7 @@ export class AccountStore {
 		nickname?: string;
 		avatarUrl?: string;
 		role?: AccountRole;
+		group?: string;
 		mustChangePassword?: boolean;
 	}): Promise<AccountUser> {
 		const email = normalizeEmail(input.email);
@@ -258,9 +264,9 @@ export class AccountStore {
 		const id = crypto.randomUUID();
 		this.db.prepare(`
 			INSERT INTO account_users (
-				id, email, username, nickname, avatar_url, display_name, password_hash, role, status,
+				id, email, username, nickname, avatar_url, display_name, password_hash, role, account_group, status,
 				must_change_password, created_at, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
 		`).run(
 			id,
 			email,
@@ -270,6 +276,7 @@ export class AccountStore {
 			nickname,
 			await passwordHash(input.password),
 			input.role === "admin" ? "admin" : "user",
+			String(input.group || "default").trim().slice(0, 40) || "default",
 			input.mustChangePassword ? 1 : 0,
 			now,
 			now,
@@ -343,7 +350,7 @@ export class AccountStore {
 		return this.getUserById(userId);
 	}
 
-	updateUser(userId: string, input: Partial<{ email: string; username: string; nickname: string; displayName: string; avatarUrl: string; role: AccountRole }>) {
+	updateUser(userId: string, input: Partial<{ email: string; username: string; nickname: string; displayName: string; avatarUrl: string; role: AccountRole; group: string }>) {
 		const current = this.getUserById(userId);
 		if (!current) return null;
 		const email = input.email ? normalizeEmail(input.email) : current.email;
@@ -352,8 +359,9 @@ export class AccountStore {
 		const nickname = nicknameInput === undefined ? current.nickname : String(nicknameInput).trim().slice(0, 80) || username;
 		const avatarUrl = input.avatarUrl === undefined ? current.avatarUrl : String(input.avatarUrl).trim().slice(0, 2048);
 		const role = input.role || current.role;
-		this.db.prepare("UPDATE account_users SET email = ?, username = ?, nickname = ?, avatar_url = ?, display_name = ?, role = ?, updated_at = ? WHERE id = ?")
-			.run(email, username, nickname, avatarUrl, nickname, role, nowIso(), userId);
+		const group = input.group === undefined ? current.group : String(input.group).trim().slice(0, 40) || "default";
+		this.db.prepare("UPDATE account_users SET email = ?, username = ?, nickname = ?, avatar_url = ?, display_name = ?, role = ?, account_group = ?, updated_at = ? WHERE id = ?")
+			.run(email, username, nickname, avatarUrl, nickname, role, group, nowIso(), userId);
 		return this.getUserById(userId);
 	}
 
@@ -388,6 +396,10 @@ export class AccountStore {
 
 	projectCount(userId: string): number {
 		return Number((this.db.prepare("SELECT COUNT(*) AS total FROM editor_projects WHERE user_id = ? AND archived = 0").get(userId) as SqlRow).total || 0);
+	}
+
+	projectStorageBytes(userId: string): number {
+		return Number((this.db.prepare("SELECT COALESCE(SUM(length(document_blob)), 0) AS total FROM editor_projects WHERE user_id = ? AND archived = 0").get(userId) as SqlRow).total || 0);
 	}
 
 	createSession(user: AccountUser, input: { sessionDays: number; deviceToken?: string; ipPrefix: string; userAgent: string }): AccountSession {
@@ -494,24 +506,30 @@ export class AccountStore {
 		return Number(row.latest || 0);
 	}
 
-	createProject(userId: string, title: string, document: unknown, source: { key?: string; revision?: string; encryptedSecret?: string } = {}) {
+	createProject(userId: string, title: string, document: unknown, source: { key?: string; revision?: string; encryptedSecret?: string } = {}, limits?: { quotaBytes: number; maxProjects: number }) {
 		const id = crypto.randomUUID();
 		const now = nowIso();
-		this.db.prepare(`INSERT INTO editor_projects (
+		const blob = compressDocument(document);
+		const insert = this.db.transaction(() => {
+			if (limits && this.projectCount(userId) >= limits.maxProjects) throw new Error("project_limit_reached");
+			if (limits && this.projectStorageBytes(userId) + blob.length > limits.quotaBytes) throw new Error("storage_quota_exceeded");
+			this.db.prepare(`INSERT INTO editor_projects (
 			id, user_id, title, revision, document_blob, source_key, source_revision,
 			source_secret_cipher, created_at, updated_at
 		) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?)`)
-			.run(id, userId, title.slice(0, 160) || "跑团记录", compressDocument(document), source.key || "", source.revision || "", source.encryptedSecret || "", now, now);
+				.run(id, userId, title.slice(0, 160) || "跑团记录", blob, source.key || "", source.revision || "", source.encryptedSecret || "", now, now);
+		});
+		insert();
 		return this.getProject(userId, id);
 	}
 
 	listProjects(userId: string): EditorProjectSummary[] {
-		return (this.db.prepare(`SELECT id, title, revision, source_key, source_revision, created_at, updated_at
+		return (this.db.prepare(`SELECT id, title, revision, source_key, source_revision, created_at, updated_at, length(document_blob) AS stored_bytes
 			FROM editor_projects WHERE user_id = ? AND archived = 0 ORDER BY updated_at DESC`).all(userId) as SqlRow[])
 			.map((row) => ({
 				id: String(row.id), title: String(row.title), revision: Number(row.revision),
 				sourceKey: String(row.source_key || ""), sourceRevision: String(row.source_revision || ""),
-				createdAt: String(row.created_at), updatedAt: String(row.updated_at),
+				createdAt: String(row.created_at), updatedAt: String(row.updated_at), storedBytes: Number(row.stored_bytes || 0),
 			}));
 	}
 
@@ -555,11 +573,19 @@ export class AccountStore {
 		return row ? { key: String(row.source_key || ""), revision: String(row.source_revision || ""), encryptedSecret: String(row.source_secret_cipher || "") } : null;
 	}
 
-	updateProject(userId: string, id: string, expectedRevision: number, document: unknown, title?: string) {
-		const result = this.db.prepare(`UPDATE editor_projects SET document_blob = ?, title = COALESCE(?, title),
+	updateProject(userId: string, id: string, expectedRevision: number, document: unknown, title?: string, limits?: { quotaBytes: number; maxProjects: number }) {
+		const blob = compressDocument(document);
+		const update = this.db.transaction(() => {
+			const current = this.db.prepare("SELECT revision, length(document_blob) AS stored_bytes FROM editor_projects WHERE id = ? AND user_id = ? AND archived = 0").get(id, userId) as SqlRow | undefined;
+			if (!current) return null;
+			if (Number(current.revision || 0) !== expectedRevision) return null;
+			if (limits && this.projectStorageBytes(userId) - Number(current.stored_bytes || 0) + blob.length > limits.quotaBytes) throw new Error("storage_quota_exceeded");
+			const result = this.db.prepare(`UPDATE editor_projects SET document_blob = ?, title = COALESCE(?, title),
 			revision = revision + 1, updated_at = ? WHERE id = ? AND user_id = ? AND revision = ? AND archived = 0`)
-			.run(compressDocument(document), title ? title.slice(0, 160) : null, nowIso(), id, userId, expectedRevision);
-		return result.changes === 1 ? this.getProject(userId, id) : null;
+				.run(blob, title ? title.slice(0, 160) : null, nowIso(), id, userId, expectedRevision);
+			return result.changes === 1 ? this.getProject(userId, id) : null;
+		});
+		return update();
 	}
 
 	deleteProject(userId: string, id: string) {

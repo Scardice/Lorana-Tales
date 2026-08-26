@@ -117,12 +117,12 @@ export class AccountService {
 		const email = validEmail(configuredEmail) ? configuredEmail : `${crypto.createHash("sha256").update(username).digest("hex").slice(0, 16)}@bootstrap.invalid`;
 		const existing = this.store.getUserByEmail(email);
 		if (existing) {
-			this.store.updateUser(existing.id, { username, nickname: username, role: "admin" });
+			this.store.updateUser(existing.id, { username, nickname: username, role: "admin", group: String(this.config.admin_group || "advanced") });
 			await this.store.updatePassword(existing.id, password, true);
 			this.store.audit("system", "account.bootstrap-admin", existing.id);
 			return;
 		}
-		const user = await this.store.createUser({ email, password, username, nickname: username, role: "admin", mustChangePassword: true });
+		const user = await this.store.createUser({ email, password, username, nickname: username, role: "admin", group: String(this.config.admin_group || "advanced"), mustChangePassword: true });
 		this.store.audit("system", "account.bootstrap-admin", user.id);
 	}
 
@@ -192,6 +192,25 @@ export class AccountService {
 
 	private publicUser(user: AccountUser) {
 		return { ...user, banReason: user.status === "banned" ? user.banReason : "", projectCount: this.store.projectCount(user.id) };
+	}
+
+	private storagePolicy(user: AccountUser) {
+		const groups = this.config.storage_groups && typeof this.config.storage_groups === "object" ? this.config.storage_groups : {};
+		const fallbackName = String(this.config.default_group || "default");
+		const group = String(user.group || fallbackName);
+		const raw = groups[group] || groups[fallbackName] || { quota_mb: 256, max_projects: 100 };
+		return {
+			group,
+			quotaBytes: Math.max(1, Number(raw.quota_mb || 256)) * 1024 * 1024,
+			maxProjects: Math.max(1, Math.floor(Number(raw.max_projects || 100))),
+		};
+	}
+
+	private storageUsage(user: AccountUser) {
+		const policy = this.storagePolicy(user);
+		const usedBytes = this.store.projectStorageBytes(user.id);
+		const projectCount = this.store.projectCount(user.id);
+		return { ...policy, usedBytes, remainingBytes: Math.max(0, policy.quotaBytes - usedBytes), projectCount };
 	}
 
 	private riskNeedsCaptcha(userId: string, req: Request) {
@@ -287,7 +306,7 @@ export class AccountService {
 				if (this.config.registration_enabled === false) { json(res, 403, { error: "registration_disabled" }); return; }
 				if (!validEmail(email) || !this.emailAllowed(email) || !validPassword(password) || !isValidUsername(username) || nickname.length < 1 || nickname.length > 80) { json(res, 400, { error: "invalid_registration" }); return; }
 				if (!this.store.verifyCode(String(body.codeId || ""), email, "register", String(body.code || ""))) { json(res, 400, { error: "verification_invalid" }); return; }
-				const user = await this.store.createUser({ email, password, username, nickname });
+				const user = await this.store.createUser({ email, password, username, nickname, group: String(this.config.default_group || "default") });
 				this.store.audit(user.id, "account.register", user.id);
 				const device = this.store.createTrustedDevice(user.id, this.prefix(req), this.userAgent(req), Number(this.config.trusted_device_days || 90));
 				const session = this.store.createSession(user, { sessionDays: Number(this.config.session_days || 30), deviceToken: device, ipPrefix: this.prefix(req), userAgent: this.userAgent(req) });
@@ -333,7 +352,7 @@ export class AccountService {
 		});
 
 		app.get("/api/account/me", (req, res) => {
-			const session = this.getSession(req); json(res, 200, session ? { authenticated: true, user: this.publicUser(session.user) } : { authenticated: false });
+			const session = this.getSession(req); json(res, 200, session ? { authenticated: true, user: this.publicUser(session.user), storage: this.storageUsage(session.user) } : { authenticated: false });
 		});
 
 		app.patch("/api/account/profile", (req, res) => {
@@ -393,9 +412,10 @@ export class AccountService {
 				const body = readJson(req); const sizeError = validateProjectDocument(body.document, this.config);
 				if (sizeError) { json(res, 413, { error: sizeError }); return; }
 				const encryptedSecret = body.sourceSecret ? AccountStore.encryptSecret(String(body.sourceSecret), String(this.config.encryption_key || "")) : "";
-				const project = this.store.createProject(session.user.id, String(body.title || "跑团记录"), body.document, { key: String(body.sourceKey || ""), revision: String(body.sourceRevision || ""), encryptedSecret });
+				const policy = this.storagePolicy(session.user);
+				const project = this.store.createProject(session.user.id, String(body.title || "跑团记录"), body.document, { key: String(body.sourceKey || ""), revision: String(body.sourceRevision || ""), encryptedSecret }, policy);
 				this.store.audit(session.user.id, "project.create", project?.id || ""); json(res, 201, project);
-			} catch { json(res, 400, { error: "project_invalid" }); }
+			} catch (error) { const code = error instanceof Error ? error.message : ""; json(res, code === "storage_quota_exceeded" || code === "project_limit_reached" ? 413 : 400, { error: code || "project_invalid" }); }
 		});
 		app.get("/api/account/projects/:id", (req, res) => { const session = this.requireSession(req, res); if (!session) return; const project = this.store.getProject(session.user.id, req.params.id); json(res, project ? 200 : 404, project || { error: "project_not_found" }); });
 		app.get("/api/account/projects/:id/source", async (req, res) => {
@@ -411,8 +431,8 @@ export class AccountService {
 		});
 		app.put("/api/account/projects/:id", (req, res) => {
 			const session = this.requireSession(req, res, true); if (!session || !this.requireRiskClearance(session.user.id, "project-write", req, res)) return;
-			try { const body = readJson(req); const sizeError = validateProjectDocument(body.document, this.config); if (sizeError) { json(res, 413, { error: sizeError }); return; } const project = this.store.updateProject(session.user.id, req.params.id, Number(body.revision || 0), body.document, body.title ? String(body.title) : undefined); json(res, project ? 200 : 409, project || { error: "revision_conflict" }); }
-			catch { json(res, 400, { error: "project_invalid" }); }
+			try { const body = readJson(req); const sizeError = validateProjectDocument(body.document, this.config); if (sizeError) { json(res, 413, { error: sizeError }); return; } const project = this.store.updateProject(session.user.id, req.params.id, Number(body.revision || 0), body.document, body.title ? String(body.title) : undefined, this.storagePolicy(session.user)); json(res, project ? 200 : 409, project || { error: "revision_conflict" }); }
+			catch (error) { const code = error instanceof Error ? error.message : ""; json(res, code === "storage_quota_exceeded" ? 413 : 400, { error: code || "project_invalid" }); }
 		});
 		app.delete("/api/account/projects/:id", (req, res) => { const session = this.requireSession(req, res, true); if (!session || !this.requireRiskClearance(session.user.id, "project-delete", req, res)) return; json(res, this.store.deleteProject(session.user.id, req.params.id) ? 200 : 404, { ok: true }); });
 	}

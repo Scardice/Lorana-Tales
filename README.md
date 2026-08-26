@@ -165,6 +165,8 @@ registration_enabled = true
 initial_admin_username = "" # 第一次启动时创建的临时管理员用户名
 initial_admin_password = "" # 至少 10 字符；首次登录后必须立刻更换
 initial_admin_email = "" # 可留空，首次登录时仍必须填写正式邮箱
+default_group = "default" # 新注册用户所属的存储组
+admin_group = "advanced" # 初始管理员所属的存储组
 encryption_key = "" # 开启时必填，至少 32 个随机字符
 captcha_provider = "image" # image / altcha / turnstile / hcaptcha
 
@@ -270,6 +272,18 @@ admin_bruteforce_block_seconds = 60 # 触发后的封禁时长；期间访问会
 
 ```bash
 PORT=8080 SQLITE_PATH=/mnt/data/scardice.db pnpm start
+```
+
+存储组可按需增加，额度按工程压缩后的实际数据库占用计算，并由服务端强制执行：
+
+```toml
+[accounts.storage_groups.default]
+quota_mb = 256
+max_projects = 100
+
+[accounts.storage_groups.advanced]
+quota_mb = 2048
+max_projects = 1000
 ```
 
 ### 反向代理与 CDN 客户端 IP

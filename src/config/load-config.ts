@@ -66,6 +66,12 @@ const DEFAULT_CONFIG = {
 		initial_admin_username: "",
 		initial_admin_password: "",
 		initial_admin_email: "",
+		default_group: "default",
+		admin_group: "advanced",
+		storage_groups: {
+			default: { quota_mb: 256, max_projects: 100 },
+			advanced: { quota_mb: 2048, max_projects: 1000 },
+		},
 		encryption_key: "",
 		session_days: 30,
 		trusted_device_days: 90,
@@ -225,6 +231,17 @@ export function loadConfig() {
 		...DEFAULT_CONFIG.accounts.hcaptcha,
 		...(fileConfig.accounts?.hcaptcha || {}),
 	};
+	config.accounts.storage_groups = {
+		...DEFAULT_CONFIG.accounts.storage_groups,
+		...(fileConfig.accounts?.storage_groups || {}),
+	};
+	for (const [name, policy] of Object.entries(config.accounts.storage_groups)) {
+		const groupPolicy = policy as { quota_mb?: number; max_projects?: number };
+		config.accounts.storage_groups[name] = {
+			quota_mb: Math.max(1, Number(groupPolicy.quota_mb || DEFAULT_CONFIG.accounts.storage_groups.default.quota_mb)),
+			max_projects: Math.max(1, Math.floor(Number(groupPolicy.max_projects || DEFAULT_CONFIG.accounts.storage_groups.default.max_projects))),
+		};
+	}
 	config.avatar_providers = {
 		...DEFAULT_CONFIG.avatar_providers,
 		...(fileConfig.avatar_providers || {}),

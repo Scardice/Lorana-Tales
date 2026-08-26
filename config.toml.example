@@ -102,6 +102,8 @@ initial_admin_username = "admin"
 initial_admin_password = "change-this-initial-password"
 # 可留空；首次登录会强制填写正式邮箱。若填写，仍需在首次登录确认或修改。
 initial_admin_email = ""
+default_group = "default"
+admin_group = "advanced"
 # 用于 AES-256-GCM 加密日志源访问密钥，启用账号时必须设置至少 32 个随机字符。
 # 可用 `openssl rand -base64 48` 生成；修改后旧工程中的加密源密钥将无法解密。
 encryption_key = ""
@@ -122,6 +124,15 @@ email_code_ttl_minutes = 10
 email_code_resend_seconds = 60
 email_code_per_hour = 5
 ip_email_code_per_hour = 10
+
+# 账号组配额按工程压缩后的实际数据库占用计算；可继续添加自定义组。
+[accounts.storage_groups.default]
+quota_mb = 256
+max_projects = 100
+
+[accounts.storage_groups.advanced]
+quota_mb = 2048
+max_projects = 1000
 
 [accounts.smtp]
 host = ""

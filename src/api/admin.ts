@@ -324,7 +324,7 @@ export function createAdminRouter({
 			const body = readJsonBody(req); const email = String(body.email || ""); const newPassword = String(body.password || ""); const username = String(body.username || body.displayName || email.split("@")[0]).trim(); const nickname = String(body.nickname || body.displayName || username).trim();
 			if (!email.includes("@") || newPassword.length < 10) { sendJson(res, 400, { error: "invalid_user" }); return; }
 			if (accountService.store.getUserByIdentity(username)) { sendJson(res, 409, { error: "user_exists" }); return; }
-			const user = await accountService.store.createUser({ email, password: newPassword, username, nickname, role: body.role === "admin" ? "admin" : "user", mustChangePassword: body.mustChangePassword !== false });
+			const user = await accountService.store.createUser({ email, password: newPassword, username, nickname, role: body.role === "admin" ? "admin" : "user", group: String(body.group || accountService.config.default_group || "default"), mustChangePassword: body.mustChangePassword !== false });
 			accountService.store.audit(actor(req), "admin.user-create", user.id, { email: user.email, role: user.role }); sendJson(res, 201, user);
 		} catch (error) { console.error("[admin] create user failed", error); sendJson(res, 409, { error: "user_exists" }); }
 	});
@@ -338,7 +338,7 @@ export function createAdminRouter({
 			if (current.role === "admin" && body.role === "user" && current.status === "active" && accountService.store.activeAdminCount() <= 1) { sendJson(res, 409, { error: "last_admin" }); return; }
 			const nextRole = body.role === "admin" || body.role === "user" ? body.role : current.role; const nextName = typeof body.username === "string" ? body.username.trim() : current.username; const duplicateName = accountService.store.getUserByIdentity(nextName);
 			if (duplicateName && duplicateName.id !== current.id) { sendJson(res, 409, { error: "user_update_failed" }); return; }
-			const user = accountService.store.updateUser(current.id, { email: typeof body.email === "string" ? body.email : undefined, username: typeof body.username === "string" ? body.username : undefined, nickname: typeof body.nickname === "string" ? body.nickname : typeof body.displayName === "string" ? body.displayName : undefined, role: body.role === "admin" || body.role === "user" ? body.role : undefined });
+			const user = accountService.store.updateUser(current.id, { email: typeof body.email === "string" ? body.email : undefined, username: typeof body.username === "string" ? body.username : undefined, nickname: typeof body.nickname === "string" ? body.nickname : typeof body.displayName === "string" ? body.displayName : undefined, role: body.role === "admin" || body.role === "user" ? body.role : undefined, group: typeof body.group === "string" ? body.group : undefined });
 			accountService.store.audit(actor(req), "admin.user-update", current.id, body); sendJson(res, 200, user);
 		} catch { sendJson(res, 409, { error: "user_update_failed" }); }
 	});
