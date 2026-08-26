@@ -493,6 +493,7 @@ export async function startServer(
 			defaultMode: config.editor?.default_mode === "legacy" ? "legacy" : "story",
 			storyModeEnabled: config.editor?.enable_story_mode !== false,
 			siteTitle: String(config.branding?.site_title || "Lorana Tales").trim() || "Lorana Tales",
+			showSiteTitle: config.branding?.show_site_title !== false,
 			logoUrl: brandingLogo ? "/branding/logo" : "",
 			faviconUrl: brandingFavicon ? "/favicon.ico" : "",
 		}));

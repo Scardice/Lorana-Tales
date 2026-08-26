@@ -687,7 +687,7 @@
 
       <section id="loginView" class="login hidden">
         <h1>管理登录</h1>
-        <p class="subtle">
+        <p id="loginIntro" class="subtle">
           输入 `config.toml` 中的管理密码；未配置时使用服务启动日志里的临时
           UUID。
         </p>
@@ -702,11 +702,11 @@
               required
             />
           </div>
-          <p id="loginError" class="error"></p>
           <button id="loginButton" class="button primary" type="submit">
             登录
           </button>
         </form>
+        <p id="loginError" class="error"></p>
       </section>
 
       <section id="adminView" class="hidden">

@@ -8,7 +8,7 @@ import {
   type StoryPosition,
 } from "./types";
 
-const cqSingleImage = /^\s*\[CQ:(?:image|face),([\s\S]+)\]\s*$/i;
+const cqSingleImage = /^\s*\[CQ:image,([\s\S]+)\]\s*$/i;
 const cqSingleAudio = /^\s*\[CQ:(?:record|voice|audio),([\s\S]+)\]\s*$/i;
 const cqSingleVideo = /^\s*\[CQ:(?:video|shortvideo),[^\]]*\]\s*$/i;
 const bracketSingleImage = /^\s*\[(?:image|图):base64:\/\/([A-Za-z0-9+/=\s]+)\]\s*$/i;
@@ -136,7 +136,7 @@ interface SourceMessagePart {
 
 function splitCqImageParts(message: string): SourceMessagePart[] {
   const parts: SourceMessagePart[] = [];
-  const marker = /\[CQ:(image|face|record|voice|audio|video|shortvideo),/gi;
+  const marker = /\[CQ:(image|record|voice|audio|video|shortvideo),/gi;
   let cursor = 0;
   let match: RegExpExecArray | null;
   while ((match = marker.exec(message))) {
@@ -383,7 +383,7 @@ export function normalizeStoryDocument(input: StoryDocument): StoryDocument {
     messages: Array.isArray(input.messages)
       ? input.messages.flatMap((message) => {
           if (message.kind === "image" && message.sourceItem?.message.trim() === obsoleteDemoImage) return [];
-          if (message.kind !== "text" || !/\[CQ:(?:image|face),/i.test(message.text) || /base64:\/\//i.test(message.text)) return [message];
+          if (message.kind !== "text" || !/\[CQ:image,/i.test(message.text) || /base64:\/\//i.test(message.text)) return [message];
           const { kind: _kind, text, ...base } = message;
           const source = message.sourceItem || {
             id: 0,
@@ -442,6 +442,7 @@ export function storyDisplayText(text: string, preserveLineBreaks: boolean): str
 export interface StoryTextSegment {
   text: string;
   character?: StoryCharacter;
+  faceId?: string;
 }
 
 export function storyTextSegments(text: string, characters: readonly StoryCharacter[], preserveLineBreaks: boolean): StoryTextSegment[] {
@@ -463,9 +464,15 @@ export function storyTextSegments(text: string, characters: readonly StoryCharac
     if (cursor < value.length) result.push({ text: value.slice(cursor) });
   };
   let cursor = 0;
-  for (const match of source.matchAll(/\[CQ:at,([^\]]+)\]/gi)) {
+  for (const match of source.matchAll(/\[CQ:(at|face),([^\]]+)\]/gi)) {
     appendPlain(source.slice(cursor, match.index));
-    const attrs = parseCqAttrs(match[1]);
+    const attrs = parseCqAttrs(match[2]);
+    if (match[1].toLowerCase() === "face") {
+      const faceId = cqUnescape(attrs.get("id") || attrs.get("face_id") || "");
+      if (/^\d{1,4}$/.test(faceId)) result.push({ text: "", faceId });
+      cursor = match.index! + match[0].length;
+      continue;
+    }
     const qq = cqUnescape(attrs.get("qq") || "");
     const character = byQq.get(qq);
     const fallback = cqUnescape(attrs.get("name") || qq || "未知用户");
@@ -473,7 +480,7 @@ export function storyTextSegments(text: string, characters: readonly StoryCharac
     cursor = match.index! + match[0].length;
   }
   appendPlain(source.slice(cursor));
-  return result.filter((item) => item.text);
+  return result.filter((item) => item.text || item.faceId);
 }
 
 export function storyPlainText(text: string, characters: readonly StoryCharacter[], preserveLineBreaks: boolean): string {

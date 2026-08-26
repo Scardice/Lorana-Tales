@@ -100,4 +100,5 @@ onBeforeUnmount(()=>{window.removeEventListener('keydown',saveShortcut);saveDraf
 @media(max-width:650px){.story-workspace--raw{grid-template-columns:1fr}.story-workspace--raw .story-visual{position:absolute;visibility:hidden;opacity:0;transform:translateX(14px);pointer-events:none}.raw-pane{border-right:0}.raw-pane header{padding:.45rem .55rem}.raw-pane header small{max-width:42vw}.raw-pane button{padding:.45rem .55rem;font-size:.72rem}}
 .story-workspace:has(.raw-pane){grid-template-columns:minmax(340px,.9fr) minmax(0,1.1fr)}
 @media(max-width:650px){.story-workspace:has(.raw-pane){grid-template-columns:1fr}.story-workspace:has(.raw-pane) .story-visual{position:absolute;visibility:hidden;opacity:0;transform:translateX(14px);pointer-events:none}}
+.raw-pane button.primary{background:var(--primary-bg);color:var(--primary-text)}.raw-pane button.primary:hover{background:var(--primary-hover)}
 </style>

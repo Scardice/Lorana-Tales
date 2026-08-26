@@ -78,6 +78,7 @@ const state = {
 
 const els = {
   loginView: requireElement<HTMLElement>("#loginView"),
+  loginIntro: requireElement<HTMLElement>("#loginIntro"),
   adminView: requireElement<HTMLElement>("#adminView"),
   logoutButton: requireElement<HTMLButtonElement>("#logoutButton"),
   loginForm: requireElement<HTMLFormElement>("#loginForm"),
@@ -303,8 +304,10 @@ async function checkSession() {
       showLogin();
       if (session.accountMode) {
         els.loginForm.hidden = true;
-        els.loginError.textContent = "账号模式已启用。请返回编辑器，从共享顶栏登录管理员账号后再进入这里。";
+        els.loginIntro.textContent = "账号模式已启用，配置文件管理密码在此模式下不会生效。";
+        els.loginError.innerHTML = '<a href="/story">返回编辑器</a>，从共享顶栏登录管理员账号后再进入这里。';
       } else {
+        els.loginIntro.textContent = "输入 config.toml 中的管理密码；未配置时使用服务启动日志里的临时 UUID。";
         els.loginForm.hidden = false;
       }
     }

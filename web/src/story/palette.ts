@@ -24,3 +24,38 @@ export const storyPalettes: StoryPalette[] = [
 export function storyPalette(id?: string) {
   return storyPalettes.find((item) => item.id === id);
 }
+
+function parseHexColor(value?: string) {
+  const match = value?.trim().match(/^#([\da-f]{3}|[\da-f]{6})$/i);
+  if (!match) return null;
+  const hex = match[1].length === 3 ? [...match[1]].map((part) => part + part).join("") : match[1];
+  return [0, 2, 4].map((offset) => Number.parseInt(hex.slice(offset, offset + 2), 16));
+}
+
+function luminance(rgb: number[]) {
+  const channels = rgb.map((channel) => {
+    const value = channel / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  });
+  return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
+}
+
+function contrast(a: number[], b: number[]) {
+  const [lighter, darker] = [luminance(a), luminance(b)].sort((left, right) => right - left);
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+/** Keeps imported role hues while guaranteeing readable names in either theme. */
+export function readableRoleColor(value: string | undefined, mode: "dark" | "light") {
+  const fallback = mode === "dark" ? "#a7dad5" : "#315f64";
+  const source = parseHexColor(value) || parseHexColor(fallback)!;
+  const background = parseHexColor(mode === "dark" ? "#0d1514" : "#eef2f3")!;
+  const target = parseHexColor(mode === "dark" ? "#edf3f2" : "#172220")!;
+  if (contrast(source, background) >= 4.5) return `#${source.map((channel) => channel.toString(16).padStart(2, "0")).join("")}`;
+  for (let step = 1; step <= 20; step += 1) {
+    const ratio = step / 20;
+    const mixed = source.map((channel, index) => Math.round(channel * (1 - ratio) + target[index] * ratio));
+    if (contrast(mixed, background) >= 4.5) return `#${mixed.map((channel) => channel.toString(16).padStart(2, "0")).join("")}`;
+  }
+  return fallback;
+}

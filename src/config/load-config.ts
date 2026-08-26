@@ -36,6 +36,7 @@ const DEFAULT_CONFIG = {
 	},
 	branding: {
 		site_title: "Lorana Tales",
+		show_site_title: true,
 		logo_path: "",
 		favicon_path: "",
 	},
@@ -255,6 +256,8 @@ export function loadConfig() {
 		);
 	if (process.env.SITE_TITLE)
 		config.branding.site_title = process.env.SITE_TITLE;
+	if (process.env.SITE_SHOW_TITLE !== undefined)
+		config.branding.show_site_title = parseBoolean(process.env.SITE_SHOW_TITLE, config.branding.show_site_title);
 	if (process.env.SITE_LOGO_PATH !== undefined)
 		config.branding.logo_path = process.env.SITE_LOGO_PATH;
 	if (process.env.SITE_FAVICON_PATH !== undefined)

@@ -40,6 +40,8 @@ enable_story_mode = true
 [branding]
 # 顶栏最右侧显示的网站标题。
 site_title = "Lorana Tales"
+# 是否在顶栏 Logo 旁显示网站标题文本；关闭后浏览器标签标题仍保留。
+show_site_title = true
 # 顶栏 Logo 的本地 PNG 或 SVG 路径；相对路径以项目目录为基准，留空使用内置图标。
 logo_path = ""
 # 浏览器图标的本地 ICO、PNG 或 SVG 路径；相对路径以项目目录为基准，留空使用前端默认图标。

@@ -142,6 +142,7 @@ enable_story_mode = true # 关闭后隐藏新版入口，/story 自动回落旧�
 
 [branding]
 site_title = "Lorana Tales" # 浏览器标题及上顶栏最右侧的网站名
+show_site_title = true # 是否在顶栏 Logo 旁显示网站名；不影响浏览器标签标题
 logo_path = "" # PNG/SVG 本地路径；相对路径以项目根目录为准，留空使用内置图标
 favicon_path = "" # ICO/PNG/SVG 本地路径；留空沿用前端默认 favicon
 
@@ -219,6 +220,7 @@ admin_bruteforce_block_seconds = 60 # 触发后的封禁时长；期间访问会
 | `EDITOR_DEFAULT_MODE`             | 裸路径默认编辑器：`story` 或 `legacy`                      |
 | `EDITOR_ENABLE_STORY_MODE`        | 是否开放并显示新版沉浸式染色器                             |
 | `SITE_TITLE`                      | 浏览器标题及上顶栏网站名                                   |
+| `SITE_SHOW_TITLE`                 | 是否在顶栏 Logo 旁显示网站名                               |
 | `SITE_LOGO_PATH`                  | 顶栏 PNG/SVG Logo 的本地路径                               |
 | `SITE_FAVICON_PATH`               | ICO/PNG/SVG favicon 的本地路径                             |
 | `CQ_RESOURCE_CACHE_ENABLED`        | 是否归档 CQ 资源                                           |

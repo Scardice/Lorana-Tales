@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { darkTheme, lightTheme } from "naive-ui";
-import { computed, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import Main from "./Main.vue";
 import StoryPage from "./pages/StoryPage.vue";
+import AccountPanel from "./components/story/AccountPanel.vue";
 import { useThemeDark } from "./composables/useTheme";
 
 type EditorMode = "story" | "legacy";
@@ -10,6 +11,7 @@ type EditorShellConfig = {
 	defaultMode: EditorMode;
 	storyModeEnabled: boolean;
 	siteTitle: string;
+	showSiteTitle: boolean;
 	logoUrl: string;
 	faviconUrl: string;
 };
@@ -22,6 +24,7 @@ const config = ref<EditorShellConfig>({
 	defaultMode: "story",
 	storyModeEnabled: true,
 	siteTitle: "Lorana Tales",
+	showSiteTitle: true,
 	logoUrl: "",
 	faviconUrl: "",
 });
@@ -62,7 +65,18 @@ function applyBranding() {
 	favicon.href = config.value.faviconUrl;
 }
 
+function syncVisualViewport() {
+	const viewport = window.visualViewport;
+	const keyboardOpen = !!viewport && window.innerHeight - viewport.height > 120;
+	const height = keyboardOpen ? viewport!.height : window.innerHeight;
+	document.documentElement.style.setProperty("--app-visual-height", `${Math.round(height)}px`);
+}
+
 onMounted(async () => {
+	syncVisualViewport();
+	window.addEventListener("resize", syncVisualViewport);
+	window.visualViewport?.addEventListener("resize", syncVisualViewport);
+	window.visualViewport?.addEventListener("scroll", syncVisualViewport);
 	window.addEventListener("lorana-story-compatibility", ((event: CustomEvent<{ legacyCompatible?: boolean }>) => { legacyCompatible.value = event.detail?.legacyCompatible !== false; }) as EventListener);
 	try {
 		const response = await fetch("/api/editor/config", { cache: "no-store" });
@@ -74,6 +88,12 @@ onMounted(async () => {
 		ready.value = true;
 	}
 });
+
+onBeforeUnmount(() => {
+	window.removeEventListener("resize", syncVisualViewport);
+	window.visualViewport?.removeEventListener("resize", syncVisualViewport);
+	window.visualViewport?.removeEventListener("scroll", syncVisualViewport);
+});
 </script>
 
 <template>
@@ -83,7 +103,7 @@ onMounted(async () => {
 				<n-notification-provider>
 					<div v-if="ready" class="editor-router" :class="[`editor-router--${requestedMode}`, isDark ? 'theme-dark' : 'theme-light', { 'editor-router--upper-collapsed': upperBarCollapsed }]">
 						<nav v-show="!upperBarCollapsed" class="global-upperbar" aria-label="站点工具栏">
-							<div id="global-account-slot" class="global-account-slot"></div>
+							<div id="global-account-slot" class="global-account-slot"><AccountPanel v-if="requestedMode === 'legacy'" /></div>
 							<div class="global-brand-area">
 								<button class="theme-toggle" :title="isDark ? '切换到日间模式' : '切换到夜间模式'" :aria-label="isDark ? '切换到日间模式' : '切换到夜间模式'" @click="toggleTheme"><svg v-if="isDark" viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 12.8A6.2 6.2 0 0 1 7.2 4.5 6.2 6.2 0 1 0 15.5 12.8Z"/></svg><svg v-else viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="3.2"/><path d="M10 2v2M10 16v2M2 10h2M16 10h2M4.3 4.3l1.4 1.4M14.3 14.3l1.4 1.4M15.7 4.3l-1.4 1.4M5.7 14.3l-1.4 1.4"/></svg></button>
 								<button v-if="config.storyModeEnabled" class="mode-toggle" :class="{ active: requestedMode === 'story' }" :title="requestedMode === 'story' ? '切换到经典编辑' : '切换到沉浸编辑'" @click="switchMode(requestedMode === 'story' ? 'legacy' : 'story')">
@@ -92,7 +112,7 @@ onMounted(async () => {
 								<div class="site-brand" :title="config.siteTitle">
 									<img v-if="config.logoUrl" :src="config.logoUrl" alt="" />
 									<svg v-else class="site-brand__fallback" viewBox="0 0 32 32" aria-hidden="true"><path d="M7 23.5V8.8c0-1 .8-1.8 1.8-1.8h14.4c1 0 1.8.8 1.8 1.8v14.7l-4.5-3-4.5 3-4.5-3-4.5 3Z" /><path d="M11 12h10M11 16h7" /></svg>
-									<strong>{{ config.siteTitle }}</strong>
+									<strong v-if="config.showSiteTitle">{{ config.siteTitle }}</strong>
 								</div>
 								<button class="toolbar-fold" title="收起站点工具栏" aria-label="收起站点工具栏" @click="setUpperBarCollapsed(true)"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 12 5-5 5 5" /></svg></button>
 							</div>
@@ -116,20 +136,22 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-.editor-router{min-height:100dvh;color:var(--control-text);background:var(--app-bg)}.editor-router--story{display:grid;grid-template-rows:auto auto minmax(0,1fr);height:100dvh;overflow:hidden}.editor-router--story.editor-router--upper-collapsed{grid-template-rows:auto minmax(0,1fr)}.editor-router--story :deep(.story-page),.editor-router--story :deep(.story-editor){height:100%;min-height:0;overflow:hidden}
+.editor-router{min-height:var(--app-visual-height,100dvh);color:var(--control-text);background:var(--app-bg)}.editor-router--story{display:grid;grid-template-rows:auto auto minmax(0,1fr);height:var(--app-visual-height,100dvh);overflow:hidden}.editor-router--story.editor-router--upper-collapsed{grid-template-rows:auto minmax(0,1fr)}.editor-router--story :deep(.story-page),.editor-router--story :deep(.story-editor){height:100%;min-height:0;overflow:hidden}
 .global-upperbar,.global-workbar{position:relative;box-sizing:border-box;border-bottom:1px solid var(--control-border);background:var(--soft-surface);color:var(--control-text)}.global-upperbar{z-index:9100;display:grid;grid-template-columns:minmax(8rem,1fr) auto minmax(8rem,1fr);align-items:center;gap:.55rem;min-height:48px;padding:.35rem .65rem}.global-workbar{z-index:9000;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:.75rem;min-height:50px;padding:.36rem .65rem;background:var(--panel-surface)}.global-account-slot,.global-utilities,.global-brand-area,.workbar-edge{display:flex;align-items:center;min-width:0}.global-utilities{justify-content:center;gap:.4rem}.global-brand-area,.workbar-edge--right{justify-content:flex-end;gap:.35rem}.workbar-edge--right{grid-column:2}.global-title-slot{grid-column:1;display:flex;min-width:0;max-width:100%;justify-content:flex-start;text-align:left}.workbar-edge{position:relative;z-index:1}
 .global-upperbar button,.global-workbar button{border:0;border-radius:9px;padding:.46rem .65rem;background:transparent;color:var(--muted-text);font:inherit;text-decoration:none;cursor:pointer}.mode-toggle{display:flex;align-items:center;gap:.42rem}.mode-toggle i{position:relative;width:34px;height:19px;border-radius:999px;background:var(--control-border);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--control-text) 8%,transparent);transition:.2s}.mode-toggle i span{position:absolute;top:3px;left:3px;width:13px;height:13px;border-radius:50%;background:var(--muted-text);transition:.2s}.mode-toggle.active i{background:#167d83}.mode-toggle.active i span{left:18px;background:#fff}.mode-toggle b{color:var(--muted-text);font-size:.75rem}.mode-toggle.active b{color:var(--control-text)}.toolbar-fold svg,.toolbar-expand svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 .toolbar-fold,.toolbar-expand{display:grid!important;width:36px;height:36px;padding:0!important;place-items:center;background:var(--control-surface)!important}.site-brand{display:flex;align-items:center;min-width:0;gap:.48rem}.site-brand img,.site-brand__fallback{box-sizing:border-box;width:30px;height:30px;flex:0 0 30px;border-radius:8px;object-fit:contain}.site-brand img{background:color-mix(in srgb,var(--control-text) 4%,transparent)}.site-brand__fallback{fill:none;stroke:var(--muted-text);stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}.site-brand strong{max-width:min(20vw,18rem);overflow:hidden;color:var(--control-text);text-overflow:ellipsis;white-space:nowrap;font-size:.84rem}
 .theme-toggle{display:grid!important;width:36px;height:36px;padding:0!important;place-items:center}.theme-toggle svg{width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
 .global-title-slot :deep(.story-title){display:grid;min-width:0;max-width:100%;justify-items:start;text-align:left}.global-title-slot :deep(.story-title small){color:#97a5a2;font-size:.68rem}.global-title-slot :deep(.story-title>div){display:flex;align-items:center;max-width:100%;min-width:0;gap:.2rem}.global-title-slot :deep(.story-title strong){max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.workbar-edge--right #global-actions-slot,.workbar-edge--right :deep(.story-editor__header-actions){display:flex;min-width:0;gap:.3rem}
-@media(max-width:650px){.global-upperbar{grid-template-columns:42px minmax(48px,1fr) minmax(0,1.35fr);gap:.25rem;padding:.3rem .42rem}.global-account-slot :deep(.account-trigger){width:42px;padding:.3rem!important}.global-account-slot :deep(.account-trigger)>span:last-child{display:none}.global-utilities{gap:.18rem}.mode-toggle{width:36px;padding:.25rem!important}.mode-toggle i{width:30px;height:18px}.mode-toggle i span{width:12px;height:12px}.mode-toggle.active i span{left:15px}.mode-toggle b{display:none}.global-brand-area{gap:.18rem}.toolbar-fold{width:32px;height:32px}.site-brand{gap:.3rem}.site-brand img,.site-brand__fallback{width:27px;height:27px;flex-basis:27px;border-radius:7px}.site-brand strong{max-width:18vw;font-size:.7rem}.global-workbar{grid-template-columns:minmax(5.5rem,1fr) auto;gap:.25rem;min-height:48px;padding:.32rem .42rem}.global-title-slot{grid-column:1;justify-self:stretch;max-width:none;justify-content:flex-start}.global-title-slot :deep(.story-title strong){max-width:32vw}.global-title-slot :deep(.story-title small){display:none}.workbar-edge--right{grid-column:2}.workbar-edge--right :deep(.story-editor__header-actions){gap:.32rem}}
+@media(max-width:650px){.global-upperbar{grid-template-columns:42px auto minmax(0,1fr);gap:.25rem;padding:.3rem .42rem}.global-account-slot :deep(.account-trigger){width:42px;padding:.3rem!important}.global-account-slot :deep(.account-trigger)>span:last-child{display:none}.global-utilities{gap:.18rem}.mode-toggle{width:36px;padding:.25rem!important}.mode-toggle i{width:30px;height:18px}.mode-toggle i span{width:12px;height:12px}.mode-toggle.active i span{left:15px}.mode-toggle b{display:none}.global-brand-area{min-width:0;gap:.18rem}.toolbar-fold{width:32px;height:32px}.site-brand{min-width:0;flex:0 1 auto;margin-left:auto;gap:.3rem}.site-brand img,.site-brand__fallback{width:27px;height:27px;flex-basis:27px;border-radius:7px}.site-brand strong{max-width:min(42vw,15rem);min-width:0;flex:0 1 auto;font-size:.7rem}.global-workbar{grid-template-columns:minmax(5.5rem,1fr) auto;gap:.25rem;min-height:48px;padding:.32rem .42rem}.global-title-slot{grid-column:1;justify-self:stretch;max-width:none;justify-content:flex-start}.global-title-slot :deep(.story-title strong){max-width:32vw}.global-title-slot :deep(.story-title small){display:block;max-width:32vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.58rem}.workbar-edge--right{grid-column:2}.workbar-edge--right :deep(.story-editor__header-actions){gap:.32rem}}
 .global-upperbar{grid-template-columns:minmax(8rem,1fr) auto}.site-brand img{display:block;width:auto;max-width:min(22vw,180px);height:auto;max-height:30px;flex:0 1 auto;border-radius:0;background:transparent;object-fit:contain}@media(max-width:650px){.global-upperbar{grid-template-columns:42px minmax(0,1fr)}.site-brand img{width:auto;max-width:24vw;height:auto;max-height:27px;flex-basis:auto;border-radius:0}}
+.global-upperbar{min-height:44px;padding:.25rem .55rem}.global-workbar{min-height:44px;padding:.25rem .55rem}.theme-toggle,.toolbar-fold,.toolbar-expand{width:34px;height:34px}.global-upperbar button,.global-workbar button{padding:.38rem .55rem}@media(max-width:650px){.global-upperbar{padding:.22rem .38rem}.global-workbar{min-height:42px;padding:.22rem .38rem}.theme-toggle,.toolbar-fold,.toolbar-expand{width:32px;height:32px}}
 </style>
 
 <style>
-:root{color-scheme:light;--app-bg:#eef2f3;--panel-surface:#fff;--soft-surface:#f2f5f5;--control-bg:#fff;--control-surface:#e4e9e8;--control-hover:#d8dfde;--control-text:#172220;--muted-text:#667572;--placeholder-text:#87938f;--control-border:#b8c4c1;--focus-color:#168a92}
-html.dark{color-scheme:dark;--app-bg:#0d1514;--panel-surface:#17201f;--soft-surface:#111817;--control-bg:#0f1615;--control-surface:#293634;--control-hover:#344340;--control-text:#edf3f2;--muted-text:#97a5a2;--placeholder-text:#7e8c89;--control-border:#465553;--focus-color:#38bfc8}
+:root{color-scheme:light;--app-bg:#eef2f3;--panel-surface:#fff;--soft-surface:#f2f5f5;--control-bg:#fff;--control-surface:#e4e9e8;--control-hover:#d8dfde;--control-text:#172220;--muted-text:#52615e;--placeholder-text:#76827f;--control-border:#aebbb8;--focus-color:#0e747b;--primary-bg:#0e747b;--primary-hover:#0b646a;--primary-text:#fff;--danger-bg:#a13f46;--danger-ink:#76252d;--danger-text:#fff}
+html.dark{color-scheme:dark;--app-bg:#0d1514;--panel-surface:#17201f;--soft-surface:#111817;--control-bg:#0f1615;--control-surface:#293634;--control-hover:#344340;--control-text:#edf3f2;--muted-text:#a7b4b1;--placeholder-text:#8e9b98;--control-border:#465553;--focus-color:#4bcbd2;--primary-bg:#0e747b;--primary-hover:#11828a;--primary-text:#fff;--danger-bg:#a63b43;--danger-ink:#ffb7bc;--danger-text:#fff}
 html,body,#app{font-family:Inter,"Noto Sans SC","Microsoft YaHei UI","Microsoft YaHei",system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--app-bg);color:var(--control-text)}
+body:has(.editor-router--story),body:has(.editor-router--story) #app{height:var(--app-visual-height,100dvh);overflow:hidden}
 button,input,textarea,select{font-family:inherit}
 input,textarea,select{box-sizing:border-box;border-color:var(--control-border);background-color:var(--control-bg);color:var(--control-text)}
 input::placeholder,textarea::placeholder{color:var(--placeholder-text);opacity:1}
