@@ -37,9 +37,13 @@ let previewFrame = 0;
 let commitTimer = 0;
 let ignoreCommitUntil = 0;
 
-watch(() => props.value, (value) => {
-	if (!dragging) localValue.value = value;
-});
+function clampedValue(value: number) {
+	return Math.min(props.max, Math.max(props.min, value));
+}
+
+watch(() => [props.value, props.min, props.max] as const, ([value]) => {
+	if (!dragging) localValue.value = clampedValue(value);
+}, { immediate: true });
 
 function flushPreview() {
 	if (previewFrame) cancelAnimationFrame(previewFrame);

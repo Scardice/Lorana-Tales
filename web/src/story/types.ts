@@ -135,6 +135,8 @@ export interface StorySettings {
   showTime: boolean;
   /** Hide text messages that start with ( or （ after optional mentions/whitespace. */
   hideOffTopic: boolean;
+  /** Hide player dice commands such as .ra or /roll while keeping dice results. */
+  hideDiceCommands: boolean;
   /** Enter key behavior in the editor composer. */
   enterKeyBehavior: "auto" | "send" | "newline";
   preserveLineBreaks: boolean;
@@ -214,6 +216,7 @@ export const defaultStorySettings = (): StorySettings => ({
   showNarratorNames: true,
   showTime: false,
   hideOffTopic: false,
+  hideDiceCommands: false,
   enterKeyBehavior: "auto",
   preserveLineBreaks: true,
   theme: "auto",

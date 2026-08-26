@@ -10,7 +10,7 @@ const persistentEffects = new Set<StoryPersistentEffect>(["low-health", "curse",
 const settingKeys = new Set<keyof StorySettings>([
 	"mergeMessages", "mergeNarration", "showAvatars", "stickyGroupAvatar", "avatarAlignment", "showNarratorAvatar",
   "previewOnly", "showQqInEditor", "showQqInPreview", "showNames", "showNarratorNames",
-  "showTime", "hideOffTopic", "enterKeyBehavior", "preserveLineBreaks", "theme", "density", "fontSize", "avatarSize",
+  "showTime", "hideOffTopic", "hideDiceCommands", "enterKeyBehavior", "preserveLineBreaks", "theme", "density", "fontSize", "avatarSize",
   "narratorAvatarSize", "bubbleMaxWidth", "canvasWidth", "centerGutterPercent",
   "imageMaxWidthPercent", "imageMaxHeightVh", "animation", "animationDurationMs",
   "autoplay", "playbackTiming", "fixedDelayMs", "chineseCharsPerMinute", "englishWordsPerMinute",
@@ -162,5 +162,6 @@ export const STORY_SCRIPT_HELP = `<!-- Lorana Tales Story Language 1 -->
 • palette 和 bubble 只能使用编辑器内置的高对比预设名。
 • <set name="streamSpeedJitterPercent" value="25"> 可修改全局设置。
 • <set name="hideOffTopic" value="on"> 隐藏以 ( 或 （ 开头的场外发言，不删除原消息。
+• <set name="hideDiceCommands" value="on"> 隐藏以 .、。或 / 开头的骰子指令，保留骰子结果。
 • <set name="enterKeyBehavior" value="auto"> 编辑器回车按设备决定；也可写 send 或 newline。
 • id 和 at 可省略；导出时自动写入稳定 id，以保留演出编排。`;
