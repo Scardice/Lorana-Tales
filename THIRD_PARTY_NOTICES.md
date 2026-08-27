@@ -17,6 +17,23 @@ UIW Material theme (all MIT). Long-image export uses html-to-image (MIT), and
 Unicode token grouping uses grapheme-splitter (MIT). Their package license files
 are retained in the portable Nightly package's production `node_modules` tree.
 
+SSP v2 content-addressed resource validation uses `@noble/hashes` (MIT), an
+audited, zero-dependency JavaScript hashing implementation. Format regression
+tests use `tsx` (MIT) as a development-only dependency. Neither dependency adds
+a copyleft obligation.
+
+## @noble/hashes 2.3.0
+
+Source: <https://github.com/paulmillr/noble-hashes>
+
+Copyright (c) 2022 Paul Miller
+
+## tsx 4.23.12 (development only)
+
+Source: <https://github.com/privatenumber/tsx>
+
+Copyright (c) Hiroki Osame
+
 ## @tanstack/vue-virtual 3.13.35
 
 Source: <https://github.com/TanStack/virtual>

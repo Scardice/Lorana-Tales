@@ -114,11 +114,16 @@ async function passwordMatches(password: string, encoded: string): Promise<boole
 	return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
 }
 
+
+const SSP_BINARY_PREFIX = Buffer.from("LORANA_SSP2\0", "ascii");
+
 function compressDocument(value: unknown): Buffer {
+	if (Buffer.isBuffer(value)) return Buffer.concat([SSP_BINARY_PREFIX, value]);
 	return deflateRawSync(Buffer.from(JSON.stringify(value), "utf-8"), { level: 9 });
 }
 
 function decompressDocument(value: Buffer): unknown {
+	if (value.subarray(0, SSP_BINARY_PREFIX.length).equals(SSP_BINARY_PREFIX)) return value.subarray(SSP_BINARY_PREFIX.length);
 	return JSON.parse(inflateRawSync(value).toString("utf-8"));
 }
 

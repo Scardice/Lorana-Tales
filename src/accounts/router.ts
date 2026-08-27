@@ -75,6 +75,7 @@ function validAvatarUrl(value: string) {
 }
 
 function validateProjectDocument(value: unknown, config): "project_too_large" | "asset_too_large" | "" {
+	if (Buffer.isBuffer(value)) return value.length > Number(config.max_project_mb || 25) * 1024 * 1024 ? "project_too_large" : "";
 	const encoded = Buffer.byteLength(JSON.stringify(value ?? null));
 	if (encoded > Number(config.max_project_mb || 25) * 1024 * 1024) return "project_too_large";
 	const assets = value && typeof value === "object" && Array.isArray((value as JsonObject).assets) ? (value as JsonObject).assets as unknown[] : [];
@@ -84,6 +85,40 @@ function validateProjectDocument(value: unknown, config): "project_too_large" | 
 		if (Math.floor(entry[1].length * 0.75) > maxAssetBytes) return "asset_too_large";
 	}
 	return "";
+}
+
+const SSP_CONTENT_TYPE = "application/vnd.lorana-tales.story+zip";
+
+function projectRequest(req: Request): { document: unknown; meta: JsonObject } {
+	if (String(req.headers["content-type"] || "").split(";", 1)[0].trim().toLowerCase() !== SSP_CONTENT_TYPE) {
+		const body = readJson(req);
+		return { document: body.document, meta: body };
+	}
+	const document = Buffer.isBuffer(req.body) ? req.body : Buffer.from(req.body || "");
+	if (document.length < 4 || document[0] !== 0x50 || document[1] !== 0x4b) throw new Error("project_invalid");
+	const encoded = String(req.headers["x-lorana-project-meta"] || "");
+	if (!encoded || encoded.length > 8192) throw new Error("project_invalid");
+	const meta = JSON.parse(Buffer.from(encoded, "base64url").toString("utf-8"));
+	if (!meta || typeof meta !== "object" || Array.isArray(meta)) throw new Error("project_invalid");
+	return { document, meta };
+}
+
+function projectSummary(project: Record<string, unknown> | null) {
+	if (!project) return null;
+	const { document: _document, ...summary } = project;
+	return summary;
+}
+
+function sendProject(res: Response, project: Record<string, unknown> | null) {
+	if (!project) { json(res, 404, { error: "project_not_found" }); return; }
+	if (!Buffer.isBuffer(project.document)) { json(res, 200, project); return; }
+	const meta = projectSummary(project);
+	res.status(200).set({
+		"Cache-Control": "no-store",
+		"Content-Type": SSP_CONTENT_TYPE,
+		"Content-Length": String(project.document.length),
+		"X-Lorana-Project-Meta": Buffer.from(JSON.stringify(meta), "utf-8").toString("base64url"),
+	}).send(project.document);
 }
 
 export class AccountService {
@@ -409,15 +444,15 @@ export class AccountService {
 		app.post("/api/account/projects", (req, res) => {
 			const session = this.requireSession(req, res, true); if (!session || !this.requireRiskClearance(session.user.id, "project-write", req, res)) return;
 			try {
-				const body = readJson(req); const sizeError = validateProjectDocument(body.document, this.config);
+				const { document, meta: body } = projectRequest(req); const sizeError = validateProjectDocument(document, this.config);
 				if (sizeError) { json(res, 413, { error: sizeError }); return; }
 				const encryptedSecret = body.sourceSecret ? AccountStore.encryptSecret(String(body.sourceSecret), String(this.config.encryption_key || "")) : "";
 				const policy = this.storagePolicy(session.user);
-				const project = this.store.createProject(session.user.id, String(body.title || "跑团记录"), body.document, { key: String(body.sourceKey || ""), revision: String(body.sourceRevision || ""), encryptedSecret }, policy);
-				this.store.audit(session.user.id, "project.create", project?.id || ""); json(res, 201, project);
+				const project = this.store.createProject(session.user.id, String(body.title || "跑团记录"), document, { key: String(body.sourceKey || ""), revision: String(body.sourceRevision || ""), encryptedSecret }, policy);
+				this.store.audit(session.user.id, "project.create", project?.id || ""); json(res, 201, projectSummary(project as unknown as Record<string, unknown>));
 			} catch (error) { const code = error instanceof Error ? error.message : ""; json(res, code === "storage_quota_exceeded" || code === "project_limit_reached" ? 413 : 400, { error: code || "project_invalid" }); }
 		});
-		app.get("/api/account/projects/:id", (req, res) => { const session = this.requireSession(req, res); if (!session) return; const project = this.store.getProject(session.user.id, req.params.id); json(res, project ? 200 : 404, project || { error: "project_not_found" }); });
+		app.get("/api/account/projects/:id", (req, res) => { const session = this.requireSession(req, res); if (!session) return; sendProject(res, this.store.getProject(session.user.id, req.params.id) as unknown as Record<string, unknown> | null); });
 		app.get("/api/account/projects/:id/source", async (req, res) => {
 			const session = this.requireSession(req, res); if (!session) return;
 			const source = this.store.getProjectSource(session.user.id, req.params.id);
@@ -431,7 +466,7 @@ export class AccountService {
 		});
 		app.put("/api/account/projects/:id", (req, res) => {
 			const session = this.requireSession(req, res, true); if (!session || !this.requireRiskClearance(session.user.id, "project-write", req, res)) return;
-			try { const body = readJson(req); const sizeError = validateProjectDocument(body.document, this.config); if (sizeError) { json(res, 413, { error: sizeError }); return; } const project = this.store.updateProject(session.user.id, req.params.id, Number(body.revision || 0), body.document, body.title ? String(body.title) : undefined, this.storagePolicy(session.user)); json(res, project ? 200 : 409, project || { error: "revision_conflict" }); }
+			try { const { document, meta: body } = projectRequest(req); const sizeError = validateProjectDocument(document, this.config); if (sizeError) { json(res, 413, { error: sizeError }); return; } const project = this.store.updateProject(session.user.id, req.params.id, Number(body.revision || 0), document, body.title ? String(body.title) : undefined, this.storagePolicy(session.user)); json(res, project ? 200 : 409, project ? projectSummary(project as unknown as Record<string, unknown>) : { error: "revision_conflict" }); }
 			catch (error) { const code = error instanceof Error ? error.message : ""; json(res, code === "storage_quota_exceeded" ? 413 : 400, { error: code || "project_invalid" }); }
 		});
 		app.delete("/api/account/projects/:id", (req, res) => { const session = this.requireSession(req, res, true); if (!session || !this.requireRiskClearance(session.user.id, "project-delete", req, res)) return; json(res, this.store.deleteProject(session.user.id, req.params.id) ? 200 : 404, { ok: true }); });

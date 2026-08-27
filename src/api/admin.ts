@@ -314,6 +314,11 @@ export function createAdminRouter({
 		if (!requireAuth(req, res)) return;
 		if (!accountService) { sendJson(res, 404, { error: "accounts_disabled" }); return; }
 		const project = accountService.store.getProjectAsAdmin(req.params.id);
+		if (project && Buffer.isBuffer(project.document)) {
+			const { document, ...meta } = project;
+			res.status(200).set({ "Cache-Control": "no-store", "Content-Type": "application/vnd.lorana-tales.story+zip", "Content-Length": String(document.length), "X-Lorana-Project-Meta": Buffer.from(JSON.stringify(meta), "utf-8").toString("base64url") }).send(document);
+			return;
+		}
 		sendJson(res, project ? 200 : 404, project || { error: "project_not_found" });
 	});
 
