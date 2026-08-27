@@ -74,6 +74,26 @@ function validAvatarUrl(value: string) {
 	catch { return false; }
 }
 
+function sanitizeEffectPreset(value: JsonObject) {
+	const name = String(value.name || "").trim().slice(0, 60);
+	const source = value.config && typeof value.config === "object" && !Array.isArray(value.config) ? value.config as JsonObject : {};
+	const kind = String(value.kind || "screen");
+	if (kind === "interaction") {
+		const effects = new Set(["throw", "heart", "magic", "surprise", "impact", "bullet", "blade"]);
+		const reactions = new Set(["none", "bounce", "stagger", "faint", "shatter", "gray", "affection"]);
+		const interactionEffect = String(source.interactionEffect || "throw");
+		const reaction = String(source.reaction || "stagger");
+		const emoji = String(source.emoji || "").trim().slice(0, 16);
+		if (!name || !effects.has(interactionEffect) || !reactions.has(reaction)) return null;
+		return { name, kind: "interaction", folderId: String(value.folderId || "").slice(0, 80), config: { interactionEffect, reaction, emoji } };
+	}
+	const effects = new Set(["none", "shake-light", "shake-heavy", "glow", "warm-glow", "cold-flash", "flash", "flicker", "damage", "heartbeat", "blackout", "dream", "vignette", "ripple", "curtain", "chromatic", "zoom-focus"]);
+	const colors = new Set(["auto", "neutral", "red", "orange", "gold", "green", "cyan", "blue", "purple", "pink"]);
+	const screenEffect = String(source.screenEffect || "none"); const color = String(source.color || "auto");
+	if (!name || !effects.has(screenEffect) || !colors.has(color)) return null;
+	return { name, kind: "screen", folderId: String(value.folderId || "").slice(0, 80), config: { screenEffect, color, durationMs: Math.min(10000, Math.max(120, Math.round(Number(source.durationMs) || 900))), speedPercent: Math.min(400, Math.max(25, Math.round(Number(source.speedPercent) || 100))), repeat: Math.min(12, Math.max(1, Math.round(Number(source.repeat) || 1))) } };
+}
+
 function validateProjectDocument(value: unknown, config): "project_too_large" | "asset_too_large" | "" {
 	if (Buffer.isBuffer(value)) return value.length > Number(config.max_project_mb || 25) * 1024 * 1024 ? "project_too_large" : "";
 	const encoded = Buffer.byteLength(JSON.stringify(value ?? null));
@@ -441,6 +461,16 @@ export class AccountService {
 		});
 
 		app.get("/api/account/projects", (req, res) => { const session = this.requireSession(req, res); if (session) json(res, 200, this.store.listProjects(session.user.id)); });
+		app.get("/api/account/effect-presets", (req, res) => { const session = this.requireSession(req, res); if (session) json(res, 200, { items: this.store.listEffectPresets(session.user.id), folders: this.store.listEffectFolders(session.user.id), limit: Number(this.config.max_effect_presets || 100) }); });
+		app.post("/api/account/effect-presets", (req, res) => { const session = this.requireSession(req, res, true); if (!session) return; if(this.store.effectPresetCount(session.user.id)>=Number(this.config.max_effect_presets||100)){json(res,413,{error:"effect_preset_limit"});return;} const body = readJson(req); const preset = sanitizeEffectPreset(body); if (!preset) { json(res, 400, { error: "effect_preset_invalid" }); return; } const folders=new Set(this.store.listEffectFolders(session.user.id).map((item)=>item.id));const folderId=folders.has(preset.folderId)?preset.folderId:"";json(res, 201, this.store.createEffectPreset(session.user.id, preset.name, preset.config,folderId,preset.kind)); });
+		app.put("/api/account/effect-presets/:id", (req, res) => { const session = this.requireSession(req, res, true); if (!session) return; const body = readJson(req); const preset = sanitizeEffectPreset(body); if (!preset) { json(res, 400, { error: "effect_preset_invalid" }); return; } const folders=new Set(this.store.listEffectFolders(session.user.id).map((item)=>item.id));const folderId=folders.has(preset.folderId)?preset.folderId:"";const saved = this.store.updateEffectPreset(session.user.id, req.params.id, preset.name, preset.config,folderId,preset.kind); json(res, saved ? 200 : 404, saved || { error: "effect_preset_not_found" }); });
+		app.delete("/api/account/effect-presets/:id", (req, res) => { const session = this.requireSession(req, res, true); if (!session) return; json(res, this.store.deleteEffectPreset(session.user.id, req.params.id) ? 200 : 404, { ok: true }); });
+		app.post("/api/account/effect-presets/:id/share",(req,res)=>{const session=this.requireSession(req,res,true);if(!session)return;const share=this.store.createEffectShare(session.user.id,req.params.id);json(res,share?201:404,share||{error:"effect_preset_not_found"});});
+		app.post("/api/account/effect-presets/import",(req,res)=>{const session=this.requireSession(req,res,true);if(!session)return;if(this.store.effectPresetCount(session.user.id)>=Number(this.config.max_effect_presets||100)){json(res,413,{error:"effect_preset_limit"});return;}const body=readJson(req),shared=this.store.getEffectShare(String(body.code||"").trim());if(!shared){json(res,404,{error:"effect_share_not_found"});return;}const safe=sanitizeEffectPreset({name:shared.name,kind:shared.kind,config:shared.config});if(!safe){json(res,400,{error:"effect_preset_invalid"});return;}let folder=this.store.listEffectFolders(session.user.id).find(item=>item.name==="导入的特效");if(!folder)folder=this.store.createEffectFolder(session.user.id,"导入的特效");json(res,201,this.store.createEffectPreset(session.user.id,safe.name,safe.config,folder.id,safe.kind));});
+		app.get("/api/account/effect-folders",(req,res)=>{const session=this.requireSession(req,res);if(session)json(res,200,this.store.listEffectFolders(session.user.id));});
+		app.post("/api/account/effect-folders",(req,res)=>{const session=this.requireSession(req,res,true);if(!session)return;const name=String(readJson(req).name||"").trim();if(!name){json(res,400,{error:"effect_folder_invalid"});return;}json(res,201,this.store.createEffectFolder(session.user.id,name));});
+		app.put("/api/account/effect-folders/:id",(req,res)=>{const session=this.requireSession(req,res,true);if(!session)return;const name=String(readJson(req).name||"").trim();const saved=Boolean(name&&this.store.renameEffectFolder(session.user.id,req.params.id,name));json(res,saved?200:404,saved?{ok:true}:{error:"effect_folder_not_found"});});
+		app.delete("/api/account/effect-folders/:id",(req,res)=>{const session=this.requireSession(req,res,true);if(!session)return;json(res,this.store.deleteEffectFolder(session.user.id,req.params.id)?200:404,{ok:true});});
 		app.post("/api/account/projects", (req, res) => {
 			const session = this.requireSession(req, res, true); if (!session || !this.requireRiskClearance(session.user.id, "project-write", req, res)) return;
 			try {

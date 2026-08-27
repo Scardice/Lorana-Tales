@@ -49,7 +49,15 @@ async function assertViewportIntegrity(page: Page) {
 async function setDarkTheme(page: Page, dark: boolean) {
 	const html = page.locator("html");
 	const current = await html.evaluate(element => element.classList.contains("dark"));
-	if (current !== dark) await page.locator(".theme-toggle").click();
+	if (current !== dark) {
+		await page.getByRole("button", { name: "更多" }).click();
+		await page.getByText("界面与输入设置", { exact: true }).click();
+		const settings = page.locator(".settings-modal");
+		const appearance = settings.locator(".settings-group").filter({ hasText: "外观" });
+		await appearance.locator(".n-select").click();
+		await page.getByText(dark ? "深色" : "浅色", { exact: true }).last().click();
+		await page.getByRole("button", { name: "关闭设置" }).click();
+	}
 	if (dark) await expect(html).toHaveClass(/dark/);
 	else await expect(html).not.toHaveClass(/dark/);
 }
@@ -79,6 +87,21 @@ test.describe("Lorana Tales story editor", () => {
 
 		await addTextMessage(page, "第一条测试消息");
 		await expect(page.getByText(/1 条消息 · 0 个角色 · 7 字/)).toBeVisible();
+		const firstMessage = page.locator("article.story-message").first();
+		await firstMessage.getByRole("button", { name: "消息操作" }).click();
+		await page.getByRole("menuitem", { name: "编辑" }).click();
+		const inlineEditor = firstMessage.locator(".bubble--editing textarea");
+		await expect(inlineEditor).toBeVisible();
+		expect(await firstMessage.locator(".bubble--editing").evaluate(element => element.getBoundingClientRect().width)).toBeGreaterThanOrEqual(250);
+		await expect(firstMessage.getByRole("button", { name: "确认" })).toBeVisible();
+		await expect(firstMessage.getByRole("button", { name: "取消" })).toBeVisible();
+		await page.locator(".story-title").click();
+		await expect(inlineEditor).toBeHidden();
+		await firstMessage.getByRole("button", { name: "消息操作" }).click();
+		await page.getByRole("menuitem", { name: "编辑" }).click();
+		await inlineEditor.fill("第一条测试消息（已编辑）");
+		await inlineEditor.press("Enter");
+		await expect(firstMessage.getByText("第一条测试消息（已编辑）", { exact: true })).toBeVisible();
 
 		await page.getByRole("button", { name: "新增角色" }).click();
 		await expect(page.getByRole("heading", { name: "创建角色" })).toBeVisible();
@@ -135,10 +158,18 @@ test.describe("Lorana Tales story editor", () => {
 		await expect(performanceModal.getByRole("button", { name: "关闭消息演出编排" })).toBeVisible();
 		await expect(performanceModal.getByRole("button", { name: "清除编排" })).toBeVisible();
 		await expect(performanceModal.getByRole("button", { name: "保存" })).toBeVisible();
-		await performanceModal.locator("label").filter({ hasText: /^屏幕效果/ }).locator(".n-base-selection").click();
-		await page.locator(".n-base-select-option").filter({ hasText: "中心绽放" }).click();
-		await expect(performanceModal.getByLabel("屏幕特效颜色")).toBeVisible();
-		await performanceModal.getByRole("button", { name: "绯红" }).click();
+		await performanceModal.getByRole("button", { name: "选择特效" }).click();
+		const effectPicker = performanceModal.getByLabel("特效选择");
+		await effectPicker.getByRole("button", { name: "屏幕特效" }).click();
+		await effectPicker.getByRole("button", { name: /中心绽放/ }).click();
+		await effectPicker.getByRole("button", { name: "绯红" }).click();
+		await effectPicker.getByRole("button", { name: "互动特效" }).click();
+		await expect(effectPicker.getByText("双方头像会在独立动画层中互动，不推动消息布局", { exact: true })).toBeVisible();
+		await expect(effectPicker.getByRole("button", { name: /投掷 Emoji/ })).toBeVisible();
+		await expect(effectPicker.getByRole("button", { name: /晕倒/ })).toBeVisible();
+		await page.waitForTimeout(650);
+		await page.screenshot({ path: "test-results/story-interaction-effect-picker-light.png", fullPage: true });
+		await effectPicker.getByRole("button", { name: "文本特效" }).click();
 		const splittableToken = performanceModal.locator(".token-chip-list button").filter({ hasText: /../ }).first();
 		await expect(splittableToken).toBeVisible();
 		const tokenCount = await performanceModal.locator(".token-chip-list button").count();

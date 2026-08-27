@@ -302,6 +302,7 @@ export function storyFromLogItems(
     characters,
     messages,
     effectTracks: [],
+    characterStateEvents: [],
     settings: defaultStorySettings(),
     source: options.sourceKey
       ? {
@@ -403,6 +404,9 @@ export function normalizeStoryDocument(input: StoryDocument): StoryDocument {
       : [],
     effectTracks: Array.isArray(input.effectTracks)
       ? input.effectTracks.filter((track) => track && typeof track.id === "string" && typeof track.startMessageId === "string" && typeof track.endMessageId === "string").map((track) => ({ ...track, color: typeof track.color === "string" && ["auto", "neutral", "red", "orange", "gold", "green", "cyan", "blue", "purple", "pink"].includes(track.color) ? track.color : undefined }))
+      : [],
+    characterStateEvents: Array.isArray(input.characterStateEvents)
+      ? input.characterStateEvents.filter((event) => event && typeof event.id === "string" && typeof event.characterId === "string" && typeof event.afterMessageId === "string" && ["normal", "gray", "injured", "frozen", "cursed", "out", "dead", "wasted"].includes(event.state))
       : [],
     settings,
     source: input.source || { kind: "none" },

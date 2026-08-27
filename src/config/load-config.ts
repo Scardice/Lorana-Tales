@@ -79,6 +79,7 @@ const DEFAULT_CONFIG = {
 		allowed_email_domains: [],
 		max_project_mb: 25,
 		max_asset_mb: 12,
+		max_effect_presets: 100,
 		captcha_provider: "image",
 		captcha_ttl_seconds: 120,
 		risk_trust_minutes: 30,
@@ -368,6 +369,7 @@ export function loadConfig() {
 	if (process.env.SMTP_SUBJECT_TEMPLATE) config.accounts.smtp.subject_template = process.env.SMTP_SUBJECT_TEMPLATE;
 	if (process.env.SMTP_TEXT_TEMPLATE_PATH) config.accounts.smtp.text_template_path = process.env.SMTP_TEXT_TEMPLATE_PATH;
 	if (process.env.SMTP_HTML_TEMPLATE_PATH) config.accounts.smtp.html_template_path = process.env.SMTP_HTML_TEMPLATE_PATH;
+	if (process.env.ACCOUNT_MAX_EFFECT_PRESETS) config.accounts.max_effect_presets = Math.max(1, parseInt(process.env.ACCOUNT_MAX_EFFECT_PRESETS, 10) || 100);
 	if (process.env.ALTCHA_HMAC_KEY) config.accounts.altcha.hmac_key = process.env.ALTCHA_HMAC_KEY;
 	if (process.env.TURNSTILE_SITE_KEY) config.accounts.turnstile.site_key = process.env.TURNSTILE_SITE_KEY;
 	if (process.env.TURNSTILE_SECRET_KEY) config.accounts.turnstile.secret_key = process.env.TURNSTILE_SECRET_KEY;

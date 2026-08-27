@@ -1,6 +1,6 @@
 import type { LogItem } from "~/logManager/types";
 
-export const STORY_SCHEMA_VERSION = 7;
+export const STORY_SCHEMA_VERSION = 9;
 
 export type StoryPosition = "left" | "right" | "narrator";
 export type StoryTheme = "auto" | "light" | "dark";
@@ -69,12 +69,20 @@ export interface StoryMessagePerformance {
   screenEffect?: StoryScreenEffect;
   /** Safe preset colour applied independently from the effect motion. */
   screenEffectColor?: StoryEffectColor;
+  /** Base duration of one screen-effect cycle. */
+  screenEffectDurationMs?: number;
+  /** Playback speed applied to the base duration; 100 is normal speed. */
+  screenEffectSpeedPercent?: number;
+  /** Number of times the screen-effect cycle repeats. */
+  screenEffectRepeat?: number;
   /** Choreographed interaction between the speaking character and another character. */
   interaction?: {
     effect: StoryInteractionEffect;
     targetCharacterId: string;
     /** Emoji or a short glyph used as the projectile/symbol. */
     emoji?: string;
+    /** Independent response animation for the target; none supports deliberate non-response. */
+    reaction?: StoryInteractionReaction;
   };
   /** Automatically open an image after it appears, then close it after the configured time. */
   imagePreview?: {
@@ -88,9 +96,11 @@ export interface StoryMessagePerformance {
 }
 
 export type StoryStreamTokenAnimation = "none" | "fade" | "rise" | "blur" | "impact" | "shake" | "ghost";
-export type StoryScreenEffect = "none" | "shake-light" | "shake-heavy" | "glow" | "warm-glow" | "cold-flash" | "flash" | "flicker" | "damage" | "heartbeat" | "blackout" | "dream" | "vignette";
+export type StoryScreenEffect = "none" | "shake-light" | "shake-heavy" | "glow" | "warm-glow" | "cold-flash" | "flash" | "flicker" | "damage" | "heartbeat" | "blackout" | "dream" | "vignette" | "ripple" | "curtain" | "chromatic" | "zoom-focus";
 export type StoryEffectColor = "auto" | "neutral" | "red" | "orange" | "gold" | "green" | "cyan" | "blue" | "purple" | "pink";
-export type StoryInteractionEffect = "throw" | "heart" | "magic" | "surprise" | "impact";
+export type StoryInteractionEffect = "throw" | "heart" | "magic" | "surprise" | "impact" | "bullet" | "blade";
+export type StoryInteractionReaction = "none" | "bounce" | "stagger" | "faint" | "shatter" | "gray" | "affection";
+export type StoryCharacterState = "normal" | "gray" | "injured" | "frozen" | "cursed" | "out" | "dead" | "wasted";
 export type StoryPersistentEffect = "low-health" | "curse" | "dream-haze" | "storm" | "magic-aura";
 
 export interface StoryEffectTrack {
@@ -99,6 +109,16 @@ export interface StoryEffectTrack {
   color?: StoryEffectColor;
   startMessageId: string;
   endMessageId: string;
+}
+
+export interface StoryCharacterStateEvent {
+  id: string;
+  characterId: string;
+  state: StoryCharacterState;
+  /** The state starts after this message and remains until another event for the character. */
+  afterMessageId: string;
+  /** Optional short badge, otherwise the state's localized default is used. */
+  label?: string;
 }
 
 export interface StoryTextMessage extends StoryMessageBase {
@@ -196,6 +216,8 @@ export interface StoryDocument {
   messages: StoryMessage[];
   /** Story-level persistent effects spanning an inclusive message range. */
   effectTracks: StoryEffectTrack[];
+  /** Persistent per-character state changes ordered on the story timeline. */
+  characterStateEvents: StoryCharacterStateEvent[];
   settings: StorySettings;
   source: StorySourceBinding;
 }

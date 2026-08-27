@@ -211,6 +211,22 @@ export class AccountStore {
 			);
 			CREATE INDEX IF NOT EXISTS idx_editor_projects_user ON editor_projects(user_id, updated_at DESC);
 
+			CREATE TABLE IF NOT EXISTS account_effect_presets (
+				id TEXT PRIMARY KEY,
+				user_id TEXT NOT NULL,
+				name TEXT NOT NULL,
+				kind TEXT NOT NULL DEFAULT 'screen',
+				folder_id TEXT NOT NULL DEFAULT '',
+				preset_json TEXT NOT NULL,
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL,
+				FOREIGN KEY(user_id) REFERENCES account_users(id) ON DELETE CASCADE
+			);
+			CREATE INDEX IF NOT EXISTS idx_effect_presets_user ON account_effect_presets(user_id, updated_at DESC);
+			CREATE TABLE IF NOT EXISTS account_effect_folders (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, FOREIGN KEY(user_id) REFERENCES account_users(id) ON DELETE CASCADE);
+			CREATE INDEX IF NOT EXISTS idx_effect_folders_user ON account_effect_folders(user_id, updated_at DESC);
+			CREATE TABLE IF NOT EXISTS effect_preset_shares (code TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, preset_json TEXT NOT NULL, created_by TEXT NOT NULL, created_at TEXT NOT NULL, FOREIGN KEY(created_by) REFERENCES account_users(id) ON DELETE CASCADE);
+
 			CREATE TABLE IF NOT EXISTS account_audit_log (
 				id INTEGER PRIMARY KEY AUTOINCREMENT,
 				actor TEXT NOT NULL,
@@ -236,6 +252,9 @@ export class AccountStore {
 		if (!columns.has("nickname")) this.db.exec("ALTER TABLE account_users ADD COLUMN nickname TEXT NOT NULL DEFAULT ''");
 		if (!columns.has("avatar_url")) this.db.exec("ALTER TABLE account_users ADD COLUMN avatar_url TEXT NOT NULL DEFAULT ''");
 		if (!columns.has("account_group")) this.db.exec("ALTER TABLE account_users ADD COLUMN account_group TEXT NOT NULL DEFAULT 'default'");
+		const presetColumns = new Set((this.db.prepare("PRAGMA table_info(account_effect_presets)").all() as SqlRow[]).map((row) => String(row.name || "")));
+		if (!presetColumns.has("kind")) this.db.exec("ALTER TABLE account_effect_presets ADD COLUMN kind TEXT NOT NULL DEFAULT 'screen'");
+		if (!presetColumns.has("folder_id")) this.db.exec("ALTER TABLE account_effect_presets ADD COLUMN folder_id TEXT NOT NULL DEFAULT ''");
 		const legacyUsers = this.db.prepare("SELECT id, email, display_name, username, nickname FROM account_users").all() as SqlRow[];
 		const updateLegacy = this.db.prepare("UPDATE account_users SET username = ?, nickname = ?, display_name = ? WHERE id = ?");
 		for (const row of legacyUsers) {
@@ -596,6 +615,32 @@ export class AccountStore {
 	deleteProject(userId: string, id: string) {
 		return this.db.prepare("DELETE FROM editor_projects WHERE id = ? AND user_id = ?").run(id, userId).changes === 1;
 	}
+
+	listEffectPresets(userId: string) {
+		return (this.db.prepare("SELECT id, name, kind, folder_id, preset_json, created_at, updated_at FROM account_effect_presets WHERE user_id = ? ORDER BY updated_at DESC").all(userId) as SqlRow[]).map((row) => ({ id: String(row.id), name: String(row.name), kind: String(row.kind || "screen"), folderId: String(row.folder_id || ""), config: JSON.parse(String(row.preset_json)), createdAt: String(row.created_at), updatedAt: String(row.updated_at) }));
+	}
+
+	effectPresetCount(userId: string) { return Number((this.db.prepare("SELECT COUNT(*) AS total FROM account_effect_presets WHERE user_id = ?").get(userId) as SqlRow).total || 0); }
+	createEffectPreset(userId: string, name: string, config: unknown, folderId = "", kind = "screen") {
+		const id = crypto.randomUUID(); const now = nowIso();
+		this.db.prepare("INSERT INTO account_effect_presets (id, user_id, name, kind, folder_id, preset_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run(id, userId, name.slice(0, 60), kind, folderId, JSON.stringify(config), now, now);
+		return this.listEffectPresets(userId).find((item) => item.id === id);
+	}
+
+	updateEffectPreset(userId: string, id: string, name: string, config: unknown, folderId = "", kind = "screen") {
+		const result = this.db.prepare("UPDATE account_effect_presets SET name = ?, kind = ?, folder_id = ?, preset_json = ?, updated_at = ? WHERE id = ? AND user_id = ?").run(name.slice(0, 60), kind, folderId, JSON.stringify(config), nowIso(), id, userId);
+		return result.changes ? this.listEffectPresets(userId).find((item) => item.id === id) : null;
+	}
+
+	deleteEffectPreset(userId: string, id: string) {
+		return this.db.prepare("DELETE FROM account_effect_presets WHERE id = ? AND user_id = ?").run(id, userId).changes === 1;
+	}
+	listEffectFolders(userId: string) { return (this.db.prepare("SELECT id, name FROM account_effect_folders WHERE user_id = ? ORDER BY updated_at DESC").all(userId) as SqlRow[]).map((row) => ({ id: String(row.id), name: String(row.name) })); }
+	createEffectFolder(userId: string, name: string) { const id = crypto.randomUUID(); const now = nowIso(); this.db.prepare("INSERT INTO account_effect_folders (id,user_id,name,created_at,updated_at) VALUES (?,?,?,?,?)").run(id,userId,name.slice(0,40),now,now); return { id, name: name.slice(0,40) }; }
+	renameEffectFolder(userId: string, id: string, name: string) { return this.db.prepare("UPDATE account_effect_folders SET name=?,updated_at=? WHERE id=? AND user_id=?").run(name.slice(0,40),nowIso(),id,userId).changes === 1; }
+	deleteEffectFolder(userId: string, id: string) { const transaction=this.db.transaction(()=>{this.db.prepare("UPDATE account_effect_presets SET folder_id='' WHERE user_id=? AND folder_id=?").run(userId,id);return this.db.prepare("DELETE FROM account_effect_folders WHERE id=? AND user_id=?").run(id,userId).changes===1});return transaction(); }
+	createEffectShare(userId: string, presetId: string) { const preset=this.db.prepare("SELECT name,kind,preset_json FROM account_effect_presets WHERE id=? AND user_id=?").get(presetId,userId) as SqlRow|undefined;if(!preset)return null;let code="";do{code=`LT-${crypto.randomBytes(6).toString("base64url").toUpperCase()}`}while(this.db.prepare("SELECT 1 FROM effect_preset_shares WHERE code=?").get(code));this.db.prepare("INSERT INTO effect_preset_shares (code,name,kind,preset_json,created_by,created_at) VALUES (?,?,?,?,?,?)").run(code,preset.name,preset.kind,preset.preset_json,userId,nowIso());return{code}; }
+	getEffectShare(code:string){const row=this.db.prepare("SELECT name,kind,preset_json FROM effect_preset_shares WHERE code=?").get(code.toUpperCase()) as SqlRow|undefined;return row?{name:String(row.name),kind:String(row.kind),config:JSON.parse(String(row.preset_json))}:null;}
 
 	deleteUser(userId: string, projectAction: "delete" | "archive" | "transfer", transferUserId = "") {
 		const transaction = this.db.transaction(() => {

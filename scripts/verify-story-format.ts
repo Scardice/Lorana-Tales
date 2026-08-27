@@ -56,7 +56,7 @@ document.messages.push(
 			tokenAnimation: "impact",
 			screenEffect: "damage",
 			screenEffectColor: "purple",
-			interaction: { effect: "heart", targetCharacterId: "character-narrator", emoji: "❤" },
+			interaction: { effect: "heart", targetCharacterId: "character-narrator", emoji: "❤", reaction: "affection" },
 		},
 	},
 	{
@@ -71,6 +71,7 @@ document.messages.push(
 	},
 );
 document.effectTracks.push({ id: "effect-one", effect: "low-health", color: "orange", startMessageId: "message-text", endMessageId: "message-image" });
+document.characterStateEvents.push({ id: "state-one", characterId: "alice", state: "dead", afterMessageId: "message-text", label: "阵亡" });
 const archive: StoryArchive = { document, assets: new Map([["avatar-one", bytes], ["image-two", bytes]]) };
 
 const blob = await createStoryPackage(archive);
@@ -91,6 +92,9 @@ assert.equal(restored.document.characters.find((item) => item.id === "alice")?.a
 assert.equal(restored.document.messages[0].performance?.screenEffect, "damage");
 assert.equal(restored.document.messages[0].performance?.screenEffectColor, "purple");
 assert.equal(restored.document.effectTracks[0]?.color, "orange");
+assert.equal(restored.document.messages[0].performance?.interaction?.reaction, "affection");
+assert.equal(restored.document.characterStateEvents[0]?.state, "dead");
+assert.equal(restored.document.characterStateEvents[0]?.label, "阵亡");
 assert.equal(restored.document.messages[0].sourcePartText, "原始分段");
 assert.equal(restored.document.messages[1].performance?.imagePreview?.durationMs, 1500);
 assert.equal(restored.assets.get("avatar-one")?.byteLength, bytes.byteLength);
@@ -128,6 +132,8 @@ assert.match(html, /id="next"/);
 assert.match(html, /id="volume"/);
 assert.match(html, /id="fullscreen"/);
 assert.match(html, /persistent-layer/);
+assert.match(html, /characterStateByMessage/);
+assert.match(html, /reaction-affection/);
 assert.doesNotMatch(html, /<\/script>\s*测试/);
 assert.doesNotMatch(html, /https?:\/\//);
 const scripts = [...html.matchAll(/<script(?: [^>]*)?>([\s\S]*?)<\/script>/g)];
@@ -144,6 +150,7 @@ largeDocument.messages = Array.from({ length: 10_000 }, (_, index) => ({
 	text: `第 ${index + 1} 条性能验证消息`,
 }));
 largeDocument.effectTracks = [];
+largeDocument.characterStateEvents = [];
 const largeHtml = await createPerformanceHtml({ document: largeDocument, assets: new Map() }, async () => "", async () => "");
 assert.match(largeHtml, /const windowSize=360/);
 assert.match(largeHtml, /"id":"large-9999"/);

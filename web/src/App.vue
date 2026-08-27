@@ -19,6 +19,9 @@ type EditorShellConfig = {
 const isDark = useThemeDark();
 const ready = ref(false);
 const legacyCompatible = ref(true);
+const legacyWarningOpen = ref(false);
+const legacyDiscardStep = ref(0);
+const legacyDiscarding = ref(false);
 const upperBarCollapsed = ref(localStorage.getItem("scardice.upper-toolbar.collapsed") === "1");
 const config = ref<EditorShellConfig>({
 	defaultMode: "story",
@@ -38,14 +41,39 @@ const requestedMode = computed<EditorMode>(() => {
 function switchMode(mode: EditorMode) {
 	if (mode === "story" && !config.value.storyModeEnabled) return;
 	if (mode === "legacy" && requestedMode.value === "story" && !legacyCompatible.value) {
-		alert("这个故事已经包含 Lorana Tales 新版编辑内容，经典染色器无法无损读取。请先在下载菜单导出“传统日志 TXT”，再到经典染色器中导入。");
+		legacyDiscardStep.value = 0;
+		legacyWarningOpen.value = true;
 		return;
 	}
 	location.assign(`${mode === "story" ? "/story" : "/legacy"}${location.search}${location.hash}`);
 }
 
-function toggleTheme() {
-	isDark.value = !isDark.value;
+function closeLegacyWarning() {
+	if (legacyDiscarding.value) return;
+	legacyWarningOpen.value = false;
+	legacyDiscardStep.value = 0;
+}
+
+async function discardAndSwitchToLegacy() {
+	if (legacyDiscardStep.value === 0) {
+		legacyDiscardStep.value = 1;
+		return;
+	}
+	legacyDiscarding.value = true;
+	try {
+		await new Promise<void>((resolve, reject) => {
+			const timer = window.setTimeout(() => reject(new Error("编辑器未能及时清除本地草稿")), 4000);
+			window.dispatchEvent(new CustomEvent("lorana-story-discard-for-legacy", { detail: {
+				resolve: () => { window.clearTimeout(timer); resolve(); },
+				reject: (error: unknown) => { window.clearTimeout(timer); reject(error); },
+			} }));
+		});
+		legacyCompatible.value = true;
+		location.assign(`/legacy${location.search}${location.hash}`);
+	} catch (error) {
+		alert(error instanceof Error ? error.message : "无法清除当前日志的本地修改");
+		legacyDiscarding.value = false;
+	}
 }
 
 function setUpperBarCollapsed(value: boolean) {
@@ -105,7 +133,6 @@ onBeforeUnmount(() => {
 						<nav v-show="!upperBarCollapsed" class="global-upperbar" aria-label="站点工具栏">
 							<div id="global-account-slot" class="global-account-slot"><AccountPanel v-if="requestedMode === 'legacy'" /></div>
 							<div class="global-brand-area">
-								<button class="theme-toggle" :title="isDark ? '切换到日间模式' : '切换到夜间模式'" :aria-label="isDark ? '切换到日间模式' : '切换到夜间模式'" @click="toggleTheme"><svg v-if="isDark" viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 12.8A6.2 6.2 0 0 1 7.2 4.5 6.2 6.2 0 1 0 15.5 12.8Z"/></svg><svg v-else viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="3.2"/><path d="M10 2v2M10 16v2M2 10h2M16 10h2M4.3 4.3l1.4 1.4M14.3 14.3l1.4 1.4M15.7 4.3l-1.4 1.4M5.7 14.3l-1.4 1.4"/></svg></button>
 								<button v-if="config.storyModeEnabled" class="mode-toggle" :class="{ active: requestedMode === 'story' }" :title="requestedMode === 'story' ? '切换到经典编辑' : '切换到沉浸编辑'" @click="switchMode(requestedMode === 'story' ? 'legacy' : 'story')">
 									<i><span></span></i><b>{{ requestedMode === "story" ? "沉浸" : "经典" }}</b>
 								</button>
@@ -128,6 +155,7 @@ onBeforeUnmount(() => {
 
 						<StoryPage v-if="requestedMode === 'story'" />
 						<Main v-else legacy-only />
+						<Teleport to="body"><Transition name="mode-warning"><div v-if="legacyWarningOpen" class="mode-warning" @click.self="closeLegacyWarning"><section role="alertdialog" aria-modal="true" aria-labelledby="legacy-warning-title"><header><div><strong id="legacy-warning-title">经典模式无法读取新版编辑</strong><small>当前故事包含 Lorana Tales 新版内容</small></div><button class="mode-warning__close" type="button" aria-label="关闭" @click="closeLegacyWarning"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15" /></svg></button></header><p>建议先从下载菜单导出“传统日志 TXT”，再到经典染色器中导入。</p><div v-if="legacyDiscardStep" class="mode-warning__danger"><strong>再次确认丢弃？</strong><span>只会删除当前日志在这个浏览器里的新版草稿；服务端原日志、已下载文件和其他工程不受影响。未导出的新版编辑无法恢复。</span></div><footer><button type="button" @click="closeLegacyWarning">返回编辑</button><button class="danger" type="button" :disabled="legacyDiscarding" @click="discardAndSwitchToLegacy">{{ legacyDiscarding ? "正在清除…" : legacyDiscardStep ? "确认丢弃并进入经典" : "丢弃新版修改" }}</button></footer></section></div></Transition></Teleport>
 					</div>
 				</n-notification-provider>
 			</n-modal-provider>
@@ -145,11 +173,12 @@ onBeforeUnmount(() => {
 @media(max-width:650px){.global-upperbar{grid-template-columns:42px auto minmax(0,1fr);gap:.25rem;padding:.3rem .42rem}.global-account-slot :deep(.account-trigger){width:42px;padding:.3rem!important}.global-account-slot :deep(.account-trigger)>span:last-child{display:none}.global-utilities{gap:.18rem}.mode-toggle{width:36px;padding:.25rem!important}.mode-toggle i{width:30px;height:18px}.mode-toggle i span{width:12px;height:12px}.mode-toggle.active i span{left:15px}.mode-toggle b{display:none}.global-brand-area{min-width:0;gap:.18rem}.toolbar-fold{width:32px;height:32px}.site-brand{min-width:0;flex:0 1 auto;margin-left:auto;gap:.3rem}.site-brand img,.site-brand__fallback{width:27px;height:27px;flex-basis:27px;border-radius:7px}.site-brand strong{max-width:min(42vw,15rem);min-width:0;flex:0 1 auto;font-size:.7rem}.global-workbar{grid-template-columns:minmax(5.5rem,1fr) auto;gap:.25rem;min-height:48px;padding:.32rem .42rem}.global-title-slot{grid-column:1;justify-self:stretch;max-width:none;justify-content:flex-start}.global-title-slot :deep(.story-title strong){max-width:32vw}.global-title-slot :deep(.story-title small){display:block;max-width:32vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.58rem}.workbar-edge--right{grid-column:2}.workbar-edge--right :deep(.story-editor__header-actions){gap:.32rem}}
 .global-upperbar{grid-template-columns:minmax(8rem,1fr) auto}.site-brand img{display:block;width:auto;max-width:min(22vw,180px);height:auto;max-height:30px;flex:0 1 auto;border-radius:0;background:transparent;object-fit:contain}@media(max-width:650px){.global-upperbar{grid-template-columns:42px minmax(0,1fr)}.site-brand img{width:auto;max-width:24vw;height:auto;max-height:27px;flex-basis:auto;border-radius:0}}
 .global-upperbar{min-height:44px;padding:.25rem .55rem}.global-workbar{min-height:44px;padding:.25rem .55rem}.theme-toggle,.toolbar-fold,.toolbar-expand{width:34px;height:34px}.global-upperbar button,.global-workbar button{padding:.38rem .55rem}@media(max-width:650px){.global-upperbar{padding:.22rem .38rem}.global-workbar{min-height:42px;padding:.22rem .38rem}.theme-toggle,.toolbar-fold,.toolbar-expand{width:32px;height:32px}}
+.mode-warning{position:fixed;inset:0;z-index:20000;display:grid;place-items:center;padding:1rem;background:#0009}.mode-warning section{box-sizing:border-box;width:min(470px,100%);max-height:calc(100dvh - 2rem);overflow:auto;border:1px solid var(--control-border);border-radius:16px;padding:1rem;background:var(--panel-surface);box-shadow:0 20px 60px #0007;color:var(--control-text)}.mode-warning header,.mode-warning footer{display:flex;align-items:center;gap:.65rem}.mode-warning header{justify-content:space-between}.mode-warning header>div{display:grid;gap:.12rem}.mode-warning header small,.mode-warning p,.mode-warning__danger span{color:var(--muted-text)}.mode-warning p{margin:.85rem 0;line-height:1.55}.mode-warning footer{justify-content:flex-end;margin-top:1rem}.mode-warning button{min-height:36px;border:1px solid var(--control-border);border-radius:9px;padding:.45rem .75rem;background:var(--control-surface);color:var(--control-text);font:inherit;cursor:pointer}.mode-warning button:hover{background:var(--control-hover)}.mode-warning button:disabled{opacity:.55;cursor:wait}.mode-warning button.danger{border-color:color-mix(in srgb,var(--danger-bg) 58%,var(--control-border));background:var(--danger-bg);color:var(--danger-text)}.mode-warning__close{display:grid;width:34px;min-width:34px;padding:0!important;place-items:center}.mode-warning__close svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round}.mode-warning__danger{display:grid;gap:.22rem;border:1px solid color-mix(in srgb,var(--danger-bg) 45%,var(--control-border));border-radius:11px;padding:.75rem;background:color-mix(in srgb,var(--danger-bg) 11%,var(--panel-surface))}.mode-warning__danger strong{color:var(--danger-ink)}.mode-warning-enter-active,.mode-warning-leave-active{transition:opacity .18s ease}.mode-warning-enter-active section,.mode-warning-leave-active section{transition:transform .22s cubic-bezier(.2,.75,.2,1),opacity .18s ease}.mode-warning-enter-from,.mode-warning-leave-to{opacity:0}.mode-warning-enter-from section,.mode-warning-leave-to section{opacity:0;transform:translateY(12px) scale(.98)}@media(max-width:650px){.mode-warning{place-items:stretch;padding:0}.mode-warning section{width:100%;height:100%;max-height:none;border:0;border-radius:0;padding:max(1rem,env(safe-area-inset-top)) .85rem max(1rem,env(safe-area-inset-bottom));box-shadow:none}.mode-warning footer{position:sticky;bottom:0;margin:1rem -.85rem 0;padding:.8rem .85rem;background:var(--panel-surface)}.mode-warning footer button{flex:1}}
 </style>
 
 <style>
-:root{color-scheme:light;--app-bg:#eef2f3;--panel-surface:#fff;--soft-surface:#f2f5f5;--control-bg:#fff;--control-surface:#e4e9e8;--control-hover:#d8dfde;--control-text:#172220;--muted-text:#52615e;--placeholder-text:#76827f;--control-border:#aebbb8;--focus-color:#0e747b;--primary-bg:#0e747b;--primary-hover:#0b646a;--primary-text:#fff;--danger-bg:#a13f46;--danger-ink:#76252d;--danger-text:#fff}
-html.dark{color-scheme:dark;--app-bg:#0d1514;--panel-surface:#17201f;--soft-surface:#111817;--control-bg:#0f1615;--control-surface:#293634;--control-hover:#344340;--control-text:#edf3f2;--muted-text:#a7b4b1;--placeholder-text:#8e9b98;--control-border:#465553;--focus-color:#4bcbd2;--primary-bg:#0e747b;--primary-hover:#11828a;--primary-text:#fff;--danger-bg:#a63b43;--danger-ink:#ffb7bc;--danger-text:#fff}
+:root{color-scheme:light;--app-bg:#eef2f3;--panel-surface:#fff;--soft-surface:#f2f5f5;--control-bg:#fff;--control-surface:#e4e9e8;--control-hover:#d8dfde;--control-text:#172220;--muted-text:#52615e;--placeholder-text:#76827f;--control-border:#aebbb8;--focus-color:#0e747b;--selected-bg:#d6e9e7;--primary-bg:#0e747b;--primary-hover:#0b646a;--primary-text:#fff;--danger-bg:#a13f46;--danger-ink:#76252d;--danger-text:#fff;--danger-soft:#f3e1e2}
+html.dark{color-scheme:dark;--app-bg:#0d1514;--panel-surface:#17201f;--soft-surface:#111817;--control-bg:#0f1615;--control-surface:#293634;--control-hover:#344340;--control-text:#edf3f2;--muted-text:#a7b4b1;--placeholder-text:#8e9b98;--control-border:#465553;--focus-color:#4bcbd2;--selected-bg:#24403d;--primary-bg:#0e747b;--primary-hover:#11828a;--primary-text:#fff;--danger-bg:#a63b43;--danger-ink:#ffb7bc;--danger-text:#fff;--danger-soft:#3a2627}
 html,body,#app{font-family:Inter,"Noto Sans SC","Microsoft YaHei UI","Microsoft YaHei",system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--app-bg);color:var(--control-text)}
 body:has(.editor-router--story),body:has(.editor-router--story) #app{height:var(--app-visual-height,100dvh);overflow:hidden}
 button,input,textarea,select{font-family:inherit}

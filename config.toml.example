@@ -115,6 +115,7 @@ cookie_same_site = "auto"
 allowed_email_domains = []
 max_project_mb = 25
 max_asset_mb = 12
+max_effect_presets = 100 # 每个账号最多保存多少个自定义特效预设
 # image（本地图片验证码）、altcha（自托管 PoW）、turnstile 或 hcaptcha。
 captcha_provider = "image"
 captcha_ttl_seconds = 120
