@@ -55,6 +55,7 @@ document.messages.push(
 			tokenGroups: [{ start: 0, end: 2 }],
 			tokenAnimation: "impact",
 			screenEffect: "damage",
+			screenEffectColor: "purple",
 			interaction: { effect: "heart", targetCharacterId: "character-narrator", emoji: "❤" },
 		},
 	},
@@ -69,7 +70,7 @@ document.messages.push(
 		replyToId: "message-text",
 	},
 );
-document.effectTracks.push({ id: "effect-one", effect: "low-health", startMessageId: "message-text", endMessageId: "message-image" });
+document.effectTracks.push({ id: "effect-one", effect: "low-health", color: "orange", startMessageId: "message-text", endMessageId: "message-image" });
 const archive: StoryArchive = { document, assets: new Map([["avatar-one", bytes], ["image-two", bytes]]) };
 
 const blob = await createStoryPackage(archive);
@@ -88,6 +89,8 @@ assert.equal(restored.document.source.name, document.source.name);
 assert.equal(restored.document.source.revision, document.source.revision);
 assert.equal(restored.document.characters.find((item) => item.id === "alice")?.avatarSource, "package");
 assert.equal(restored.document.messages[0].performance?.screenEffect, "damage");
+assert.equal(restored.document.messages[0].performance?.screenEffectColor, "purple");
+assert.equal(restored.document.effectTracks[0]?.color, "orange");
 assert.equal(restored.document.messages[0].sourcePartText, "原始分段");
 assert.equal(restored.document.messages[1].performance?.imagePreview?.durationMs, 1500);
 assert.equal(restored.assets.get("avatar-one")?.byteLength, bytes.byteLength);

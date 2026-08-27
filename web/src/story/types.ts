@@ -67,6 +67,8 @@ export interface StoryMessagePerformance {
   tokenAnimation?: StoryStreamTokenAnimation;
   /** One-shot screen effect fired when this message appears. */
   screenEffect?: StoryScreenEffect;
+  /** Safe preset colour applied independently from the effect motion. */
+  screenEffectColor?: StoryEffectColor;
   /** Choreographed interaction between the speaking character and another character. */
   interaction?: {
     effect: StoryInteractionEffect;
@@ -87,12 +89,14 @@ export interface StoryMessagePerformance {
 
 export type StoryStreamTokenAnimation = "none" | "fade" | "rise" | "blur" | "impact" | "shake" | "ghost";
 export type StoryScreenEffect = "none" | "shake-light" | "shake-heavy" | "glow" | "warm-glow" | "cold-flash" | "flash" | "flicker" | "damage" | "heartbeat" | "blackout" | "dream" | "vignette";
+export type StoryEffectColor = "auto" | "neutral" | "red" | "orange" | "gold" | "green" | "cyan" | "blue" | "purple" | "pink";
 export type StoryInteractionEffect = "throw" | "heart" | "magic" | "surprise" | "impact";
 export type StoryPersistentEffect = "low-health" | "curse" | "dream-haze" | "storm" | "magic-aura";
 
 export interface StoryEffectTrack {
   id: string;
   effect: StoryPersistentEffect;
+  color?: StoryEffectColor;
   startMessageId: string;
   endMessageId: string;
 }
