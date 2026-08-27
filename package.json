@@ -20,6 +20,7 @@
 		"build:server": "tsc -p tsconfig.server.json && node scripts/set-executable.mjs dist/bin/scardice-story-painter.js",
 		"build:web": "vue-tsc --noEmit && vite build",
 		"test:story-format": "tsx scripts/verify-story-format.ts",
+		"test:e2e": "pnpm build && playwright test",
 		"lint": "tsc -p tsconfig.server.json --noEmit && vue-tsc --noEmit",
 		"preview": "vite preview --host 0.0.0.0"
 	},
@@ -69,6 +70,7 @@
 		"vue3-virtual-scroll-list": "^0.2.1"
 	},
 	"devDependencies": {
+		"@playwright/test": "1.55.0",
 		"@types/better-sqlite3": "^7.6.13",
 		"@types/express": "^5.0.6",
 		"@types/file-saver": "^2.0.7",

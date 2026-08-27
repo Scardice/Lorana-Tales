@@ -1,0 +1,192 @@
+import { expect, test, type Page } from "@playwright/test";
+import { readFile, writeFile } from "node:fs/promises";
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+
+const errors: string[] = [];
+
+async function openCleanStory(page: Page) {
+	errors.length = 0;
+	page.on("console", message => {
+		if (message.type() === "error" && !message.text().includes("status of 404")) errors.push(message.text());
+	});
+	page.on("pageerror", error => errors.push(error.message));
+	page.on("response", response => {
+		if (response.status() >= 400 && !response.url().includes("/api/editor/cq-face/") && !response.url().endsWith("/api/account/config")) errors.push(`${response.status()} ${response.url()}`);
+	});
+	await page.addInitScript(() => {
+		localStorage.clear();
+		indexedDB.deleteDatabase("lorana-story-drafts");
+	});
+	await page.goto("/story?e2e=1", { waitUntil: "networkidle" });
+	await expect(page.getByText("还没有消息。请从下方选择角色并开始写作。")).toBeVisible();
+}
+
+async function assertViewportIntegrity(page: Page) {
+	const result = await page.evaluate(() => {
+		const root = document.documentElement;
+		const visibleControls = [...document.querySelectorAll<HTMLElement>("button,input,textarea,select,[role=menu],[role=dialog]")]
+			.filter(element => {
+				const style = getComputedStyle(element);
+				const rect = element.getBoundingClientRect();
+				return style.visibility !== "hidden" && style.display !== "none" && rect.width > 0 && rect.height > 0;
+			});
+		const clipped = visibleControls.filter(element => {
+			const rect = element.getBoundingClientRect();
+			return rect.right > innerWidth + 2 || rect.left < -2;
+		}).map(element => ({ text: element.innerText || element.getAttribute("aria-label"), rect: element.getBoundingClientRect().toJSON() }));
+		return {
+			documentOverflow: root.scrollWidth - root.clientWidth,
+			bodyOverflow: document.body.scrollWidth - document.body.clientWidth,
+			clipped,
+		};
+	});
+	expect(result.documentOverflow).toBeLessThanOrEqual(1);
+	expect(result.bodyOverflow).toBeLessThanOrEqual(1);
+	expect(result.clipped).toEqual([]);
+}
+
+async function setDarkTheme(page: Page, dark: boolean) {
+	const html = page.locator("html");
+	const current = await html.evaluate(element => element.classList.contains("dark"));
+	if (current !== dark) await page.locator(".theme-toggle").click();
+	if (dark) await expect(html).toHaveClass(/dark/);
+	else await expect(html).not.toHaveClass(/dark/);
+}
+
+async function addTextMessage(page: Page, text: string) {
+	const input = page.getByRole("textbox", { name: "请输入文本" });
+	await input.fill(text);
+	const send = page.getByRole("button", { name: "发送" });
+	await expect(send).toBeVisible();
+	await send.click();
+	await expect(page.getByText(text, { exact: true })).toBeVisible();
+}
+
+test.describe("Lorana Tales story editor", () => {
+	test("desktop edit, theme, menus, source, fullscreen and player", async ({ page }) => {
+		await page.setViewportSize({ width: 1440, height: 900 });
+		await openCleanStory(page);
+		await setDarkTheme(page, true);
+		await expect(page.getByText(/0 条消息 · 0 个角色 · 0 字/)).toBeVisible();
+		await assertViewportIntegrity(page);
+
+		await page.getByRole("button", { name: "修改故事名" }).click();
+		const title = page.getByLabel("故事名");
+		await title.fill("端到端测试故事");
+		await title.press("Enter");
+		await expect(page.locator(".story-title strong")).toHaveText("端到端测试故事");
+
+		await addTextMessage(page, "第一条测试消息");
+		await expect(page.getByText(/1 条消息 · 0 个角色 · 7 字/)).toBeVisible();
+
+		await page.getByRole("button", { name: "新增角色" }).click();
+		await expect(page.getByRole("heading", { name: "创建角色" })).toBeVisible();
+		await page.getByPlaceholder("输入角色名").fill("测试角色");
+		await page.getByRole("button", { name: "保存" }).click();
+		await expect(page.getByText("测试角色", { exact: true })).toBeVisible();
+
+		await page.getByRole("button", { name: "更多" }).click();
+		await expect(page.getByText("界面与输入设置", { exact: true })).toBeVisible();
+		await page.getByText("界面与输入设置", { exact: true }).click();
+		await expect(page.getByText("界面设置", { exact: true })).toBeVisible();
+		await assertViewportIntegrity(page);
+		await page.getByRole("button", { name: "关闭设置" }).click();
+
+		await page.getByRole("button", { name: "编辑原始语法" }).click();
+		await expect(page.getByText("原始语法", { exact: true })).toBeVisible();
+		await expect(page.getByText("已实时同步到图形预览")).toBeVisible();
+		await page.locator(".raw-pane button.primary").click();
+		await page.waitForTimeout(300);
+
+		await page.getByRole("button", { name: "全屏编辑" }).click();
+		await expect(page.getByRole("button", { name: "退出全屏编辑" })).toBeVisible();
+		await assertViewportIntegrity(page);
+		await page.getByRole("button", { name: "退出全屏编辑" }).click();
+		await expect(page.getByRole("button", { name: "全屏编辑" })).toBeVisible();
+
+		await setDarkTheme(page, false);
+		await assertViewportIntegrity(page);
+		await page.screenshot({ path: "test-results/story-desktop-light.png", fullPage: true });
+
+		await page.getByRole("button", { name: "演出编辑预览" }).click();
+		await expect(page.getByRole("button", { name: "← 返回" })).toBeVisible();
+		await expect(page.locator(".player>header").getByText("端到端测试故事", { exact: true })).toBeVisible();
+		await assertViewportIntegrity(page);
+		await page.screenshot({ path: "test-results/story-player-light.png", fullPage: true });
+		await page.getByRole("button", { name: "← 返回" }).click();
+		await expect(page.getByRole("button", { name: "演出编辑预览" })).toBeVisible();
+
+		await page.getByRole("button", { name: "下载与导出" }).click();
+		const sspDownloadPromise = page.waitForEvent("download");
+		await page.getByRole("button", { name: /SSP 工程包/ }).click();
+		const sspDownload = await sspDownloadPromise;
+		expect(sspDownload.suggestedFilename()).toBe("端到端测试故事.ssp");
+		const sspPath = await sspDownload.path();
+		expect(sspPath).toBeTruthy();
+		const sspBytes = await readFile(sspPath!);
+		expect(sspBytes.subarray(0, 2).toString("binary")).toBe("PK");
+
+		await page.getByRole("button", { name: "下载与导出" }).click();
+		const htmlDownloadPromise = page.waitForEvent("download");
+		await page.getByRole("button", { name: "内嵌 HTML" }).click();
+		const htmlDownload = await htmlDownloadPromise;
+		const htmlPath = await htmlDownload.path();
+		expect(htmlPath).toBeTruthy();
+		const html = await readFile(htmlPath!, "utf8");
+		expect(html).toContain("Content-Security-Policy");
+		expect(html).toContain("lorana-performance");
+		const offlineHtmlPath = resolve("test-results/lorana-tales-offline.html");
+		await writeFile(offlineHtmlPath, html, "utf8");
+		const offline = await page.context().newPage();
+		await offline.goto(pathToFileURL(offlineHtmlPath).href, { waitUntil: "load" });
+		await expect(offline.getByRole("button", { name: "开始演出" })).toBeVisible();
+		await offline.getByRole("button", { name: "开始演出" }).click();
+		await expect(offline.locator("#toggle")).toBeVisible();
+		await expect(offline.locator("#counter")).toContainText("/ 1");
+		await offline.close();
+
+		expect(errors).toEqual([]);
+	});
+
+	test("mobile composer, emoji keyboard, resource popover and message actions", async ({ page }) => {
+		await page.setViewportSize({ width: 390, height: 844 });
+		await openCleanStory(page);
+		await setDarkTheme(page, true);
+		await assertViewportIntegrity(page);
+
+		await page.getByRole("button", { name: "表情" }).click();
+		const keyboard = page.getByLabel("表情键盘", { exact: true });
+		await expect(keyboard.getByText("选择表情", { exact: true })).toBeVisible();
+		await keyboard.getByRole("button", { name: "QQ 表情" }).click();
+		await expect(keyboard.getByTitle("QQ 表情 0")).toBeVisible();
+		await keyboard.getByRole("button", { name: "Emoji" }).click();
+		await keyboard.getByRole("button", { name: "😀" }).click();
+		await expect(page.getByRole("textbox", { name: "请输入文本" })).toHaveText("😀");
+		await keyboard.getByRole("button", { name: "收起表情键盘" }).click();
+		await expect(keyboard).toBeHidden();
+		await page.getByRole("button", { name: "发送" }).click();
+		await expect(page.locator("article.story-message").getByText("😀", { exact: true })).toBeVisible();
+
+		await page.getByRole("button", { name: "添加资源" }).click();
+		await expect(page.getByRole("navigation", { name: "添加资源" })).toBeVisible();
+		await assertViewportIntegrity(page);
+		await page.screenshot({ path: "test-results/story-mobile-resource.png", fullPage: true });
+		await page.locator(".story-editor main").click();
+		await expect(page.getByRole("navigation", { name: "添加资源" })).toBeHidden();
+
+		await page.getByRole("button", { name: "消息操作" }).click();
+		await expect(page.getByRole("menu", { name: "消息操作" })).toBeVisible();
+		await assertViewportIntegrity(page);
+		await page.getByRole("menuitem", { name: /上插/ }).click();
+		await expect(page.getByText("上插", { exact: true })).toBeVisible();
+		await expect(page.getByRole("button", { name: "插入表情" })).toBeVisible();
+		await assertViewportIntegrity(page);
+		await page.getByRole("button", { name: "关闭插入" }).click();
+
+		await setDarkTheme(page, false);
+		await assertViewportIntegrity(page);
+		await page.screenshot({ path: "test-results/story-mobile-light.png", fullPage: true });
+		expect(errors).toEqual([]);
+	});
+});

@@ -19,6 +19,8 @@ web/src/components.d.ts
 
 # Test / coverage artifacts
 coverage/
+playwright-report/
+test-results/
 
 # Runtime data and SQLite databases
 /data/

@@ -1,0 +1,18 @@
+[server]
+host = "127.0.0.1"
+port = 3100
+allowed_hosts = ["127.0.0.1", "localhost"]
+
+[storage]
+sqlite_path = "./test-results/e2e.sqlite"
+
+[accounts]
+enabled = false
+
+[resource_cache]
+enabled = false
+cq_face_path = "../wsl-preview/data/cq-faces"
+
+[app]
+default_editor_mode = "story"
+story_mode_enabled = true
