@@ -1,0 +1,116 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version without the v prefix, for example 0.1.0-testify.2 or 1.0.0
+        required: true
+        type: string
+      channel:
+        description: Release channel
+        required: true
+        default: test
+        type: choice
+        options:
+          - test
+          - stable
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_VERSION: ${{ inputs.version }}
+      RELEASE_CHANNEL: ${{ inputs.channel }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Validate release input
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid SemVer-compatible version: $RELEASE_VERSION" >&2
+            exit 1
+          fi
+          if [[ "$RELEASE_CHANNEL" == "stable" && "$RELEASE_VERSION" == *-* ]]; then
+            echo "Stable releases cannot use a prerelease version." >&2
+            exit 1
+          fi
+          printf '%s\n' "$RELEASE_VERSION" > VERSION
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "20.19.2"
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install build dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check source and story format
+        run: |
+          pnpm lint
+          pnpm test:story-format
+
+      - name: Build server and frontend
+        run: pnpm build
+
+      - name: Stage portable runtime package
+        env:
+          LORANA_RELEASE_CHANNEL: ${{ inputs.channel == 'stable' && 'Release' || 'Test Release' }}
+        run: node scripts/package-nightly.mjs "release/lorana-tales-${RELEASE_VERSION}"
+
+      - name: Install production dependencies into package
+        working-directory: release/lorana-tales-${{ inputs.version }}
+        run: |
+          npm install --package-lock-only --ignore-scripts --omit=dev --no-audit --no-fund
+          npm ci --omit=dev --no-audit --no-fund
+
+      - name: Verify staged runtime package
+        working-directory: release/lorana-tales-${{ inputs.version }}
+        run: |
+          test -f VERSION
+          test -f config.toml
+          test -f dist/bin/scardice-story-painter.js
+          test -f out/index.html
+          test -f package.json
+          node --input-type=module -e "await import('better-sqlite3'); console.log('better-sqlite3 runtime loaded')"
+
+      - name: Archive runtime package
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="lorana-tales-${RELEASE_VERSION}-linux-x64"
+          tar -czf "release/${base}.tar.gz" -C release "lorana-tales-${RELEASE_VERSION}"
+          (cd release && zip -qr "${base}.zip" "lorana-tales-${RELEASE_VERSION}")
+          (cd release && sha256sum "${base}.tar.gz" "${base}.zip" > "SHA256SUMS-${RELEASE_VERSION}.txt")
+
+      - name: Publish retained GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: v${{ inputs.version }}
+          target_commitish: ${{ github.sha }}
+          name: Lorana Tales ${{ inputs.version }}
+          prerelease: ${{ inputs.channel == 'test' }}
+          make_latest: ${{ inputs.channel == 'stable' }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            release/lorana-tales-${{ inputs.version }}-linux-x64.tar.gz
+            release/lorana-tales-${{ inputs.version }}-linux-x64.zip
+            release/SHA256SUMS-${{ inputs.version }}.txt

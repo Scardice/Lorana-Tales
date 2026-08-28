@@ -57,6 +57,8 @@ export interface StoryMessageBase {
 export interface StoryMessagePerformance {
   /** How long autoplay waits after this message has fully appeared. */
   durationMs?: number;
+  /** Recorded duration of the typing indicator before the full message appears. */
+  typingDurationMs?: number;
   /** Override global streaming for this message. */
   stream?: boolean;
   /** Extra delay after an individual segmented token, keyed by token index. */

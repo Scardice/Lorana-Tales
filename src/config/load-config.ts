@@ -36,9 +36,9 @@ const DEFAULT_CONFIG = {
 	},
 	branding: {
 		site_title: "Lorana Tales",
-		show_site_title: false,
-		logo_path: "./web/public/lorana-tales-brand.png",
-		favicon_path: "./web/public/favicon.ico",
+		show_site_title: true,
+		logo_path: "./out/lorana-tales-mark.png",
+		favicon_path: "./out/favicon.ico",
 		community_notice: "GitHub: https://github.com/Scardice/Lorana-Tales · QQ群：1080498667",
 	},
 	avatar_providers: {

@@ -96,6 +96,8 @@ pnpm dev
 
 Nightly 包面向 Linux x64，使用 Node.js `>=20.19`，已经包含服务端 `dist/`、前端 `out/`、生产依赖和 `better-sqlite3` 原生模块，不需要再编译源码。下载 `.tar.gz` 或 `.zip` 后：
 
+需要长期保留的测试版或正式版由仓库的 `Release` Action 手动创建：输入 `VERSION` 同格式的版本号，并选择 `test` 或 `stable`。测试版会标记为 prerelease，正式版会成为 latest；两者都使用独立版本标签，不会被 Nightly 覆盖。新版沉浸式染色器显示的完整构建版本为 `VERSION+Git短提交码`，例如 `0.1.0-testify.1+8280e02`。
+
 ```bash
 # 解压后进入目录
 cd lorana-tales-nightly

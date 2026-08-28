@@ -1,4 +1,6 @@
 import path from "node:path";
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import vue from "@vitejs/plugin-vue";
 import autoprefixer from "autoprefixer";
 import tailwindcss from "tailwindcss";
@@ -9,6 +11,14 @@ import { defineConfig } from "vite";
 
 const pathWeb = path.resolve(__dirname, "web");
 const pathSrc = path.resolve(pathWeb, "src");
+const releaseVersion = readFileSync(path.resolve(__dirname, "VERSION"), "utf8").trim();
+let sourceRevision = "unknown";
+try {
+	sourceRevision = execFileSync("git", ["rev-parse", "--short=7", "HEAD"], { cwd: __dirname, encoding: "utf8" }).trim();
+} catch {
+	// Source archives may not include .git; the base version remains useful there.
+}
+const displayVersion = `${releaseVersion}+${sourceRevision}`;
 
 // https://vitejs.dev/config/
 export default defineConfig({
@@ -19,6 +29,7 @@ export default defineConfig({
 	define: {
 		global: "globalThis",
 		Buffer: "globalThis.Buffer",
+		__LORANA_TALES_VERSION__: JSON.stringify(displayVersion),
 	},
 	resolve: {
 		alias: {

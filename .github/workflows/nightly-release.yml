@@ -41,6 +41,9 @@ jobs:
       - name: Check types
         run: pnpm lint
 
+      - name: Verify story format
+        run: pnpm test:story-format
+
       - name: Build server and frontend
         run: pnpm build
 

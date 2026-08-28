@@ -25,6 +25,7 @@ const requiredPaths = [
 	"package.json",
 	"config.toml.example",
 	"README.md",
+	"VERSION",
 	"LICENSE",
 	"THIRD_PARTY_NOTICES.md",
 ];
@@ -45,9 +46,12 @@ if (await exists(outputDir)) {
 const sourcePackage = JSON.parse(
 	await fs.readFile(path.join(repoRoot, "package.json"), "utf8"),
 );
+const releaseVersion = (
+	await fs.readFile(path.join(repoRoot, "VERSION"), "utf8")
+).trim();
 const runtimePackage = {
 	name: sourcePackage.name,
-	version: sourcePackage.version,
+	version: releaseVersion,
 	private: true,
 	type: sourcePackage.type,
 	engines: sourcePackage.engines || { node: ">=20.19" },
@@ -76,6 +80,10 @@ await fs.copyFile(
 	path.join(outputDir, "README.md"),
 );
 await fs.copyFile(
+	path.join(repoRoot, "VERSION"),
+	path.join(outputDir, "VERSION"),
+);
+await fs.copyFile(
 	path.join(repoRoot, "LICENSE"),
 	path.join(outputDir, "LICENSE"),
 );
@@ -88,8 +96,9 @@ await fs.writeFile(
 	`${JSON.stringify(runtimePackage, null, "\t")}\n`,
 );
 
-const nightlyReadme = [
-	"# Lorana Tales Nightly",
+const releaseChannel = process.env.LORANA_RELEASE_CHANNEL || "Nightly";
+const packageReadme = [
+	`# Lorana Tales ${releaseChannel}`,
 	"",
 	`This Linux x64 package is prebuilt for Node.js ${runtimePackage.engines.node}.`,
 	"Edit `config.toml` and run `npm start`.",
@@ -103,6 +112,6 @@ const nightlyReadme = [
 	"- This project is distributed under the MIT License; see `LICENSE`.",
 	"",
 ].join("\n");
-await fs.writeFile(path.join(outputDir, "NIGHTLY-README.md"), nightlyReadme);
+await fs.writeFile(path.join(outputDir, "PACKAGE-README.md"), packageReadme);
 
-console.log(`Nightly package staged at ${outputDir}`);
+console.log(`${releaseChannel} package staged at ${outputDir}`);

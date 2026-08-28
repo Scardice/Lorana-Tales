@@ -50,6 +50,7 @@ document.messages.push(
 		text: "你好，世界！",
 		performance: {
 			durationMs: 1200,
+			typingDurationMs: 480,
 			stream: true,
 			tokenDelays: { 0: -20, 1: 80 },
 			tokenGroups: [{ start: 0, end: 2 }],
@@ -90,6 +91,7 @@ assert.equal(restored.document.source.name, document.source.name);
 assert.equal(restored.document.source.revision, document.source.revision);
 assert.equal(restored.document.characters.find((item) => item.id === "alice")?.avatarSource, "package");
 assert.equal(restored.document.messages[0].performance?.screenEffect, "damage");
+assert.equal(restored.document.messages[0].performance?.typingDurationMs, 480);
 assert.equal(restored.document.messages[0].performance?.screenEffectColor, "purple");
 assert.equal(restored.document.effectTracks[0]?.color, "orange");
 assert.equal(restored.document.messages[0].performance?.interaction?.reaction, "affection");
@@ -134,6 +136,7 @@ assert.match(html, /id="fullscreen"/);
 assert.match(html, /persistent-layer/);
 assert.match(html, /characterStateByMessage/);
 assert.match(html, /reaction-affection/);
+assert.match(html, /typingDurationMs/);
 assert.doesNotMatch(html, /<\/script>\s*测试/);
 assert.doesNotMatch(html, /https?:\/\//);
 const scripts = [...html.matchAll(/<script(?: [^>]*)?>([\s\S]*?)<\/script>/g)];

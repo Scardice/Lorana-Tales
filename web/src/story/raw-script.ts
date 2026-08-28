@@ -93,6 +93,7 @@ export function serializeStoryScript(archive: StoryArchive): string {
     if (message.replyToId) attrs.push(`reply="${quote(message.replyToId)}"`);
     if(message.timeText)attrs.push(`time-text="${quote(message.timeText)}"`);if(message.sourceFingerprint)attrs.push(`source-fingerprint="${quote(message.sourceFingerprint)}"`);if(message.sourcePartText)attrs.push(`source-part="${quote(message.sourcePartText)}"`);if(message.conflict)attrs.push(`conflict="${message.conflict}"`);if(message.locallyInserted)attrs.push('inserted="on"');
     if (performance?.stream != null) attrs.push(`stream="${performance.stream ? "on" : "off"}"`);
+    if (performance?.typingDurationMs != null) attrs.push(`typing="${Math.max(0,Math.round(performance.typingDurationMs))}ms"`);
     if (performance?.tokenAnimation) attrs.push(`text-animation="${performance.tokenAnimation}"`);
     if (performance?.screenEffect && performance.screenEffect !== "none") attrs.push(`screen="${performance.screenEffect}"`);
     if (performance?.screenEffect && performance.screenEffect !== "none") attrs.push(`screen-color="${performance.screenEffectColor || "auto"}"`);
@@ -130,6 +131,10 @@ export function parseStoryScript(script: string, base: StoryArchive): StoryArchi
       continue;
     }
     throw new Error(`第 ${index + 1} 行：无法识别“${line.slice(0, 48)}”`);
+  }
+  for (const match of script.matchAll(/<msg\s+([^>]*\btyping="\d+ms"[^>]*)>/g)) {
+    const value=tagAttributes(match[0]);const id=value.get("id")||"";const duration=(value.get("typing")||"").match(/^(\d+)ms$/);const message=document.messages.find(item=>item.id===id);
+    if(message&&duration)message.performance={...(message.performance||{}),typingDurationMs:Number(duration[1])};
   }
   if (!document.characters.length) throw new Error("至少需要一个 <role> 角色"); document.updatedAt = declaredUpdatedAt || new Date().toISOString(); return { document:normalizeStoryDocument(document), assets:new Map(base.assets) };
 }
