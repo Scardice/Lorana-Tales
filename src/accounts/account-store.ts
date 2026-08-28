@@ -22,6 +22,7 @@ export interface AccountUser {
 	displayName: string;
 	role: AccountRole;
 	group: string;
+	retentionDaysOverride: number | null;
 	status: AccountStatus;
 	banReason: string;
 	banUntil: string;
@@ -93,6 +94,9 @@ function rowToUser(row: SqlRow): AccountUser {
 		displayName: String(row.nickname || row.display_name || row.username || ""),
 		role: row.role === "admin" ? "admin" : "user",
 		group: String(row.account_group || "default"),
+		retentionDaysOverride: row.retention_days_override === null || row.retention_days_override === undefined
+			? null
+			: Math.max(0, Number(row.retention_days_override)),
 		status:
 			row.status === "banned" ? "banned" : row.status === "disabled" ? "disabled" : "active",
 		banReason: String(row.ban_reason || ""),
@@ -153,6 +157,7 @@ export class AccountStore {
 				password_hash TEXT NOT NULL,
 				role TEXT NOT NULL DEFAULT 'user',
 				account_group TEXT NOT NULL DEFAULT 'default',
+				retention_days_override INTEGER,
 				status TEXT NOT NULL DEFAULT 'active',
 				ban_reason TEXT NOT NULL DEFAULT '',
 				ban_until TEXT NOT NULL DEFAULT '',
@@ -215,6 +220,7 @@ export class AccountStore {
 				source_secret_cipher TEXT NOT NULL DEFAULT '',
 				created_at TEXT NOT NULL,
 				updated_at TEXT NOT NULL,
+				last_activity_at TEXT NOT NULL,
 				archived INTEGER NOT NULL DEFAULT 0,
 				FOREIGN KEY(user_id) REFERENCES account_users(id) ON DELETE SET NULL
 			);
@@ -269,9 +275,15 @@ export class AccountStore {
 		if (!columns.has("nickname")) this.db.exec("ALTER TABLE account_users ADD COLUMN nickname TEXT NOT NULL DEFAULT ''");
 		if (!columns.has("avatar_url")) this.db.exec("ALTER TABLE account_users ADD COLUMN avatar_url TEXT NOT NULL DEFAULT ''");
 		if (!columns.has("account_group")) this.db.exec("ALTER TABLE account_users ADD COLUMN account_group TEXT NOT NULL DEFAULT 'default'");
+		if (!columns.has("retention_days_override")) this.db.exec("ALTER TABLE account_users ADD COLUMN retention_days_override INTEGER");
 		if (!columns.has("tutorial_prompt_seen")) this.db.exec("ALTER TABLE account_users ADD COLUMN tutorial_prompt_seen INTEGER NOT NULL DEFAULT 0");
 		if (!columns.has("manual_playback_hint_seen")) this.db.exec("ALTER TABLE account_users ADD COLUMN manual_playback_hint_seen INTEGER NOT NULL DEFAULT 0");
 		if (!columns.has("tutorial_playback_coach_seen")) this.db.exec("ALTER TABLE account_users ADD COLUMN tutorial_playback_coach_seen INTEGER NOT NULL DEFAULT 0");
+		const projectColumns = new Set((this.db.prepare("PRAGMA table_info(editor_projects)").all() as SqlRow[]).map((row) => String(row.name || "")));
+		if (!projectColumns.has("last_activity_at")) {
+			this.db.exec("ALTER TABLE editor_projects ADD COLUMN last_activity_at TEXT NOT NULL DEFAULT ''");
+			this.db.exec("UPDATE editor_projects SET last_activity_at = updated_at WHERE last_activity_at = ''");
+		}
 		const presetColumns = new Set((this.db.prepare("PRAGMA table_info(account_effect_presets)").all() as SqlRow[]).map((row) => String(row.name || "")));
 		if (!presetColumns.has("kind")) this.db.exec("ALTER TABLE account_effect_presets ADD COLUMN kind TEXT NOT NULL DEFAULT 'screen'");
 		if (!presetColumns.has("folder_id")) this.db.exec("ALTER TABLE account_effect_presets ADD COLUMN folder_id TEXT NOT NULL DEFAULT ''");
@@ -394,7 +406,7 @@ export class AccountStore {
 		return this.getUserById(userId);
 	}
 
-	updateUser(userId: string, input: Partial<{ email: string; username: string; nickname: string; displayName: string; avatarUrl: string; role: AccountRole; group: string }>) {
+	updateUser(userId: string, input: Partial<{ email: string; username: string; nickname: string; displayName: string; avatarUrl: string; role: AccountRole; group: string; retentionDaysOverride: number | null }>) {
 		const current = this.getUserById(userId);
 		if (!current) return null;
 		const email = input.email ? normalizeEmail(input.email) : current.email;
@@ -404,8 +416,11 @@ export class AccountStore {
 		const avatarUrl = input.avatarUrl === undefined ? current.avatarUrl : String(input.avatarUrl).trim().slice(0, 2048);
 		const role = input.role || current.role;
 		const group = input.group === undefined ? current.group : String(input.group).trim().slice(0, 40) || "default";
-		this.db.prepare("UPDATE account_users SET email = ?, username = ?, nickname = ?, avatar_url = ?, display_name = ?, role = ?, account_group = ?, updated_at = ? WHERE id = ?")
-			.run(email, username, nickname, avatarUrl, nickname, role, group, nowIso(), userId);
+		const retentionDaysOverride = input.retentionDaysOverride === undefined
+			? current.retentionDaysOverride
+			: input.retentionDaysOverride === null ? null : Math.max(0, Math.floor(Number(input.retentionDaysOverride)));
+		this.db.prepare("UPDATE account_users SET email = ?, username = ?, nickname = ?, avatar_url = ?, display_name = ?, role = ?, account_group = ?, retention_days_override = ?, updated_at = ? WHERE id = ?")
+			.run(email, username, nickname, avatarUrl, nickname, role, group, retentionDaysOverride, nowIso(), userId);
 		return this.getUserById(userId);
 	}
 
@@ -456,6 +471,27 @@ export class AccountStore {
 
 	projectStorageBytes(userId: string): number {
 		return Number((this.db.prepare("SELECT COALESCE(SUM(length(document_blob)), 0) AS total FROM editor_projects WHERE user_id = ? AND archived = 0").get(userId) as SqlRow).total || 0);
+	}
+
+	cleanupInactiveProjects(retentionDaysForUser: (user: AccountUser) => number) {
+		const users = (this.db.prepare("SELECT * FROM account_users").all() as SqlRow[]).map(rowToUser);
+		let deletedProjects = 0;
+		let freedBytes = 0;
+		const cleanup = this.db.transaction(() => {
+			for (const user of users) {
+				const retentionDays = Math.max(0, Math.floor(retentionDaysForUser(user)));
+				if (retentionDays === 0) continue;
+				const cutoff = new Date(Date.now() - retentionDays * 86400000).toISOString();
+				const summary = this.db.prepare(`SELECT COUNT(*) AS total, COALESCE(SUM(length(document_blob)), 0) AS bytes
+					FROM editor_projects WHERE user_id = ? AND archived = 0 AND last_activity_at < ?`).get(user.id, cutoff) as SqlRow;
+				const count = Number(summary.total || 0);
+				if (!count) continue;
+				freedBytes += Number(summary.bytes || 0);
+				deletedProjects += this.db.prepare("DELETE FROM editor_projects WHERE user_id = ? AND archived = 0 AND last_activity_at < ?").run(user.id, cutoff).changes;
+			}
+		});
+		cleanup();
+		return { deletedProjects, freedBytes };
 	}
 
 	createSession(user: AccountUser, input: { sessionDays: number; deviceToken?: string; ipPrefix: string; userAgent: string }): AccountSession {
@@ -571,9 +607,9 @@ export class AccountStore {
 			if (limits && this.projectStorageBytes(userId) + blob.length > limits.quotaBytes) throw new Error("storage_quota_exceeded");
 			this.db.prepare(`INSERT INTO editor_projects (
 			id, user_id, title, revision, document_blob, source_key, source_revision,
-			source_secret_cipher, created_at, updated_at
-		) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?)`)
-				.run(id, userId, title.slice(0, 160) || "跑团记录", blob, source.key || "", source.revision || "", source.encryptedSecret || "", now, now);
+			source_secret_cipher, created_at, updated_at, last_activity_at
+		) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)`)
+				.run(id, userId, title.slice(0, 160) || "跑团记录", blob, source.key || "", source.revision || "", source.encryptedSecret || "", now, now, now);
 		});
 		insert();
 		return this.getProject(userId, id);
@@ -616,6 +652,7 @@ export class AccountStore {
 	getProject(userId: string, id: string) {
 		const row = this.db.prepare("SELECT * FROM editor_projects WHERE id = ? AND user_id = ? AND archived = 0").get(id, userId) as SqlRow | undefined;
 		if (!row) return null;
+		this.db.prepare("UPDATE editor_projects SET last_activity_at = ? WHERE id = ? AND user_id = ?").run(nowIso(), id, userId);
 		return {
 			id: String(row.id), title: String(row.title), revision: Number(row.revision),
 			document: decompressDocument(row.document_blob as Buffer), sourceKey: String(row.source_key || ""),
@@ -636,9 +673,10 @@ export class AccountStore {
 			if (!current) return null;
 			if (Number(current.revision || 0) !== expectedRevision) return null;
 			if (limits && this.projectStorageBytes(userId) - Number(current.stored_bytes || 0) + blob.length > limits.quotaBytes) throw new Error("storage_quota_exceeded");
+			const now = nowIso();
 			const result = this.db.prepare(`UPDATE editor_projects SET document_blob = ?, title = COALESCE(?, title),
-			revision = revision + 1, updated_at = ? WHERE id = ? AND user_id = ? AND revision = ? AND archived = 0`)
-				.run(blob, title ? title.slice(0, 160) : null, nowIso(), id, userId, expectedRevision);
+			revision = revision + 1, updated_at = ?, last_activity_at = ? WHERE id = ? AND user_id = ? AND revision = ? AND archived = 0`)
+				.run(blob, title ? title.slice(0, 160) : null, now, now, id, userId, expectedRevision);
 			return result.changes === 1 ? this.getProject(userId, id) : null;
 		});
 		return update();
@@ -699,7 +737,10 @@ export class AccountStore {
 		const transaction = this.db.transaction(() => {
 			if (projectAction === "delete") this.db.prepare("DELETE FROM editor_projects WHERE user_id = ?").run(userId);
 			if (projectAction === "archive") this.db.prepare("UPDATE editor_projects SET user_id = NULL, archived = 1 WHERE user_id = ?").run(userId);
-			if (projectAction === "transfer") this.db.prepare("UPDATE editor_projects SET user_id = ?, updated_at = ? WHERE user_id = ?").run(transferUserId, nowIso(), userId);
+			if (projectAction === "transfer") {
+				const now = nowIso();
+				this.db.prepare("UPDATE editor_projects SET user_id = ?, updated_at = ?, last_activity_at = ? WHERE user_id = ?").run(transferUserId, now, now, userId);
+			}
 			return this.db.prepare("DELETE FROM account_users WHERE id = ?").run(userId).changes === 1;
 		});
 		return transaction();

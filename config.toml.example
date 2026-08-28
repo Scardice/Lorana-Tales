@@ -129,13 +129,16 @@ email_code_per_hour = 5
 ip_email_code_per_hour = 10
 
 # 账号组配额按工程压缩后的实际数据库占用计算；可继续添加自定义组。
+# retention_days 按云端工程最后修改时间计算；0 表示永久保留。管理员可为单个用户覆盖。
 [accounts.storage_groups.default]
 quota_mb = 256
 max_projects = 100
+retention_days = 180
 
 [accounts.storage_groups.advanced]
 quota_mb = 2048
 max_projects = 1000
+retention_days = 365
 
 [accounts.smtp]
 host = ""

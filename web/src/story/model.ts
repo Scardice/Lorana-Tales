@@ -468,12 +468,25 @@ export function storyTextSegments(text: string, characters: readonly StoryCharac
     if (cursor < value.length) result.push({ text: value.slice(cursor) });
   };
   let cursor = 0;
-  for (const match of source.matchAll(/\[CQ:(at|face),([^\]]+)\]/gi)) {
+  const resourceLabels: Record<string, string> = {
+    image: "【图片】", record: "【语音】", audio: "【语音】", video: "【视频】", file: "【文件】",
+    music: "【音乐】", share: "【分享】", location: "【位置】", json: "【卡片消息】", xml: "【卡片消息】",
+    forward: "【合并转发】", node: "【转发消息】", contact: "【联系人】", poke: "【戳一戳】",
+    dice: "【骰子】", rps: "【猜拳】", shake: "【窗口抖动】",
+  };
+  for (const match of source.matchAll(/\[CQ:([a-zA-Z0-9_-]+)(?:,([^\]]*))?\]/gi)) {
     appendPlain(source.slice(cursor, match.index));
-    const attrs = parseCqAttrs(match[2]);
-    if (match[1].toLowerCase() === "face") {
+    const type = match[1].toLowerCase();
+    const attrs = parseCqAttrs(match[2] || "");
+    if (type === "face") {
       const faceId = cqUnescape(attrs.get("id") || attrs.get("face_id") || "");
       if (/^\d{1,4}$/.test(faceId)) result.push({ text: "", faceId });
+      else result.push({ text: "【表情】" });
+      cursor = match.index! + match[0].length;
+      continue;
+    }
+    if (type !== "at") {
+      result.push({ text: resourceLabels[type] || "【消息资源】" });
       cursor = match.index! + match[0].length;
       continue;
     }
@@ -491,11 +504,18 @@ export function storyPlainText(text: string, characters: readonly StoryCharacter
   return storyTextSegments(text, characters, preserveLineBreaks).map((item) => item.text).join("");
 }
 
+/** Text used by the streaming renderer: CQ segments are converted atomically to their visible representation. */
+export function storyStreamingText(text: string, characters: readonly StoryCharacter[], preserveLineBreaks: boolean): string {
+  return storyTextSegments(text, characters, preserveLineBreaks).map((item) => item.faceId ? "【表情】" : item.text).join("");
+}
+
 export function playbackDelay(message: StoryMessage, document: StoryDocument): number {
   const settings = document.settings;
   if (message.performance?.durationMs && message.performance.durationMs > 0) return message.performance.durationMs;
   if (settings.playbackTiming === "fixed") return settings.fixedDelayMs;
-  const text = message.kind === "text" ? message.text : message.alt || "图片";
+  const text = message.kind === "text"
+    ? storyStreamingText(message.text, document.characters, settings.preserveLineBreaks)
+    : message.alt || "图片";
   const chineseCount = (text.match(/[\u3400-\u9fff]/g) || []).length;
   const englishWords = text
     .replace(/[\u3400-\u9fff]/g, " ")

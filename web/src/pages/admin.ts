@@ -38,7 +38,7 @@ interface SessionResponse {
   mode?: "root" | "account" | "none";
 }
 
-interface AccountUser { id:string; email:string; username:string; nickname:string; displayName:string; role:"user"|"admin"; group:string; status:"active"|"disabled"|"banned"; banReason:string; banUntil:string; projectCount?:number; }
+interface AccountUser { id:string; email:string; username:string; nickname:string; displayName:string; role:"user"|"admin"; group:string; retentionDaysOverride:number|null; status:"active"|"disabled"|"banned"; banReason:string; banUntil:string; projectCount?:number; }
 interface UserProject { id:string; title:string; revision:number; username:string; nickname:string; email:string; updatedAt:string; }
 
 interface DeleteResponse {
@@ -590,7 +590,7 @@ async function runMaintenance(): Promise<void> {
 function renderUsers(items: AccountUser[]): void {
   els.userList.innerHTML = items.map((user) => `<article class="user-row" data-user-id="${escapeHtml(user.id)}">
     <div class="user-row__name"><strong>${escapeHtml(user.nickname || user.displayName || user.username)}</strong><small>@${escapeHtml(user.username)} · ${escapeHtml(user.email)} · ${user.projectCount || 0} 个工程</small></div>
-    <span class="pill">${user.role === "admin" ? "管理员" : "用户"}</span><span class="pill">${escapeHtml(user.group || "default")} 组</span>
+    <span class="pill">${user.role === "admin" ? "管理员" : "用户"}</span><span class="pill">${escapeHtml(user.group || "default")} 组</span><span class="pill">${user.retentionDaysOverride === null ? "期限随组" : user.retentionDaysOverride === 0 ? "永久保留" : `${user.retentionDaysOverride} 天未活动清理`}</span>
     <span class="pill">${user.status === "banned" ? `已封禁：${escapeHtml(user.banReason)}` : user.status === "disabled" ? "已停用" : "正常"}</span>
     <div class="user-row__actions"><button class="button" data-user-action="edit">编辑</button><button class="button" data-user-action="password">改密码</button><button class="button warning" data-user-action="status">${user.status === "active" ? "封禁/停用" : "恢复"}</button><button class="button danger" data-user-action="delete">删除</button></div>
   </article>`).join("");
@@ -629,7 +629,8 @@ async function manageUser(user: AccountUser, action: string): Promise<void> {
   try {
     if (action === "edit") {
       const email = prompt("邮箱", user.email); if (email === null) return; const username = prompt("用户名（字母、数字、_、-）", user.username); if (username === null) return; const nickname = prompt("昵称", user.nickname || user.displayName); if (nickname === null) return; const role = prompt("角色：admin 或 user", user.role); if (role !== "admin" && role !== "user") return; const group = prompt("存储组（需与配置文件一致）", user.group || "default"); if (!group?.trim()) return;
-      await api(`/admin/api/users/${encodeURIComponent(user.id)}`, { method:"PATCH", body:JSON.stringify({ email, username, nickname, role, group }) });
+      const retentionInput = prompt("云端工程未活动保留天数：留空继承组，0 永久保留，正整数为单独期限", user.retentionDaysOverride === null ? "" : String(user.retentionDaysOverride)); if (retentionInput === null) return; const retentionDaysOverride = retentionInput.trim() === "" ? null : Number(retentionInput); if (retentionDaysOverride !== null && (!Number.isInteger(retentionDaysOverride) || retentionDaysOverride < 0)) { showAdminToast("保留期限必须留空、填 0 或填写正整数天数", "warning"); return; }
+      await api(`/admin/api/users/${encodeURIComponent(user.id)}`, { method:"PATCH", body:JSON.stringify({ email, username, nickname, role, group, retentionDaysOverride }) });
     } else if (action === "password") {
       const password = prompt("输入至少 10 位的新密码。用户下次登录必须修改。", ""); if (!password) return;
       await api(`/admin/api/users/${encodeURIComponent(user.id)}/password`, { method:"POST", body:JSON.stringify({ password, mustChangePassword:true }) });

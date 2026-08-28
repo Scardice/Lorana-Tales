@@ -343,7 +343,11 @@ export function createAdminRouter({
 			if (current.role === "admin" && body.role === "user" && current.status === "active" && accountService.store.activeAdminCount() <= 1) { sendJson(res, 409, { error: "last_admin" }); return; }
 			const nextRole = body.role === "admin" || body.role === "user" ? body.role : current.role; const nextName = typeof body.username === "string" ? body.username.trim() : current.username; const duplicateName = accountService.store.getUserByIdentity(nextName);
 			if (duplicateName && duplicateName.id !== current.id) { sendJson(res, 409, { error: "user_update_failed" }); return; }
-			const user = accountService.store.updateUser(current.id, { email: typeof body.email === "string" ? body.email : undefined, username: typeof body.username === "string" ? body.username : undefined, nickname: typeof body.nickname === "string" ? body.nickname : typeof body.displayName === "string" ? body.displayName : undefined, role: body.role === "admin" || body.role === "user" ? body.role : undefined, group: typeof body.group === "string" ? body.group : undefined });
+			const retentionDaysOverride = body.retentionDaysOverride === null
+				? null
+				: body.retentionDaysOverride === undefined ? undefined : Math.max(0, Math.floor(Number(body.retentionDaysOverride)));
+			if (retentionDaysOverride !== undefined && retentionDaysOverride !== null && !Number.isFinite(retentionDaysOverride)) { sendJson(res, 400, { error: "invalid_retention_days" }); return; }
+			const user = accountService.store.updateUser(current.id, { email: typeof body.email === "string" ? body.email : undefined, username: typeof body.username === "string" ? body.username : undefined, nickname: typeof body.nickname === "string" ? body.nickname : typeof body.displayName === "string" ? body.displayName : undefined, role: body.role === "admin" || body.role === "user" ? body.role : undefined, group: typeof body.group === "string" ? body.group : undefined, retentionDaysOverride });
 			accountService.store.audit(actor(req), "admin.user-update", current.id, body); sendJson(res, 200, user);
 		} catch { sendJson(res, 409, { error: "user_update_failed" }); }
 	});

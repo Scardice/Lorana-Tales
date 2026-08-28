@@ -357,6 +357,17 @@ export async function startServer(
 			logoUrl: brandingLogo && publicBase ? `${publicBase}/branding/logo?v=${brandingLogo.version}` : "",
 		});
 		await accountService.ensureInitialAdmin();
+		const projectCleanup = accountService.cleanupInactiveProjects();
+		console.log(`[server] Account project cleanup deleted ${projectCleanup.deletedProjects} inactive projects and freed ${projectCleanup.freedBytes} bytes`);
+		const projectCleanupTimer = setInterval(() => {
+			try {
+				const result = accountService?.cleanupInactiveProjects();
+				if (result?.deletedProjects) console.log(`[server] Account project cleanup deleted ${result.deletedProjects} inactive projects and freed ${result.freedBytes} bytes`);
+			} catch (error) {
+				console.error("[server] Account project cleanup failed:", error);
+			}
+		}, 6 * 60 * 60 * 1000);
+		projectCleanupTimer.unref();
 	}
 	const resourceCache = new CqResourceCache(config.resource_cache);
 	if (resourceCache.enabled) {

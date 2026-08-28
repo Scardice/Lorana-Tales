@@ -253,12 +253,19 @@ export class AccountService {
 		const groups = this.config.storage_groups && typeof this.config.storage_groups === "object" ? this.config.storage_groups : {};
 		const fallbackName = String(this.config.default_group || "default");
 		const group = String(user.group || fallbackName);
-		const raw = groups[group] || groups[fallbackName] || { quota_mb: 256, max_projects: 100 };
+		const raw = groups[group] || groups[fallbackName] || { quota_mb: 256, max_projects: 100, retention_days: 180 };
+		const groupRetentionDays = Math.max(0, Math.floor(Number(raw.retention_days ?? 180)));
 		return {
 			group,
 			quotaBytes: Math.max(1, Number(raw.quota_mb || 256)) * 1024 * 1024,
 			maxProjects: Math.max(1, Math.floor(Number(raw.max_projects || 100))),
+			retentionDays: user.retentionDaysOverride === null ? groupRetentionDays : user.retentionDaysOverride,
+			retentionSource: user.retentionDaysOverride === null ? "group" : "user",
 		};
+	}
+
+	cleanupInactiveProjects() {
+		return this.store.cleanupInactiveProjects((user) => this.storagePolicy(user).retentionDays);
 	}
 
 	private storageUsage(user: AccountUser) {

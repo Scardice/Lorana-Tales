@@ -6,7 +6,7 @@ import Database from "better-sqlite3";
 import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
 
 import { AccountStore } from "../src/accounts/account-store";
-import { storyFromLogItems } from "../web/src/story/model";
+import { storyFromLogItems, storyStreamingText } from "../web/src/story/model";
 import { createStoryPackage, readStoryPackage } from "../web/src/story/package";
 import { createPerformanceHtml } from "../web/src/story/standalone-performance";
 import type { StoryArchive, StoryCharacter } from "../web/src/story/types";
@@ -76,6 +76,12 @@ document.effectTracks.push({ id: "effect-one", effect: "low-health", color: "ora
 document.characterStateEvents.push({ id: "state-one", characterId: "alice", state: "dead", afterMessageId: "message-text", label: "阵亡" });
 const archive: StoryArchive = { document, assets: new Map([["avatar-one", bytes], ["image-two", bytes]]) };
 
+assert.equal(
+	storyStreamingText("开始[CQ:at,qq=12345678] [CQ:face,id=14] [CQ:image,file=expired] [CQ:unknown,payload=very-long]结束", document.characters, true),
+	"开始@爱丽丝 【表情】 【图片】 【消息资源】结束",
+	"所有 CQ 码都应在流式输出前原子化为最终可见内容",
+);
+
 const blob = await createStoryPackage(archive);
 const packed = new Uint8Array(await blob.arrayBuffer());
 const entries = unzipSync(packed);
@@ -111,6 +117,12 @@ assert.ok(Buffer.isBuffer(binaryProject?.document));
 assert.deepEqual(new Uint8Array(binaryProject!.document as Buffer), packed);
 const legacyProject = accountStore.createProject(testUser.id, "旧工程", { language: "legacy", assets: [] });
 assert.deepEqual(legacyProject?.document, { language: "legacy", assets: [] });
+assert.equal(accountStore.updateUser(testUser.id, { retentionDaysOverride: 14 })?.retentionDaysOverride, 14);
+database.prepare("UPDATE editor_projects SET last_activity_at = ? WHERE id = ?").run("2020-01-01T00:00:00.000Z", legacyProject!.id);
+const cleanupResult = accountStore.cleanupInactiveProjects((user) => user.retentionDaysOverride ?? 30);
+assert.equal(cleanupResult.deletedProjects, 1);
+assert.equal(accountStore.getProject(testUser.id, legacyProject!.id), null);
+assert.ok(accountStore.getProject(testUser.id, binaryProject!.id));
 database.close();
 
 const withUnknownFile = { ...entries, "unlisted.bin": new Uint8Array([1]) };

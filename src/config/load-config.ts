@@ -70,8 +70,8 @@ const DEFAULT_CONFIG = {
 		default_group: "default",
 		admin_group: "advanced",
 		storage_groups: {
-			default: { quota_mb: 256, max_projects: 100 },
-			advanced: { quota_mb: 2048, max_projects: 1000 },
+			default: { quota_mb: 256, max_projects: 100, retention_days: 180 },
+			advanced: { quota_mb: 2048, max_projects: 1000, retention_days: 365 },
 		},
 		encryption_key: "",
 		session_days: 30,
@@ -238,10 +238,11 @@ export function loadConfig() {
 		...(fileConfig.accounts?.storage_groups || {}),
 	};
 	for (const [name, policy] of Object.entries(config.accounts.storage_groups)) {
-		const groupPolicy = policy as { quota_mb?: number; max_projects?: number };
+		const groupPolicy = policy as { quota_mb?: number; max_projects?: number; retention_days?: number };
 		config.accounts.storage_groups[name] = {
 			quota_mb: Math.max(1, Number(groupPolicy.quota_mb || DEFAULT_CONFIG.accounts.storage_groups.default.quota_mb)),
 			max_projects: Math.max(1, Math.floor(Number(groupPolicy.max_projects || DEFAULT_CONFIG.accounts.storage_groups.default.max_projects))),
+			retention_days: Math.max(0, Math.floor(Number(groupPolicy.retention_days ?? DEFAULT_CONFIG.accounts.storage_groups.default.retention_days))),
 		};
 	}
 	config.avatar_providers = {
