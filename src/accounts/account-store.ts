@@ -28,6 +28,7 @@ export interface AccountUser {
 	mustChangePassword: boolean;
 	tutorialPromptSeen: boolean;
 	manualPlaybackHintSeen: boolean;
+	tutorialPlaybackCoachSeen: boolean;
 	createdAt: string;
 	updatedAt: string;
 }
@@ -99,6 +100,7 @@ function rowToUser(row: SqlRow): AccountUser {
 		mustChangePassword: Number(row.must_change_password || 0) === 1,
 		tutorialPromptSeen: Number(row.tutorial_prompt_seen || 0) === 1,
 		manualPlaybackHintSeen: Number(row.manual_playback_hint_seen || 0) === 1,
+		tutorialPlaybackCoachSeen: Number(row.tutorial_playback_coach_seen || 0) === 1,
 		createdAt: String(row.created_at || ""),
 		updatedAt: String(row.updated_at || ""),
 	};
@@ -157,6 +159,7 @@ export class AccountStore {
 				must_change_password INTEGER NOT NULL DEFAULT 0,
 				tutorial_prompt_seen INTEGER NOT NULL DEFAULT 0,
 				manual_playback_hint_seen INTEGER NOT NULL DEFAULT 0,
+				tutorial_playback_coach_seen INTEGER NOT NULL DEFAULT 0,
 				created_at TEXT NOT NULL,
 				updated_at TEXT NOT NULL
 			);
@@ -260,6 +263,7 @@ export class AccountStore {
 		if (!columns.has("account_group")) this.db.exec("ALTER TABLE account_users ADD COLUMN account_group TEXT NOT NULL DEFAULT 'default'");
 		if (!columns.has("tutorial_prompt_seen")) this.db.exec("ALTER TABLE account_users ADD COLUMN tutorial_prompt_seen INTEGER NOT NULL DEFAULT 0");
 		if (!columns.has("manual_playback_hint_seen")) this.db.exec("ALTER TABLE account_users ADD COLUMN manual_playback_hint_seen INTEGER NOT NULL DEFAULT 0");
+		if (!columns.has("tutorial_playback_coach_seen")) this.db.exec("ALTER TABLE account_users ADD COLUMN tutorial_playback_coach_seen INTEGER NOT NULL DEFAULT 0");
 		const presetColumns = new Set((this.db.prepare("PRAGMA table_info(account_effect_presets)").all() as SqlRow[]).map((row) => String(row.name || "")));
 		if (!presetColumns.has("kind")) this.db.exec("ALTER TABLE account_effect_presets ADD COLUMN kind TEXT NOT NULL DEFAULT 'screen'");
 		if (!presetColumns.has("folder_id")) this.db.exec("ALTER TABLE account_effect_presets ADD COLUMN folder_id TEXT NOT NULL DEFAULT ''");
@@ -397,14 +401,15 @@ export class AccountStore {
 		return this.getUserById(userId);
 	}
 
-	markOnboarding(userId: string, input: { tutorialPromptSeen?: boolean; manualPlaybackHintSeen?: boolean }) {
+	markOnboarding(userId: string, input: { tutorialPromptSeen?: boolean; manualPlaybackHintSeen?: boolean; tutorialPlaybackCoachSeen?: boolean }) {
 		const current = this.getUserById(userId);
 		if (!current) return null;
 		this.db.prepare(`UPDATE account_users SET
 			tutorial_prompt_seen = CASE WHEN ? = 1 THEN 1 ELSE tutorial_prompt_seen END,
 			manual_playback_hint_seen = CASE WHEN ? = 1 THEN 1 ELSE manual_playback_hint_seen END,
+			tutorial_playback_coach_seen = CASE WHEN ? = 1 THEN 1 ELSE tutorial_playback_coach_seen END,
 			updated_at = ? WHERE id = ?`)
-			.run(input.tutorialPromptSeen ? 1 : 0, input.manualPlaybackHintSeen ? 1 : 0, nowIso(), userId);
+			.run(input.tutorialPromptSeen ? 1 : 0, input.manualPlaybackHintSeen ? 1 : 0, input.tutorialPlaybackCoachSeen ? 1 : 0, nowIso(), userId);
 		return this.getUserById(userId);
 	}
 

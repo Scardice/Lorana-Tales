@@ -306,6 +306,10 @@ test.describe("Lorana Tales story editor", () => {
 		await expect(page.getByRole("button", { name: "暂停演出" })).toBeVisible();
 		await expect(page.getByText(/自动播放中/)).toBeVisible();
 		await expect(page.locator('.player--playback-only img[src^="blob:"]').first()).toBeVisible();
+		await expect(page.getByRole("button", { name: "继续演出" })).toBeVisible({ timeout: 15_000 });
+		await expect(page.getByText("已暂停：自动播放时也可以点击画布，立即播放下一句", { exact: true })).toBeVisible();
+		await page.locator(".player > main").click();
+		await expect(page.getByRole("button", { name: "暂停演出" })).toBeVisible();
 		await assertViewportIntegrity(page);
 		await page.getByRole("button", { name: "← 返回" }).click();
 		await expect(center).toBeVisible();
@@ -327,6 +331,7 @@ test.describe("Lorana Tales story editor", () => {
 		await assertViewportIntegrity(page);
 		expect(errors).toEqual([]);
 	});
+
 
 	test("first editor visit offers the tutorial once", async ({ page }) => {
 		await page.context().clearCookies();

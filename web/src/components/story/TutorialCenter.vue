@@ -31,7 +31,7 @@
       </div>
     </Transition>
   </Teleport>
-  <StoryPlayer v-if="activeArchive" :show="playerOpen" :archive="activeArchive" :asset-url="tutorialAssetUrl" playback-only auto-start @change="activeArchive=$event" @complete="tutorialComplete=true" @close="closePlayer" />
+  <StoryPlayer v-if="activeArchive" :show="playerOpen" :archive="activeArchive" :asset-url="tutorialAssetUrl" playback-only auto-start teach-manual-advance @change="activeArchive=$event" @complete="tutorialComplete=true" @close="closePlayer" />
   <Teleport to="body">
     <Transition name="tutorial-complete">
       <div v-if="tutorialComplete" class="tutorial-complete-overlay">

@@ -417,6 +417,7 @@ export class AccountService {
 				const user = this.store.markOnboarding(session.user.id, {
 					tutorialPromptSeen: body.tutorialPromptSeen === true,
 					manualPlaybackHintSeen: body.manualPlaybackHintSeen === true,
+					tutorialPlaybackCoachSeen: body.tutorialPlaybackCoachSeen === true,
 				});
 				json(res, user ? 200 : 404, user ? { user: this.publicUser(user) } : { error: "account_not_found" });
 			} catch { json(res, 400, { error: "onboarding_invalid" }); }
