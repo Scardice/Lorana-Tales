@@ -853,6 +853,29 @@ export async function startServer(
 		res.status(404).type("text/plain").send("Not Found");
 	});
 
+	// Keep parser and route failures on a small, stable response boundary. Express'
+	// default handler emits HTML and can include implementation details outside of
+	// production mode, which is unsuitable for a public JSON API.
+	app.use((error: unknown, req: express.Request, res: express.Response, next: express.NextFunction) => {
+		if (res.headersSent) {
+			next(error);
+			return;
+		}
+		const candidate = error as { status?: unknown; statusCode?: unknown; type?: unknown };
+		const reportedStatus = Number(candidate?.status || candidate?.statusCode || 0);
+		const tooLarge = candidate?.type === "entity.too.large" || reportedStatus === 413;
+		const invalidRequest = error instanceof SyntaxError || reportedStatus === 400;
+		const status = tooLarge ? 413 : invalidRequest ? 400 : 500;
+		const apiRequest = req.path.startsWith("/api/") || req.path.startsWith("/dice/api/") || req.path.startsWith("/admin/api/");
+		if (status === 500) console.error("[server] Unhandled request error:", error);
+		res.status(status).setHeader("Cache-Control", "no-store");
+		if (apiRequest) {
+			res.type("application/json").send(JSON.stringify({ error: tooLarge ? "payload_too_large" : invalidRequest ? "invalid_request" : "internal_error" }));
+			return;
+		}
+		res.type("text/plain").send(tooLarge ? "Payload Too Large" : invalidRequest ? "Bad Request" : "Internal Server Error");
+	});
+
 	const { host, port } = config.server;
 	const server = app.listen(port, host, () => {
 		console.log(
