@@ -85,11 +85,13 @@ async function main() {
 		const userB = await service.store.createUser({ email: "b@example.test", password: "Audit-user-password-B", username: "audit_user_b", nickname: "B" });
 		const admin = await service.store.createUser({ email: "second-admin@example.test", password: "Audit-admin-password-B", username: "audit_admin_b", nickname: "Admin", role: "admin", group: "admin" });
 
-		const story = await fetch(`${base}/story`, { headers: { host: "127.0.0.1" } });
-		assert.equal(story.status, 200);
-		assert.equal(story.headers.get("x-content-type-options"), "nosniff");
-		assert.equal(story.headers.get("x-frame-options"), "DENY");
-		assert.match(story.headers.get("content-security-policy") || "", /frame-ancestors 'none'/);
+		// The security job runs before the frontend build, so assert global response
+		// headers on the always-present health endpoint instead of static output.
+		const health = await fetch(`${base}/healthz`, { headers: { host: "127.0.0.1" } });
+		assert.equal(health.status, 200);
+		assert.equal(health.headers.get("x-content-type-options"), "nosniff");
+		assert.equal(health.headers.get("x-frame-options"), "DENY");
+		assert.match(health.headers.get("content-security-policy") || "", /frame-ancestors 'none'/);
 
 		assert.equal(await requestWithHost(address.port, "evil.example"), 400);
 		assert.equal((await fetch(`${base}/metrics`)).status, 401);
