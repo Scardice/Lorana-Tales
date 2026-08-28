@@ -71,12 +71,12 @@ function tutorialArchive(id: string, title: string, lines: Line[]): StoryArchive
         showQqInPreview: false,
         showNarratorAvatar: true,
         showNarratorNames: true,
-        autoplay: false,
+        autoplay: true,
         streamEnabled: true,
         typingIndicatorEnabled: id === "record",
         typingIndicatorText: "正在演示输入提示",
         typingIndicatorMs: id === "record" ? 650 : 0,
-        fixedDelayMs: 1800,
+        fixedDelayMs: 900,
       },
       source: { kind: "none", name: "Lorana Tales 内置教程" },
     },
@@ -85,10 +85,7 @@ function tutorialArchive(id: string, title: string, lines: Line[]): StoryArchive
 
 const lesson = (meta: Omit<StoryTutorial, "archive">, lines: Line[]): StoryTutorial => ({
   ...meta,
-  archive: tutorialArchive(meta.id, meta.title, [
-    ...lines,
-    ["guide", `轮到你啦：${meta.challenge}`, { tokenAnimation: "rise", screenEffect: "glow", screenEffectColor: "green" }],
-  ]),
+  archive: tutorialArchive(meta.id, meta.title, lines),
 });
 
 export const storyTutorials: StoryTutorial[] = [

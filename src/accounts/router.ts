@@ -410,6 +410,18 @@ export class AccountService {
 			const session = this.getSession(req); json(res, 200, session ? { authenticated: true, user: this.publicUser(session.user), storage: this.storageUsage(session.user) } : { authenticated: false });
 		});
 
+		app.patch("/api/account/onboarding", (req, res) => {
+			const session = this.requireSession(req, res, true, true); if (!session) return;
+			try {
+				const body = readJson(req);
+				const user = this.store.markOnboarding(session.user.id, {
+					tutorialPromptSeen: body.tutorialPromptSeen === true,
+					manualPlaybackHintSeen: body.manualPlaybackHintSeen === true,
+				});
+				json(res, user ? 200 : 404, user ? { user: this.publicUser(user) } : { error: "account_not_found" });
+			} catch { json(res, 400, { error: "onboarding_invalid" }); }
+		});
+
 		app.patch("/api/account/profile", (req, res) => {
 			const session = this.requireSession(req, res, true); if (!session || !this.requireRiskClearance(session.user.id, "profile-change", req, res)) return;
 			try {

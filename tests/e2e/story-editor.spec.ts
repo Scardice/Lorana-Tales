@@ -17,6 +17,7 @@ async function openCleanStory(page: Page) {
 	await page.addInitScript(() => {
 		localStorage.clear();
 		indexedDB.deleteDatabase("lorana-story-drafts");
+		document.cookie = "lorana_tutorial_prompt_seen=1; Path=/; Max-Age=315360000; SameSite=Lax";
 	});
 	await page.goto("/story?e2e=1", { waitUntil: "networkidle" });
 	await expect(page.getByText("还没有消息。请从下方选择角色并开始写作。")).toBeVisible();
@@ -297,13 +298,14 @@ test.describe("Lorana Tales story editor", () => {
 		await page.getByRole("button", { name: "更多" }).click();
 		await page.getByText("教程中心", { exact: true }).click();
 		const center = page.getByRole("dialog", { name: "教程中心" });
-		await expect(center.getByText("边看故事，边学会创作", { exact: true })).toBeVisible();
+		await expect(center.getByText("基本使用教程", { exact: true })).toBeVisible();
 		await expect(center.locator(".tutorial-categories button")).toHaveCount(4);
 		const welcome = center.locator("article").filter({ hasText: "一分钟认识编辑器" });
 		await welcome.getByRole("button", { name: "开始教程" }).click();
 		await expect(page.locator(".player--playback-only")).toBeVisible();
-		await expect(page.getByText("点击“开始演出”，或先选择播放方式", { exact: true })).toBeVisible();
-		await expect(page.locator(".player--playback-only .player-avatar img").first()).toHaveAttribute("src", /^blob:/);
+		await expect(page.getByRole("button", { name: "暂停演出" })).toBeVisible();
+		await expect(page.getByText(/自动播放中/)).toBeVisible();
+		await expect(page.locator('.player--playback-only img[src^="blob:"]').first()).toBeVisible();
 		await assertViewportIntegrity(page);
 		await page.getByRole("button", { name: "← 返回" }).click();
 		await expect(center).toBeVisible();
@@ -324,5 +326,18 @@ test.describe("Lorana Tales story editor", () => {
 		await expect(page.getByRole("dialog", { name: "教程中心" })).toBeVisible();
 		await assertViewportIntegrity(page);
 		expect(errors).toEqual([]);
+	});
+
+	test("first editor visit offers the tutorial once", async ({ page }) => {
+		await page.context().clearCookies();
+		await page.addInitScript(() => {
+			localStorage.clear();
+			indexedDB.deleteDatabase("lorana-story-drafts");
+		});
+		await page.goto("/story?first-tutorial=1", { waitUntil: "networkidle" });
+		await expect(page.getByRole("dialog", { name: "第一次使用 Lorana Tales 吗？" })).toBeVisible();
+		await page.getByRole("button", { name: "暂时不用" }).click();
+		await page.reload({ waitUntil: "networkidle" });
+		await expect(page.getByRole("dialog", { name: "第一次使用 Lorana Tales 吗？" })).toHaveCount(0);
 	});
 });

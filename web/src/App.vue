@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { darkTheme, lightTheme } from "naive-ui";
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import Main from "./Main.vue";
 import StoryPage from "./pages/StoryPage.vue";
 import SspPlaybackPage from "./pages/SspPlaybackPage.vue";
 import AccountPanel from "./components/story/AccountPanel.vue";
 import TutorialCenter from "./components/story/TutorialCenter.vue";
 import { useThemeDark } from "./composables/useTheme";
+import { markOnboardingSeen, onboardingSeen } from "./story/onboarding";
 
 type EditorMode = "story" | "legacy";
 type EditorShellConfig = {
@@ -22,6 +23,8 @@ type EditorShellConfig = {
 const isDark = useThemeDark();
 const ready = ref(false);
 const tutorialOpen = ref(false);
+const firstTutorialPromptOpen = ref(false);
+const tutorialRestore = ref<null | (() => void)>(null);
 const playbackRoute = computed(() => /^\/play\/?$/.test(location.pathname));
 const legacyCompatible = ref(true);
 const legacyWarningOpen = ref(false);
@@ -106,7 +109,29 @@ function syncVisualViewport() {
 	document.documentElement.style.setProperty("--app-visual-height", `${Math.round(height)}px`);
 }
 
-function openTutorials() { tutorialOpen.value = true; }
+function openTutorials(event?: Event) {
+	const detail = (event as CustomEvent<{ restore?: () => void }> | undefined)?.detail;
+	tutorialRestore.value = typeof detail?.restore === "function" ? detail.restore : null;
+	tutorialOpen.value = true;
+}
+
+function closeTutorials() {
+	tutorialOpen.value = false;
+	const restore = tutorialRestore.value;
+	tutorialRestore.value = null;
+	if (restore) nextTick(restore);
+}
+
+async function maybePromptFirstTutorial() {
+	if (playbackRoute.value || requestedMode.value !== "story" || await onboardingSeen("tutorialPromptSeen")) return;
+	firstTutorialPromptOpen.value = true;
+}
+
+async function answerFirstTutorial(open: boolean) {
+	await markOnboardingSeen("tutorialPromptSeen");
+	firstTutorialPromptOpen.value = false;
+	if (open) openTutorials();
+}
 
 onMounted(async () => {
 	syncVisualViewport();
@@ -123,6 +148,7 @@ onMounted(async () => {
 	} finally {
 		applyBranding();
 		ready.value = true;
+		void maybePromptFirstTutorial();
 	}
 });
 
@@ -166,7 +192,8 @@ onBeforeUnmount(() => {
 						<SspPlaybackPage v-if="playbackRoute" />
 						<StoryPage v-else-if="requestedMode === 'story'" :community-notice="config.communityNotice" />
 						<Main v-else legacy-only :community-notice="config.communityNotice" />
-						<TutorialCenter :show="tutorialOpen" @close="tutorialOpen=false" />
+						<TutorialCenter :show="tutorialOpen" @close="closeTutorials" />
+						<Teleport to="body"><Transition name="mode-warning"><div v-if="firstTutorialPromptOpen" class="mode-warning first-tutorial-prompt"><section role="dialog" aria-modal="true" aria-labelledby="first-tutorial-title"><header><div><strong id="first-tutorial-title">第一次使用 Lorana Tales 吗？</strong><small>两分钟认识编辑器</small></div></header><p>要不要先看“基本使用教程”？以后也可以随时从输入区设置或顶部更多菜单再次打开。</p><footer><button type="button" @click="answerFirstTutorial(false)">暂时不用</button><button class="primary" type="button" @click="answerFirstTutorial(true)">看看教程</button></footer></section></div></Transition></Teleport>
 						<Teleport to="body"><Transition name="mode-warning"><div v-if="legacyWarningOpen" class="mode-warning" @click.self="closeLegacyWarning"><section role="alertdialog" aria-modal="true" aria-labelledby="legacy-warning-title"><header><div><strong id="legacy-warning-title">经典模式无法读取新版编辑</strong><small>当前故事包含 Lorana Tales 新版内容</small></div><button class="mode-warning__close" type="button" aria-label="关闭" @click="closeLegacyWarning"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15" /></svg></button></header><p>建议先从下载菜单导出“传统日志 TXT”，再到经典染色器中导入。</p><div v-if="legacyDiscardStep" class="mode-warning__danger"><strong>再次确认丢弃？</strong><span>只会删除当前日志在这个浏览器里的新版草稿；服务端原日志、已下载文件和其他工程不受影响。未导出的新版编辑无法恢复。</span></div><footer><button type="button" @click="closeLegacyWarning">返回编辑</button><button class="danger" type="button" :disabled="legacyDiscarding" @click="discardAndSwitchToLegacy">{{ legacyDiscarding ? "正在清除…" : legacyDiscardStep ? "确认丢弃并进入经典" : "丢弃新版修改" }}</button></footer></section></div></Transition></Teleport>
 					</div>
 				</n-notification-provider>
@@ -186,6 +213,7 @@ onBeforeUnmount(() => {
 .global-upperbar{grid-template-columns:minmax(8rem,1fr) auto}.site-brand img{display:block;width:30px;height:30px;max-width:30px;max-height:30px;flex:0 0 30px;border-radius:7px;background:transparent;object-fit:contain;image-rendering:pixelated}.site-brand strong{font-weight:650;letter-spacing:.01em}@media(max-width:650px){.global-upperbar{grid-template-columns:42px minmax(0,1fr)}.site-brand img{width:27px;height:27px;max-width:27px;max-height:27px;flex-basis:27px;border-radius:6px}}
 .global-upperbar{min-height:44px;padding:.25rem .55rem}.global-workbar{min-height:44px;padding:.25rem .55rem}.theme-toggle,.toolbar-fold,.toolbar-expand{width:34px;height:34px}.global-upperbar button,.global-workbar button{padding:.38rem .55rem}@media(max-width:650px){.global-upperbar{padding:.22rem .38rem}.global-workbar{min-height:42px;padding:.22rem .38rem}.theme-toggle,.toolbar-fold,.toolbar-expand{width:32px;height:32px}}
 .mode-warning{position:fixed;inset:0;z-index:20000;display:grid;place-items:center;padding:1rem;background:#0009}.mode-warning section{box-sizing:border-box;width:min(470px,100%);max-height:calc(100dvh - 2rem);overflow:auto;border:1px solid var(--control-border);border-radius:16px;padding:1rem;background:var(--panel-surface);box-shadow:0 20px 60px #0007;color:var(--control-text)}.mode-warning header,.mode-warning footer{display:flex;align-items:center;gap:.65rem}.mode-warning header{justify-content:space-between}.mode-warning header>div{display:grid;gap:.12rem}.mode-warning header small,.mode-warning p,.mode-warning__danger span{color:var(--muted-text)}.mode-warning p{margin:.85rem 0;line-height:1.55}.mode-warning footer{justify-content:flex-end;margin-top:1rem}.mode-warning button{min-height:36px;border:1px solid var(--control-border);border-radius:9px;padding:.45rem .75rem;background:var(--control-surface);color:var(--control-text);font:inherit;cursor:pointer}.mode-warning button:hover{background:var(--control-hover)}.mode-warning button:disabled{opacity:.55;cursor:wait}.mode-warning button.danger{border-color:color-mix(in srgb,var(--danger-bg) 58%,var(--control-border));background:var(--danger-bg);color:var(--danger-text)}.mode-warning__close{display:grid;width:34px;min-width:34px;padding:0!important;place-items:center}.mode-warning__close svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round}.mode-warning__danger{display:grid;gap:.22rem;border:1px solid color-mix(in srgb,var(--danger-bg) 45%,var(--control-border));border-radius:11px;padding:.75rem;background:color-mix(in srgb,var(--danger-bg) 11%,var(--panel-surface))}.mode-warning__danger strong{color:var(--danger-ink)}.mode-warning-enter-active,.mode-warning-leave-active{transition:opacity .18s ease}.mode-warning-enter-active section,.mode-warning-leave-active section{transition:transform .22s cubic-bezier(.2,.75,.2,1),opacity .18s ease}.mode-warning-enter-from,.mode-warning-leave-to{opacity:0}.mode-warning-enter-from section,.mode-warning-leave-to section{opacity:0;transform:translateY(12px) scale(.98)}@media(max-width:650px){.mode-warning{place-items:stretch;padding:0}.mode-warning section{width:100%;height:100%;max-height:none;border:0;border-radius:0;padding:max(1rem,env(safe-area-inset-top)) .85rem max(1rem,env(safe-area-inset-bottom));box-shadow:none}.mode-warning footer{position:sticky;bottom:0;margin:1rem -.85rem 0;padding:.8rem .85rem;background:var(--panel-surface)}.mode-warning footer button{flex:1}}
+.mode-warning button.primary{border-color:var(--primary-bg);background:var(--primary-bg);color:var(--primary-text)}
 </style>
 
 <style>

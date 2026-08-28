@@ -26,6 +26,8 @@ export interface AccountUser {
 	banReason: string;
 	banUntil: string;
 	mustChangePassword: boolean;
+	tutorialPromptSeen: boolean;
+	manualPlaybackHintSeen: boolean;
 	createdAt: string;
 	updatedAt: string;
 }
@@ -95,6 +97,8 @@ function rowToUser(row: SqlRow): AccountUser {
 		banReason: String(row.ban_reason || ""),
 		banUntil: String(row.ban_until || ""),
 		mustChangePassword: Number(row.must_change_password || 0) === 1,
+		tutorialPromptSeen: Number(row.tutorial_prompt_seen || 0) === 1,
+		manualPlaybackHintSeen: Number(row.manual_playback_hint_seen || 0) === 1,
 		createdAt: String(row.created_at || ""),
 		updatedAt: String(row.updated_at || ""),
 	};
@@ -151,6 +155,8 @@ export class AccountStore {
 				ban_reason TEXT NOT NULL DEFAULT '',
 				ban_until TEXT NOT NULL DEFAULT '',
 				must_change_password INTEGER NOT NULL DEFAULT 0,
+				tutorial_prompt_seen INTEGER NOT NULL DEFAULT 0,
+				manual_playback_hint_seen INTEGER NOT NULL DEFAULT 0,
 				created_at TEXT NOT NULL,
 				updated_at TEXT NOT NULL
 			);
@@ -252,6 +258,8 @@ export class AccountStore {
 		if (!columns.has("nickname")) this.db.exec("ALTER TABLE account_users ADD COLUMN nickname TEXT NOT NULL DEFAULT ''");
 		if (!columns.has("avatar_url")) this.db.exec("ALTER TABLE account_users ADD COLUMN avatar_url TEXT NOT NULL DEFAULT ''");
 		if (!columns.has("account_group")) this.db.exec("ALTER TABLE account_users ADD COLUMN account_group TEXT NOT NULL DEFAULT 'default'");
+		if (!columns.has("tutorial_prompt_seen")) this.db.exec("ALTER TABLE account_users ADD COLUMN tutorial_prompt_seen INTEGER NOT NULL DEFAULT 0");
+		if (!columns.has("manual_playback_hint_seen")) this.db.exec("ALTER TABLE account_users ADD COLUMN manual_playback_hint_seen INTEGER NOT NULL DEFAULT 0");
 		const presetColumns = new Set((this.db.prepare("PRAGMA table_info(account_effect_presets)").all() as SqlRow[]).map((row) => String(row.name || "")));
 		if (!presetColumns.has("kind")) this.db.exec("ALTER TABLE account_effect_presets ADD COLUMN kind TEXT NOT NULL DEFAULT 'screen'");
 		if (!presetColumns.has("folder_id")) this.db.exec("ALTER TABLE account_effect_presets ADD COLUMN folder_id TEXT NOT NULL DEFAULT ''");
@@ -386,6 +394,17 @@ export class AccountStore {
 		const group = input.group === undefined ? current.group : String(input.group).trim().slice(0, 40) || "default";
 		this.db.prepare("UPDATE account_users SET email = ?, username = ?, nickname = ?, avatar_url = ?, display_name = ?, role = ?, account_group = ?, updated_at = ? WHERE id = ?")
 			.run(email, username, nickname, avatarUrl, nickname, role, group, nowIso(), userId);
+		return this.getUserById(userId);
+	}
+
+	markOnboarding(userId: string, input: { tutorialPromptSeen?: boolean; manualPlaybackHintSeen?: boolean }) {
+		const current = this.getUserById(userId);
+		if (!current) return null;
+		this.db.prepare(`UPDATE account_users SET
+			tutorial_prompt_seen = CASE WHEN ? = 1 THEN 1 ELSE tutorial_prompt_seen END,
+			manual_playback_hint_seen = CASE WHEN ? = 1 THEN 1 ELSE manual_playback_hint_seen END,
+			updated_at = ? WHERE id = ?`)
+			.run(input.tutorialPromptSeen ? 1 : 0, input.manualPlaybackHintSeen ? 1 : 0, nowIso(), userId);
 		return this.getUserById(userId);
 	}
 
