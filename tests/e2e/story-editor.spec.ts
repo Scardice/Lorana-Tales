@@ -337,6 +337,26 @@ test.describe("Lorana Tales story editor", () => {
 		expect(errors).toEqual([]);
 	});
 
+	test("account tutorial cards open above the account workspace", async ({ page }) => {
+		await page.addInitScript(() => { document.cookie = "lorana_tutorial_prompt_seen=1; Path=/; Max-Age=315360000; SameSite=Lax"; });
+		await page.route("**/api/account/config", route => route.fulfill({ json: { enabled: true, registrationEnabled: true, captchaProvider: "image", turnstileSiteKey: "", hcaptchaSiteKey: "" } }));
+		await page.route("**/api/account/me", route => route.fulfill({ json: { authenticated: true, user: { id: "qa-user", username: "qa_user", nickname: "界面验收", email: "qa@example.test", avatarUrl: "", mustChangePassword: false, group: "default", role: "user" }, storage: { group: "default", usedBytes: 0, quotaBytes: 268435456, remainingBytes: 268435456, projectCount: 0, maxProjects: 100 } } }));
+		await page.route("**/api/account/projects", route => route.fulfill({ json: [] }));
+		await page.goto("/story?account-tutorial-qa=1", { waitUntil: "networkidle" });
+		await page.getByRole("button", { name: /界面验收/ }).click();
+		await page.getByRole("button", { name: "教程", exact: true }).first().click();
+		const tutorialPage = page.locator(".account-tutorial-page");
+		await expect(tutorialPage.getByText("基本使用教程", { exact: true })).toBeVisible();
+		await expect(tutorialPage.getByText("选择一节短演出，边看故事边熟悉创作工具。", { exact: true })).toHaveCount(0);
+		const start = tutorialPage.getByRole("button", { name: "开始教程" }).first();
+		expect(await start.evaluate(element => getComputedStyle(element).backgroundColor)).not.toBe("rgba(0, 0, 0, 0)");
+		await start.click();
+		const player = page.locator(".player--playback-only");
+		await expect(player).toBeVisible();
+		const layers = await page.evaluate(() => ({ player: Number(getComputedStyle(document.querySelector<HTMLElement>(".player")!).zIndex), account: Number(getComputedStyle(document.querySelector<HTMLElement>(".account-overlay")!).zIndex) }));
+		expect(layers.player).toBeGreaterThan(layers.account);
+	});
+
 
 	test("first editor visit offers the tutorial once", async ({ page }) => {
 		await page.context().clearCookies();
