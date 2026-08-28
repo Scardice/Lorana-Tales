@@ -29,10 +29,19 @@ async function assertViewportIntegrity(page: Page) {
 			.filter(element => {
 				const style = getComputedStyle(element);
 				const rect = element.getBoundingClientRect();
-				return style.visibility !== "hidden" && style.display !== "none" && rect.width > 0 && rect.height > 0;
+				if (style.visibility === "hidden" || style.display === "none" || rect.width <= 0 || rect.height <= 0) return false;
+				const x = Math.min(innerWidth - 1, Math.max(0, rect.left + Math.min(rect.width / 2, 12)));
+				const y = Math.min(innerHeight - 1, Math.max(0, rect.top + Math.min(rect.height / 2, 12)));
+				const topmost = document.elementFromPoint(x, y);
+				return !!topmost && (topmost === element || element.contains(topmost));
 			});
 		const clipped = visibleControls.filter(element => {
 			const rect = element.getBoundingClientRect();
+			let parent = element.parentElement;
+			while (parent) {
+				if (["auto", "scroll"].includes(getComputedStyle(parent).overflowX)) return false;
+				parent = parent.parentElement;
+			}
 			return rect.right > innerWidth + 2 || rect.left < -2;
 		}).map(element => ({ text: element.innerText || element.getAttribute("aria-label"), rect: element.getBoundingClientRect().toJSON() }));
 		return {
@@ -278,6 +287,42 @@ test.describe("Lorana Tales story editor", () => {
 		await expect(mobilePerformanceSettings.getByText("输入提示", { exact: true })).toBeVisible();
 		await assertViewportIntegrity(page);
 		await page.screenshot({ path: "test-results/story-mobile-performance-settings-light.png", fullPage: true });
+		expect(errors).toEqual([]);
+	});
+
+	test("built-in tutorial SSPs and playback-only route work on desktop and mobile", async ({ page }) => {
+		await page.setViewportSize({ width: 1280, height: 800 });
+		await openCleanStory(page);
+		await setDarkTheme(page, false);
+		await page.getByRole("button", { name: "更多" }).click();
+		await page.getByText("教程中心", { exact: true }).click();
+		const center = page.getByRole("dialog", { name: "教程中心" });
+		await expect(center.getByText("边看故事，边学会创作", { exact: true })).toBeVisible();
+		await expect(center.locator(".tutorial-categories button")).toHaveCount(4);
+		const welcome = center.locator("article").filter({ hasText: "一分钟认识编辑器" });
+		await welcome.getByRole("button", { name: "开始教程" }).click();
+		await expect(page.locator(".player--playback-only")).toBeVisible();
+		await expect(page.getByText("点击“开始演出”，或先选择播放方式", { exact: true })).toBeVisible();
+		await expect(page.locator(".player--playback-only .player-avatar img").first()).toHaveAttribute("src", /^blob:/);
+		await assertViewportIntegrity(page);
+		await page.getByRole("button", { name: "← 返回" }).click();
+		await expect(center).toBeVisible();
+		await center.getByRole("button", { name: "关闭教程" }).click();
+
+		await page.goto("/play?src=/tutorials/characters.ssp", { waitUntil: "networkidle" });
+		await expect(page.locator(".player--playback-only")).toBeVisible();
+		await expect(page.locator(".player--playback-only .player-avatar img").first()).toHaveAttribute("src", /^blob:/);
+		await page.getByRole("button", { name: "开始演出" }).click();
+		await expect(page.getByText(/点击画布播放下一条|自动播放中/)).toBeVisible();
+		await page.getByRole("button", { name: "关闭演出" }).click();
+		await expect(page.locator(".player--playback-only")).toBeVisible();
+
+		await page.setViewportSize({ width: 390, height: 844 });
+		await page.getByRole("button", { name: "← 返回" }).click();
+		await expect(page.getByRole("heading", { name: "SSP 播放器" })).toBeVisible();
+		await page.getByRole("button", { name: "浏览内置教程" }).click();
+		await expect(page.getByRole("dialog", { name: "教程中心" })).toBeVisible();
+		await assertViewportIntegrity(page);
 		expect(errors).toEqual([]);
 	});
 });

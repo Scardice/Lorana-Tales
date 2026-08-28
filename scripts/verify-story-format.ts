@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import vm from "node:vm";
 import Database from "better-sqlite3";
 import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
@@ -158,4 +159,21 @@ const largeHtml = await createPerformanceHtml({ document: largeDocument, assets:
 assert.match(largeHtml, /const windowSize=360/);
 assert.match(largeHtml, /"id":"large-9999"/);
 
-console.log(`SSP v2 round-trip, deduplication, validation, offline HTML and 10,000-message generation checks passed (${packed.byteLength} bytes).`);
+const tutorialDirectory = resolve("web/public/tutorials");
+const tutorialCatalog = JSON.parse(await readFile(resolve(tutorialDirectory, "catalog.json"), "utf8")) as {
+	categories: Array<{ id: string }>;
+	tutorials: Array<{ id: string; category: string; file: string }>;
+};
+assert.equal(tutorialCatalog.categories.length, 4, "内置教程应保持四个清晰分类");
+assert.equal(tutorialCatalog.tutorials.length, 12, "内置教程包数量不完整");
+for (const tutorial of tutorialCatalog.tutorials) {
+	assert.ok(tutorialCatalog.categories.some((category) => category.id === tutorial.category), `${tutorial.id} 的分类不存在`);
+	const tutorialArchive = await readStoryPackage(await readFile(resolve(tutorialDirectory, tutorial.file)));
+	assert.ok(tutorialArchive.document.messages.length >= 3, `${tutorial.id} 没有足够的演示消息`);
+	const avatarRefs = tutorialArchive.document.characters.map((character) => character.avatar).filter(Boolean);
+	assert.ok(avatarRefs.length >= 3, `${tutorial.id} 缺少多角色头像`);
+	for (const avatar of avatarRefs) assert.ok(tutorialArchive.assets.has(avatar!.id), `${tutorial.id} 未内嵌头像 ${avatar!.id}`);
+	assert.equal(tutorialArchive.document.settings.typingIndicatorEnabled, tutorial.id === "record", `${tutorial.id} 的输入提示策略错误`);
+}
+
+console.log(`SSP v2 round-trip, validation, offline HTML, 10,000-message and ${tutorialCatalog.tutorials.length}-tutorial package checks passed (${packed.byteLength} bytes).`);

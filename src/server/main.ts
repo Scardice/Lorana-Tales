@@ -708,7 +708,7 @@ export async function startServer(
 	if (fs.existsSync(staticDir)) {
 		console.log(`[server] Serving static files from: ${staticDir}`);
 		app.use(express.static(staticDir));
-		for (const route of ["/story", "/story/", "/legacy", "/legacy/"]) {
+		for (const route of ["/story", "/story/", "/legacy", "/legacy/", "/play", "/play/"]) {
 			app.get(route, (_req, res) => res.sendFile(path.join(staticDir, "index.html")));
 		}
 	}

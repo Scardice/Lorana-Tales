@@ -3,7 +3,9 @@ import { darkTheme, lightTheme } from "naive-ui";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import Main from "./Main.vue";
 import StoryPage from "./pages/StoryPage.vue";
+import SspPlaybackPage from "./pages/SspPlaybackPage.vue";
 import AccountPanel from "./components/story/AccountPanel.vue";
+import TutorialCenter from "./components/story/TutorialCenter.vue";
 import { useThemeDark } from "./composables/useTheme";
 
 type EditorMode = "story" | "legacy";
@@ -19,6 +21,8 @@ type EditorShellConfig = {
 
 const isDark = useThemeDark();
 const ready = ref(false);
+const tutorialOpen = ref(false);
+const playbackRoute = computed(() => /^\/play\/?$/.test(location.pathname));
 const legacyCompatible = ref(true);
 const legacyWarningOpen = ref(false);
 const legacyDiscardStep = ref(0);
@@ -102,12 +106,15 @@ function syncVisualViewport() {
 	document.documentElement.style.setProperty("--app-visual-height", `${Math.round(height)}px`);
 }
 
+function openTutorials() { tutorialOpen.value = true; }
+
 onMounted(async () => {
 	syncVisualViewport();
 	window.addEventListener("resize", syncVisualViewport);
 	window.visualViewport?.addEventListener("resize", syncVisualViewport);
 	window.visualViewport?.addEventListener("scroll", syncVisualViewport);
 	window.addEventListener("lorana-story-compatibility", ((event: CustomEvent<{ legacyCompatible?: boolean }>) => { legacyCompatible.value = event.detail?.legacyCompatible !== false; }) as EventListener);
+	window.addEventListener("lorana-open-tutorials", openTutorials);
 	try {
 		const response = await fetch("/api/editor/config", { cache: "no-store" });
 		if (response.ok) config.value = { ...config.value, ...(await response.json()) };
@@ -123,6 +130,7 @@ onBeforeUnmount(() => {
 	window.removeEventListener("resize", syncVisualViewport);
 	window.visualViewport?.removeEventListener("resize", syncVisualViewport);
 	window.visualViewport?.removeEventListener("scroll", syncVisualViewport);
+	window.removeEventListener("lorana-open-tutorials", openTutorials);
 });
 </script>
 
@@ -131,8 +139,8 @@ onBeforeUnmount(() => {
 		<n-message-provider>
 			<n-modal-provider>
 				<n-notification-provider>
-					<div v-if="ready" class="editor-router" :class="[`editor-router--${requestedMode}`, isDark ? 'theme-dark' : 'theme-light', { 'editor-router--upper-collapsed': upperBarCollapsed }]">
-						<nav v-show="!upperBarCollapsed" class="global-upperbar" aria-label="站点工具栏">
+					<div v-if="ready" class="editor-router" :class="[playbackRoute ? 'editor-router--playback' : `editor-router--${requestedMode}`, isDark ? 'theme-dark' : 'theme-light', { 'editor-router--upper-collapsed': upperBarCollapsed }]">
+						<nav v-if="!playbackRoute" v-show="!upperBarCollapsed" class="global-upperbar" aria-label="站点工具栏">
 							<div id="global-account-slot" class="global-account-slot"><AccountPanel v-if="requestedMode === 'legacy'" /></div>
 							<div class="global-brand-area">
 								<button v-if="config.storyModeEnabled" class="mode-toggle" :class="{ active: requestedMode === 'story' }" :title="requestedMode === 'story' ? '切换到经典编辑' : '切换到沉浸编辑'" @click="switchMode(requestedMode === 'story' ? 'legacy' : 'story')">
@@ -147,7 +155,7 @@ onBeforeUnmount(() => {
 							</div>
 						</nav>
 
-						<nav class="global-workbar" aria-label="作品工具栏">
+						<nav v-if="!playbackRoute" class="global-workbar" aria-label="作品工具栏">
 							<div id="global-title-slot" class="global-title-slot"><strong v-if="requestedMode === 'legacy'">经典染色器</strong></div>
 							<div class="workbar-edge workbar-edge--right">
 								<div id="global-actions-slot"></div>
@@ -155,8 +163,10 @@ onBeforeUnmount(() => {
 							</div>
 						</nav>
 
-						<StoryPage v-if="requestedMode === 'story'" :community-notice="config.communityNotice" />
+						<SspPlaybackPage v-if="playbackRoute" />
+						<StoryPage v-else-if="requestedMode === 'story'" :community-notice="config.communityNotice" />
 						<Main v-else legacy-only :community-notice="config.communityNotice" />
+						<TutorialCenter :show="tutorialOpen" @close="tutorialOpen=false" />
 						<Teleport to="body"><Transition name="mode-warning"><div v-if="legacyWarningOpen" class="mode-warning" @click.self="closeLegacyWarning"><section role="alertdialog" aria-modal="true" aria-labelledby="legacy-warning-title"><header><div><strong id="legacy-warning-title">经典模式无法读取新版编辑</strong><small>当前故事包含 Lorana Tales 新版内容</small></div><button class="mode-warning__close" type="button" aria-label="关闭" @click="closeLegacyWarning"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15" /></svg></button></header><p>建议先从下载菜单导出“传统日志 TXT”，再到经典染色器中导入。</p><div v-if="legacyDiscardStep" class="mode-warning__danger"><strong>再次确认丢弃？</strong><span>只会删除当前日志在这个浏览器里的新版草稿；服务端原日志、已下载文件和其他工程不受影响。未导出的新版编辑无法恢复。</span></div><footer><button type="button" @click="closeLegacyWarning">返回编辑</button><button class="danger" type="button" :disabled="legacyDiscarding" @click="discardAndSwitchToLegacy">{{ legacyDiscarding ? "正在清除…" : legacyDiscardStep ? "确认丢弃并进入经典" : "丢弃新版修改" }}</button></footer></section></div></Transition></Teleport>
 					</div>
 				</n-notification-provider>
@@ -166,7 +176,7 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.editor-router{min-height:var(--app-visual-height,100dvh);color:var(--control-text);background:var(--app-bg)}.editor-router--story{display:grid;grid-template-rows:auto auto minmax(0,1fr);height:var(--app-visual-height,100dvh);overflow:hidden}.editor-router--story.editor-router--upper-collapsed{grid-template-rows:auto minmax(0,1fr)}.editor-router--story :deep(.story-page),.editor-router--story :deep(.story-editor){height:100%;min-height:0;overflow:hidden}
+.editor-router{min-height:var(--app-visual-height,100dvh);color:var(--control-text);background:var(--app-bg)}.editor-router--story{display:grid;grid-template-rows:auto auto minmax(0,1fr);height:var(--app-visual-height,100dvh);overflow:hidden}.editor-router--story.editor-router--upper-collapsed{grid-template-rows:auto minmax(0,1fr)}.editor-router--story :deep(.story-page),.editor-router--story :deep(.story-editor){height:100%;min-height:0;overflow:hidden}.editor-router--playback{height:var(--app-visual-height,100dvh);overflow:hidden}
 .global-upperbar,.global-workbar{position:relative;box-sizing:border-box;border-bottom:1px solid var(--control-border);background:var(--soft-surface);color:var(--control-text)}.global-upperbar{z-index:9100;display:grid;grid-template-columns:minmax(8rem,1fr) auto minmax(8rem,1fr);align-items:center;gap:.55rem;min-height:48px;padding:.35rem .65rem}.global-workbar{z-index:9000;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:.75rem;min-height:50px;padding:.36rem .65rem;background:var(--panel-surface)}.global-account-slot,.global-utilities,.global-brand-area,.workbar-edge{display:flex;align-items:center;min-width:0}.global-utilities{justify-content:center;gap:.4rem}.global-brand-area,.workbar-edge--right{justify-content:flex-end;gap:.35rem}.workbar-edge--right{grid-column:2}.global-title-slot{grid-column:1;display:flex;min-width:0;max-width:100%;justify-content:flex-start;text-align:left}.workbar-edge{position:relative;z-index:1}
 .global-upperbar button,.global-workbar button{border:0;border-radius:9px;padding:.46rem .65rem;background:transparent;color:var(--muted-text);font:inherit;text-decoration:none;cursor:pointer}.mode-toggle{display:flex;align-items:center;gap:.42rem}.mode-toggle i{position:relative;width:34px;height:19px;border-radius:999px;background:var(--control-border);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--control-text) 8%,transparent);transition:.2s}.mode-toggle i span{position:absolute;top:3px;left:3px;width:13px;height:13px;border-radius:50%;background:var(--muted-text);transition:.2s}.mode-toggle.active i{background:#167d83}.mode-toggle.active i span{left:18px;background:#fff}.mode-toggle b{color:var(--muted-text);font-size:.75rem}.mode-toggle.active b{color:var(--control-text)}.toolbar-fold svg,.toolbar-expand svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 .toolbar-fold,.toolbar-expand{display:grid!important;width:36px;height:36px;padding:0!important;place-items:center;background:var(--control-surface)!important}.site-brand{display:flex;align-items:center;min-width:0;gap:.48rem}.site-brand img,.site-brand__fallback{box-sizing:border-box;width:30px;height:30px;flex:0 0 30px;border-radius:8px;object-fit:contain}.site-brand img{background:color-mix(in srgb,var(--control-text) 4%,transparent)}.site-brand__fallback{fill:none;stroke:var(--muted-text);stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}.site-brand strong{max-width:min(20vw,18rem);overflow:hidden;color:var(--control-text);text-overflow:ellipsis;white-space:nowrap;font-size:.84rem}
@@ -182,7 +192,7 @@ onBeforeUnmount(() => {
 :root{color-scheme:light;--app-bg:#eef2f3;--panel-surface:#fff;--soft-surface:#f2f5f5;--control-bg:#fff;--control-surface:#e4e9e8;--control-hover:#d8dfde;--control-text:#172220;--muted-text:#52615e;--placeholder-text:#76827f;--control-border:#aebbb8;--focus-color:#0e747b;--selected-bg:#d6e9e7;--primary-bg:#0e747b;--primary-hover:#0b646a;--primary-text:#fff;--danger-bg:#a13f46;--danger-ink:#76252d;--danger-text:#fff;--danger-soft:#f3e1e2}
 html.dark{color-scheme:dark;--app-bg:#0d1514;--panel-surface:#17201f;--soft-surface:#111817;--control-bg:#0f1615;--control-surface:#293634;--control-hover:#344340;--control-text:#edf3f2;--muted-text:#a7b4b1;--placeholder-text:#8e9b98;--control-border:#465553;--focus-color:#4bcbd2;--selected-bg:#24403d;--primary-bg:#0e747b;--primary-hover:#11828a;--primary-text:#fff;--danger-bg:#a63b43;--danger-ink:#ffb7bc;--danger-text:#fff;--danger-soft:#3a2627}
 html,body,#app{font-family:Inter,"Noto Sans SC","Microsoft YaHei UI","Microsoft YaHei",system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--app-bg);color:var(--control-text)}
-body:has(.editor-router--story),body:has(.editor-router--story) #app{height:var(--app-visual-height,100dvh);overflow:hidden}
+body:has(.editor-router--story),body:has(.editor-router--story) #app,body:has(.editor-router--playback),body:has(.editor-router--playback) #app{height:var(--app-visual-height,100dvh);overflow:hidden}
 button,input,textarea,select{font-family:inherit}
 input,textarea,select{box-sizing:border-box;border-color:var(--control-border);background-color:var(--control-bg);color:var(--control-text)}
 input::placeholder,textarea::placeholder{color:var(--placeholder-text);opacity:1}

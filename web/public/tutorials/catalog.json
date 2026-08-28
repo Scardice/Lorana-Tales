@@ -1,0 +1,207 @@
+{
+  "version": 1,
+  "categories": [
+    {
+      "id": "start",
+      "title": "从零开始",
+      "description": "认识界面、创建角色，写下第一幕。"
+    },
+    {
+      "id": "edit",
+      "title": "编辑故事",
+      "description": "修改、引用、插入与批量整理。"
+    },
+    {
+      "id": "performance",
+      "title": "演出编排",
+      "description": "把静态记录变成有节奏的演出。"
+    },
+    {
+      "id": "effects",
+      "title": "特效舞台",
+      "description": "文字、屏幕、互动与持续效果。"
+    }
+  ],
+  "tutorials": [
+    {
+      "id": "welcome",
+      "category": "start",
+      "title": "一分钟认识编辑器",
+      "summary": "从标题、画布一路走到输入框与角色栏。",
+      "duration": "约 1 分钟",
+      "level": "入门",
+      "points": [
+        "顶栏",
+        "画布",
+        "输入区"
+      ],
+      "challenge": "返回编辑器，依次指出标题、消息画布、输入框和角色栏。",
+      "file": "welcome.ssp"
+    },
+    {
+      "id": "characters",
+      "category": "start",
+      "title": "创建第一个角色",
+      "summary": "名字、位置、头像与昼夜均可读配色。",
+      "duration": "约 2 分钟",
+      "level": "入门",
+      "points": [
+        "新增角色",
+        "左右位置",
+        "头像配色"
+      ],
+      "challenge": "新建左右各一名角色，给其中一人换头像，再切换昼夜检查配色。",
+      "file": "characters.ssp"
+    },
+    {
+      "id": "first-message",
+      "category": "start",
+      "title": "写下第一幕",
+      "summary": "发送、换行、表情和图片语音资源。",
+      "duration": "约 2 分钟",
+      "level": "入门",
+      "points": [
+        "发送",
+        "换行",
+        "资源"
+      ],
+      "challenge": "写一条两行台词，在句中插入表情，并确认末尾没有多余空行。",
+      "file": "first-message.ssp"
+    },
+    {
+      "id": "edit-message",
+      "category": "edit",
+      "title": "修改、引用与删除",
+      "summary": "用气泡旁的小铅笔处理单条消息。",
+      "duration": "约 2 分钟",
+      "level": "入门",
+      "points": [
+        "编辑",
+        "引用",
+        "删除"
+      ],
+      "challenge": "修改一条台词，再让另一名角色引用它作答。",
+      "file": "edit-message.ssp"
+    },
+    {
+      "id": "insert",
+      "category": "edit",
+      "title": "上插、下插与多插",
+      "summary": "在准确位置补上一条或连续多条消息。",
+      "duration": "约 2 分钟",
+      "level": "入门",
+      "points": [
+        "上插",
+        "下插",
+        "多插"
+      ],
+      "challenge": "在两条现有消息之间上插一句，再用多插连续补两名角色的回应。",
+      "file": "insert.ssp"
+    },
+    {
+      "id": "organize",
+      "category": "edit",
+      "title": "多选、移动与拖动",
+      "summary": "整理长记录时不把消息弄丢。",
+      "duration": "约 2 分钟",
+      "level": "进阶",
+      "points": [
+        "多选",
+        "批量移动",
+        "触屏拖动"
+      ],
+      "challenge": "选中两条不相邻消息整体下移，再拖动其中一条跨过三条消息。",
+      "file": "organize.ssp"
+    },
+    {
+      "id": "play",
+      "category": "performance",
+      "title": "开始一场演出",
+      "summary": "预览、开始、暂停与手动推进。",
+      "duration": "约 2 分钟",
+      "level": "入门",
+      "points": [
+        "开始演出",
+        "暂停",
+        "手动推进"
+      ],
+      "challenge": "开始一次手动演出，推进三条后暂停，向上翻看旧消息，再继续播放。",
+      "file": "play.ssp"
+    },
+    {
+      "id": "stream",
+      "category": "performance",
+      "title": "流式文字与节奏",
+      "summary": "让词一个个出现，并在重点处停顿。",
+      "duration": "约 2 分钟",
+      "level": "进阶",
+      "points": [
+        "流式输出",
+        "分词",
+        "逐词偏移"
+      ],
+      "challenge": "把一句话拆成三个节奏词组，让重点词额外停顿 250ms。",
+      "file": "stream.ssp"
+    },
+    {
+      "id": "record",
+      "category": "performance",
+      "title": "录制演出节奏",
+      "summary": "用点击记录输入提示与消息停留时间。",
+      "duration": "约 2 分钟",
+      "level": "进阶",
+      "points": [
+        "区间录制",
+        "输入提示",
+        "保存丢弃"
+      ],
+      "challenge": "选择三条消息录一遍节奏，先丢弃，再录第二遍并保存。",
+      "file": "record.ssp"
+    },
+    {
+      "id": "text-effects",
+      "category": "effects",
+      "title": "文字特效入门",
+      "summary": "用不同字动画表达语气，而不是只换颜色。",
+      "duration": "约 2 分钟",
+      "level": "入门",
+      "points": [
+        "字动画",
+        "单条覆盖",
+        "预览"
+      ],
+      "challenge": "为平静、回忆和强调三句话分别挑一种不同的文字动画并预览。",
+      "file": "text-effects.ssp"
+    },
+    {
+      "id": "screen-effects",
+      "category": "effects",
+      "title": "屏幕特效笔刷",
+      "summary": "组合动画底子、预制颜色、时长与重复次数。",
+      "duration": "约 3 分钟",
+      "level": "进阶",
+      "points": [
+        "特效笔刷",
+        "颜色",
+        "播放参数"
+      ],
+      "challenge": "组合一个只播放一次的冷色冲击，再做一个重复三次的暖色闪烁。",
+      "file": "screen-effects.ssp"
+    },
+    {
+      "id": "interaction-effects",
+      "category": "effects",
+      "title": "互动与持续效果",
+      "summary": "让角色头像互动，并把状态延续到后文。",
+      "duration": "约 3 分钟",
+      "level": "进阶",
+      "points": [
+        "角色互动",
+        "持续区间",
+        "角色状态"
+      ],
+      "challenge": "让一名角色向另一名角色投出 Emoji，并在后续三条消息间维持受伤状态后恢复。",
+      "file": "interaction-effects.ssp"
+    }
+  ]
+}
