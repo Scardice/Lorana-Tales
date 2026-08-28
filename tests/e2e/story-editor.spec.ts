@@ -149,6 +149,11 @@ test.describe("Lorana Tales story editor", () => {
 		await assertViewportIntegrity(page);
 		await page.screenshot({ path: "test-results/story-performance-settings-light.png", fullPage: true });
 		await page.getByRole("button", { name: "关闭演出设置" }).click();
+		await page.getByRole("button", { name: "界面设置", exact: true }).click();
+		const playerDisplaySettings = page.getByLabel("演出界面设置");
+		for (const heading of ["画布与排版", "头像与消息", "内容过滤", "外观"]) await expect(playerDisplaySettings.getByText(heading, { exact: true })).toBeVisible();
+		await page.screenshot({ path: "test-results/story-player-display-settings-light.png", fullPage: true });
+		await playerDisplaySettings.getByRole("button", { name: "关闭界面设置" }).click();
 
 		await page.getByRole("button", { name: "演出编辑", exact: true }).click();
 		await page.locator("article.player-message").first().click();
@@ -159,7 +164,8 @@ test.describe("Lorana Tales story editor", () => {
 		await expect(performanceModal.getByRole("button", { name: "清除编排" })).toBeVisible();
 		await expect(performanceModal.getByRole("button", { name: "保存" })).toBeVisible();
 		await performanceModal.getByRole("button", { name: "选择特效" }).click();
-		const effectPicker = performanceModal.getByLabel("特效选择");
+		const effectSelectionModal = page.locator(".effect-selection-modal");
+		const effectPicker = effectSelectionModal.getByLabel("特效选择");
 		await effectPicker.getByRole("button", { name: "屏幕特效" }).click();
 		await effectPicker.getByRole("button", { name: /中心绽放/ }).click();
 		await effectPicker.getByRole("button", { name: "绯红" }).click();
@@ -170,6 +176,7 @@ test.describe("Lorana Tales story editor", () => {
 		await page.waitForTimeout(650);
 		await page.screenshot({ path: "test-results/story-interaction-effect-picker-light.png", fullPage: true });
 		await effectPicker.getByRole("button", { name: "文本特效" }).click();
+		await effectSelectionModal.getByRole("button", { name: "完成" }).click();
 		const splittableToken = performanceModal.locator(".token-chip-list button").filter({ hasText: /../ }).first();
 		await expect(splittableToken).toBeVisible();
 		const tokenCount = await performanceModal.locator(".token-chip-list button").count();
@@ -180,6 +187,14 @@ test.describe("Lorana Tales story editor", () => {
 		await assertViewportIntegrity(page);
 		await page.screenshot({ path: "test-results/story-performance-message-light.png", fullPage: true });
 		await performanceModal.getByRole("button", { name: "取消" }).click();
+		await page.getByRole("button", { name: "特效笔刷" }).click();
+		await page.getByRole("button", { name: "选择特效", exact: true }).click();
+		const brushModal = page.locator(".effect-brush-modal");
+		await expect(brushModal.getByText("文字特效", { exact: true })).toBeVisible();
+		await expect(brushModal.getByText("屏幕特效", { exact: true })).toBeVisible();
+		await expect(brushModal.getByRole("button", { name: "重播特效" }).first()).toBeVisible();
+		await page.screenshot({ path: "test-results/story-effect-brush-light.png", fullPage: true });
+		await brushModal.getByRole("button", { name: "完成" }).click();
 		await page.screenshot({ path: "test-results/story-player-light.png", fullPage: true });
 		await page.getByRole("button", { name: "← 返回" }).click();
 		await expect(page.getByRole("button", { name: "演出编辑预览" })).toBeVisible();
