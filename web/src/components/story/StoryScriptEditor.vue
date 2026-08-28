@@ -16,7 +16,7 @@ import { Decoration, type DecorationSet, EditorView, keymap, ViewPlugin, type Vi
 import { basicSetup } from "codemirror";
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 
-const props = defineProps<{ modelValue: string; error?: string }>();
+const props = defineProps<{ modelValue: string; error?: string; focusRequest?: { position: number; nonce: number } }>();
 const emit = defineEmits<{ "update:modelValue": [string] }>();
 const host = ref<HTMLElement>();
 let view: EditorView | undefined;
@@ -132,6 +132,15 @@ watch(() => props.modelValue, (value) => {
 	if (!view || value === view.state.doc.toString()) return;
 	view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: value } });
 });
+watch(() => props.focusRequest?.nonce, () => {
+	if (!view || !props.focusRequest) return;
+	const position = Math.max(0, Math.min(props.focusRequest.position, view.state.doc.length));
+	view.dispatch({
+		selection: { anchor: position },
+		effects: EditorView.scrollIntoView(position, { y: "center" }),
+	});
+	view.focus();
+}, { flush: "post" });
 onBeforeUnmount(() => view?.destroy());
 </script>
 
