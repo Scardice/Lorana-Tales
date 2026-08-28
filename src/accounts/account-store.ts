@@ -3,6 +3,7 @@ import { inflateRawSync } from "node:zlib";
 import type Database from "better-sqlite3";
 
 const PASSWORD_PREFIX = "scrypt-v1";
+const MAX_EFFECT_SHARES_PER_USER = 500;
 
 class WorkQueue {
 	private active = 0;
@@ -221,6 +222,7 @@ export class AccountStore {
 				FOREIGN KEY(user_id) REFERENCES account_users(id) ON DELETE CASCADE
 			);
 			CREATE INDEX IF NOT EXISTS idx_account_sessions_user ON account_sessions(user_id);
+			CREATE INDEX IF NOT EXISTS idx_account_sessions_expiry ON account_sessions(expires_at_ms);
 
 			CREATE TABLE IF NOT EXISTS account_devices (
 				token_hash TEXT PRIMARY KEY,
@@ -233,6 +235,7 @@ export class AccountStore {
 				FOREIGN KEY(user_id) REFERENCES account_users(id) ON DELETE CASCADE
 			);
 			CREATE INDEX IF NOT EXISTS idx_account_devices_user ON account_devices(user_id);
+			CREATE INDEX IF NOT EXISTS idx_account_devices_expiry ON account_devices(expires_at_ms);
 
 			CREATE TABLE IF NOT EXISTS account_verification_codes (
 				id TEXT PRIMARY KEY,
@@ -246,6 +249,7 @@ export class AccountStore {
 				consumed_at_ms INTEGER
 			);
 			CREATE INDEX IF NOT EXISTS idx_account_codes_email ON account_verification_codes(email, created_at_ms DESC);
+			CREATE INDEX IF NOT EXISTS idx_account_codes_expiry ON account_verification_codes(expires_at_ms);
 
 			CREATE TABLE IF NOT EXISTS editor_projects (
 				id TEXT PRIMARY KEY,
@@ -550,6 +554,7 @@ export class AccountStore {
 	}
 
 	createSession(user: AccountUser, input: { sessionDays: number; deviceToken?: string; ipPrefix: string; userAgent: string }): AccountSession {
+		this.db.prepare("DELETE FROM account_sessions WHERE expires_at_ms <= ?").run(Date.now());
 		const token = randomToken();
 		const csrfToken = randomToken(24);
 		const expiresAt = Date.now() + Math.max(1, input.sessionDays) * 86400000;
@@ -598,6 +603,7 @@ export class AccountStore {
 	}
 
 	createTrustedDevice(userId: string, ipPrefix: string, userAgent: string, days: number) {
+		this.db.prepare("DELETE FROM account_devices WHERE expires_at_ms <= ?").run(Date.now());
 		const token = randomToken();
 		const now = Date.now();
 		this.db.prepare(`INSERT INTO account_devices (
@@ -620,6 +626,9 @@ export class AccountStore {
 	createVerificationCode(email: string, purpose: string, code: string, ipPrefix: string, ttlMinutes: number) {
 		const id = crypto.randomUUID();
 		const now = Date.now();
+		// Keep enough history for the hourly rate limit while preventing an
+		// internet-facing instance from retaining expired codes forever.
+		this.db.prepare("DELETE FROM account_verification_codes WHERE expires_at_ms < ?").run(now - 86400000);
 		this.db.prepare(`INSERT INTO account_verification_codes (
 			id, email, purpose, code_hash, ip_prefix_hash, created_at_ms, expires_at_ms
 		) VALUES (?, ?, ?, ?, ?, ?, ?)`)
@@ -627,15 +636,17 @@ export class AccountStore {
 		return id;
 	}
 
-	verifyCode(id: string, email: string, purpose: string, code: string): boolean {
+	verifyCode(id: string, email: string, purpose: string, code: string, consume = true): boolean {
 		const row = this.db.prepare(`SELECT * FROM account_verification_codes
 			WHERE id = ? AND email = ? COLLATE NOCASE AND purpose = ? AND consumed_at_ms IS NULL AND expires_at_ms > ?`)
 			.get(id, normalizeEmail(email), purpose, Date.now()) as SqlRow | undefined;
 		if (!row || Number(row.attempts || 0) >= 5) return false;
 		const valid = String(row.code_hash) === sha256(`${id}:${code}`);
-		this.db.prepare(`UPDATE account_verification_codes SET attempts = attempts + 1,
-			consumed_at_ms = CASE WHEN ? THEN ? ELSE consumed_at_ms END WHERE id = ?`)
-			.run(valid ? 1 : 0, Date.now(), id);
+		if (!valid || consume) {
+			this.db.prepare(`UPDATE account_verification_codes SET attempts = attempts + 1,
+				consumed_at_ms = CASE WHEN ? THEN ? ELSE consumed_at_ms END WHERE id = ?`)
+				.run(valid && consume ? 1 : 0, Date.now(), id);
+		}
 		return valid;
 	}
 
@@ -764,10 +775,8 @@ export class AccountStore {
 			p.id AS project_id, p.title, p.revision, p.document_blob,
 			p.created_at AS project_created_at, p.updated_at AS project_updated_at, p.last_activity_at,
 			s.expiry_mode AS share_expiry_mode, s.expires_at AS share_expires_at,
-			u.id, u.email, u.username, u.nickname, u.avatar_url, u.display_name, u.role,
-			u.account_group, u.quota_mb_override, u.retention_days_override, u.status,
-			u.ban_reason, u.ban_until, u.must_change_password, u.tutorial_prompt_seen,
-			u.manual_playback_hint_seen, u.tutorial_playback_coach_seen, u.created_at, u.updated_at
+			u.id AS owner_id, u.account_group AS owner_account_group,
+			u.retention_days_override AS owner_retention_days_override
 			FROM editor_project_shares s
 			JOIN editor_projects p ON p.id = s.project_id
 			JOIN account_users u ON u.id = p.user_id
@@ -778,7 +787,15 @@ export class AccountStore {
 			document: decompressDocument(row.document_blob as Buffer), createdAt: String(row.project_created_at), updatedAt: String(row.project_updated_at),
 			lastActivityAt: String(row.last_activity_at || row.project_updated_at),
 			shareExpiryMode: String(row.share_expiry_mode || ""),
-			shareExpiresAt: String(row.share_expires_at || ""), owner: rowToUser(row),
+			shareExpiresAt: String(row.share_expires_at || ""),
+			owner: {
+				id: String(row.owner_id || ""),
+				group: String(row.owner_account_group || "default"),
+				quotaMbOverride: null,
+				retentionDaysOverride: row.owner_retention_days_override === null || row.owner_retention_days_override === undefined
+					? null
+					: Math.max(0, Number(row.owner_retention_days_override)),
+			},
 		};
 	}
 
@@ -787,6 +804,7 @@ export class AccountStore {
 	}
 
 	effectPresetCount(userId: string) { return Number((this.db.prepare("SELECT COUNT(*) AS total FROM account_effect_presets WHERE user_id = ?").get(userId) as SqlRow).total || 0); }
+	effectFolderCount(userId: string) { return Number((this.db.prepare("SELECT COUNT(*) AS total FROM account_effect_folders WHERE user_id = ?").get(userId) as SqlRow).total || 0); }
 	createEffectPreset(userId: string, name: string, config: unknown, folderId = "", kind = "screen") {
 		const id = crypto.randomUUID(); const now = nowIso();
 		this.db.prepare("INSERT INTO account_effect_presets (id, user_id, name, kind, folder_id, preset_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run(id, userId, name.slice(0, 60), kind, folderId, JSON.stringify(config), now, now);
@@ -805,7 +823,19 @@ export class AccountStore {
 	createEffectFolder(userId: string, name: string) { const id = crypto.randomUUID(); const now = nowIso(); this.db.prepare("INSERT INTO account_effect_folders (id,user_id,name,created_at,updated_at) VALUES (?,?,?,?,?)").run(id,userId,name.slice(0,40),now,now); return { id, name: name.slice(0,40) }; }
 	renameEffectFolder(userId: string, id: string, name: string) { return this.db.prepare("UPDATE account_effect_folders SET name=?,updated_at=? WHERE id=? AND user_id=?").run(name.slice(0,40),nowIso(),id,userId).changes === 1; }
 	deleteEffectFolder(userId: string, id: string) { const transaction=this.db.transaction(()=>{this.db.prepare("UPDATE account_effect_presets SET folder_id='' WHERE user_id=? AND folder_id=?").run(userId,id);return this.db.prepare("DELETE FROM account_effect_folders WHERE id=? AND user_id=?").run(id,userId).changes===1});return transaction(); }
-	createEffectShare(userId: string, presetId: string) { const preset=this.db.prepare("SELECT name,kind,preset_json FROM account_effect_presets WHERE id=? AND user_id=?").get(presetId,userId) as SqlRow|undefined;if(!preset)return null;let code="";do{code=`LT-${crypto.randomBytes(6).toString("base64url").toUpperCase()}`}while(this.db.prepare("SELECT 1 FROM effect_preset_shares WHERE code=?").get(code));this.db.prepare("INSERT INTO effect_preset_shares (code,name,kind,preset_json,created_by,created_at) VALUES (?,?,?,?,?,?)").run(code,preset.name,preset.kind,preset.preset_json,userId,nowIso());return{code}; }
+	createEffectShare(userId: string, presetId: string) {
+		const preset = this.db.prepare("SELECT name,kind,preset_json FROM account_effect_presets WHERE id=? AND user_id=?").get(presetId, userId) as SqlRow | undefined;
+		if (!preset) return null;
+		const excess = Number((this.db.prepare("SELECT COUNT(*) AS total FROM effect_preset_shares WHERE created_by=?").get(userId) as SqlRow).total || 0) - MAX_EFFECT_SHARES_PER_USER + 1;
+		if (excess > 0) {
+			this.db.prepare("DELETE FROM effect_preset_shares WHERE code IN (SELECT code FROM effect_preset_shares WHERE created_by=? ORDER BY created_at ASC LIMIT ?)").run(userId, excess);
+		}
+		let code = "";
+		do { code = `LT-${crypto.randomBytes(6).toString("base64url").toUpperCase()}`; }
+		while (this.db.prepare("SELECT 1 FROM effect_preset_shares WHERE code=?").get(code));
+		this.db.prepare("INSERT INTO effect_preset_shares (code,name,kind,preset_json,created_by,created_at) VALUES (?,?,?,?,?,?)").run(code, preset.name, preset.kind, preset.preset_json, userId, nowIso());
+		return { code };
+	}
 	getEffectShare(code:string){const row=this.db.prepare("SELECT name,kind,preset_json FROM effect_preset_shares WHERE code=?").get(code.toUpperCase()) as SqlRow|undefined;return row?{name:String(row.name),kind:String(row.kind),config:JSON.parse(String(row.preset_json))}:null;}
 
 	deleteUser(userId: string, projectAction: "delete" | "archive" | "transfer", transferUserId = "") {

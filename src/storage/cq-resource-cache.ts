@@ -325,27 +325,41 @@ function hostMatches(host: string, allowedHosts: string[]): boolean {
 	return allowedHosts.some((rule) => rule === host || (rule.startsWith("*.") && host.endsWith(rule.slice(1))));
 }
 
-function isPublicIp(address: string): boolean {
-	if (net.isIP(address) === 4) {
-		const [a, b] = address.split(".").map(Number);
-		return !(
-			a === 0 || a === 10 || a === 127 || a >= 224 ||
-			(a === 100 && b >= 64 && b <= 127) ||
-			(a === 169 && b === 254) ||
-			(a === 172 && b >= 16 && b <= 31) ||
-			(a === 192 && b === 168) ||
-			(a === 198 && (b === 18 || b === 19))
-		);
+const NON_PUBLIC_IPS = (() => {
+	const list = new net.BlockList();
+	const add = (address: string, prefix: number, type: "ipv4" | "ipv6") =>
+		list.addSubnet(address, prefix, type);
+	// RFC 6890 special-purpose IPv4 ranges. Documentation and benchmarking
+	// ranges are denied as well so a future routing change cannot turn them
+	// into an SSRF path.
+	for (const [address, prefix] of [
+		["0.0.0.0", 8], ["10.0.0.0", 8], ["100.64.0.0", 10],
+		["127.0.0.0", 8], ["169.254.0.0", 16], ["172.16.0.0", 12],
+		["192.0.0.0", 24], ["192.0.2.0", 24], ["192.88.99.0", 24],
+		["192.168.0.0", 16], ["198.18.0.0", 15], ["198.51.100.0", 24],
+		["203.0.113.0", 24], ["224.0.0.0", 4], ["240.0.0.0", 4],
+	] as Array<[string, number]>) add(address, prefix, "ipv4");
+	for (const [address, prefix] of [
+		["::", 128], ["::1", 128], ["64:ff9b::", 96],
+		["64:ff9b:1::", 48], ["100::", 64], ["2001::", 32],
+		["2001:2::", 48], ["2001:10::", 28], ["2001:20::", 28],
+		["2001:db8::", 32], ["2002::", 16], ["fc00::", 7],
+		["fe80::", 10], ["fec0::", 10], ["ff00::", 8],
+	] as Array<[string, number]>) add(address, prefix, "ipv6");
+	return list;
+})();
+
+export function isPublicIp(address: string): boolean {
+	const family = net.isIP(address);
+	if (!family) return false;
+	if (family === 6) {
+		const mapped = /^::ffff:(?:(\d+\.\d+\.\d+\.\d+)|([0-9a-f]{1,4}):([0-9a-f]{1,4}))$/i.exec(address);
+		if (mapped) {
+			const ipv4 = mapped[1] || `${Number.parseInt(mapped[2], 16) >>> 8}.${Number.parseInt(mapped[2], 16) & 255}.${Number.parseInt(mapped[3], 16) >>> 8}.${Number.parseInt(mapped[3], 16) & 255}`;
+			return isPublicIp(ipv4);
+		}
 	}
-	const normalized = address.toLowerCase();
-	if (normalized.startsWith("::ffff:")) {
-		const mapped = normalized.slice("::ffff:".length);
-		if (net.isIP(mapped) === 4) return isPublicIp(mapped);
-	}
-	return !(
-		normalized === "::" || normalized === "::1" || normalized.startsWith("fc") ||
-		normalized.startsWith("fd") || normalized.startsWith("fe80:") || normalized.startsWith("::ffff:127.")
-	);
+	return !NON_PUBLIC_IPS.check(address, family === 4 ? "ipv4" : "ipv6");
 }
 
 async function assertSafeRemoteUrl(rawUrl: string, options: NormalizedOptions) {

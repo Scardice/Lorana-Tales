@@ -363,7 +363,7 @@ PNG、JPEG 和 WebP 会以 `image_quality` 重编码为 WebP；只有更小才�
 - 按硬盘容量设置日志、账号工程和 CQ 资源配额，定期备份 SQLite 数据库及资源目录，并实际演练恢复。
 - 首次登录后立即更换引导管理员凭据；管理员必须同时具有 `admin` 角色并处于 `admin` 组。
 - 分享地址是公开只读播放器链接，不支持永久有效；链接只能跟随工程到期或设置为更短的固定期限，删除/到期的工程无法再通过分享访问。
-- 上线前运行 `pnpm audit --prod`、`npm run lint`、`npm run test:story-format`、`npm run test:account-groups` 与 `npm run build`。
+- 上线前运行 `pnpm audit`、`pnpm test:security`、`pnpm lint`、`pnpm test:story-format`、`pnpm test:account-groups` 与 `pnpm build`。
 
 ### 备用API（可选）
 

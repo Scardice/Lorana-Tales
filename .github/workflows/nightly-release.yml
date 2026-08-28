@@ -18,15 +18,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@f520eceda224fe1a4aed5a2a27a194379a409996 # v6
         with:
           version: 10
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           # Production dependencies include native better-sqlite3 binaries.
           # Build with the minimum advertised runtime so the portable package
@@ -41,8 +41,15 @@ jobs:
       - name: Check types
         run: pnpm lint
 
+      - name: Audit dependencies and security boundaries
+        run: |
+          pnpm audit
+          pnpm test:security
+
       - name: Verify story format
-        run: pnpm test:story-format
+        run: |
+          pnpm test:story-format
+          pnpm test:account-groups
 
       - name: Build server and frontend
         run: pnpm build
@@ -90,7 +97,7 @@ jobs:
           fi
 
       - name: Publish Nightly Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@c12583777ecdfd3be55c69cf75464299dc01057e # v3
         with:
           tag_name: nightly
           target_commitish: ${{ github.sha }}

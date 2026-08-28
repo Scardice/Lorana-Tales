@@ -32,21 +32,19 @@ function normalizeCandidate(value: string): string {
 	return isIP(candidate) ? candidate : "";
 }
 
-function firstValidForwardedFor(value: string): string {
-	for (const item of value.split(",")) {
-		const candidate = normalizeCandidate(item);
-		if (candidate) return candidate;
-	}
-	return "";
+function validForwardedFor(value: string): string[] {
+	return value.split(",").map(normalizeCandidate).filter(Boolean);
 }
 
-function firstValidRfc7239Forwarded(value: string): string {
+
+function validRfc7239Forwarded(value: string): string[] {
+	const result: string[] = [];
 	for (const entry of value.split(",")) {
 		const match = /(?:^|;)\s*for\s*=\s*("[^"]+"|[^;,\s]+)/i.exec(entry);
 		const candidate = match ? normalizeCandidate(match[1]) : "";
-		if (candidate) return candidate;
+		if (candidate) result.push(candidate);
 	}
-	return "";
+	return result;
 }
 
 function socketAddress(req: RequestLike): string {
@@ -59,10 +57,10 @@ function socketAddress(req: RequestLike): string {
  */
 export type TrustedProxyPolicy = boolean | string[];
 
-export function isTrustedProxyRequest(req: RequestLike, policy: TrustedProxyPolicy): boolean {
+function isTrustedAddress(candidate: string, policy: TrustedProxyPolicy): boolean {
 	if (!policy) return false;
-	const socket = normalizeCandidate(socketAddress(req).replace(/^::ffff:/, ""));
-	if (!socket) return false;
+	const address = normalizeCandidate(candidate.replace(/^::ffff:/, ""));
+	if (!address) return false;
 	const entries = Array.isArray(policy) ? policy : ["127.0.0.1/32", "::1/128"];
 	const list = new BlockList();
 	for (const entry of entries) {
@@ -72,7 +70,11 @@ export function isTrustedProxyRequest(req: RequestLike, policy: TrustedProxyPoli
 		if (!family || !Number.isInteger(prefix) || prefix < 0 || prefix > (family === 4 ? 32 : 128)) continue;
 		list.addSubnet(address, prefix, family === 4 ? "ipv4" : "ipv6");
 	}
-	return list.check(socket, isIP(socket) === 4 ? "ipv4" : "ipv6");
+	return list.check(address, isIP(address) === 4 ? "ipv4" : "ipv6");
+}
+
+export function isTrustedProxyRequest(req: RequestLike, policy: TrustedProxyPolicy): boolean {
+	return isTrustedAddress(socketAddress(req), policy);
 }
 
 export function getClientIp(req: RequestLike, trustProxy: TrustedProxyPolicy): string {
@@ -83,15 +85,24 @@ export function getClientIp(req: RequestLike, trustProxy: TrustedProxyPolicy): s
 		if (candidate) return candidate;
 	}
 
-	const forwardedFor = firstValidForwardedFor(
+	const forwardedFor = validForwardedFor(
 		firstHeaderValue(req.headers["x-forwarded-for"]),
 	);
-	if (forwardedFor) return forwardedFor;
+	// Walk from the proxy nearest to us towards the client and stop at the
+	// first untrusted hop. Taking the left-most value lets an attacker prepend
+	// a forged address whenever a proxy appends instead of replacing XFF.
+	for (let index = forwardedFor.length - 1; index >= 0; index -= 1) {
+		if (!isTrustedAddress(forwardedFor[index], trustProxy)) return forwardedFor[index];
+	}
+	if (forwardedFor.length) return forwardedFor[0];
 
-	const forwarded = firstValidRfc7239Forwarded(
+	const forwarded = validRfc7239Forwarded(
 		firstHeaderValue(req.headers.forwarded),
 	);
-	if (forwarded) return forwarded;
+	for (let index = forwarded.length - 1; index >= 0; index -= 1) {
+		if (!isTrustedAddress(forwarded[index], trustProxy)) return forwarded[index];
+	}
+	if (forwarded.length) return forwarded[0];
 
 	return socketAddress(req);
 }

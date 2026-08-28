@@ -334,6 +334,8 @@ export async function startServer(
 		};
 		securityBlocksByIp.set(clientIp, record);
 		securityBlocksById.set(interceptId, record);
+		while (securityBlocksByIp.size > 5000) securityBlocksByIp.delete(securityBlocksByIp.keys().next().value as string);
+		while (securityBlocksById.size > 5000) securityBlocksById.delete(securityBlocksById.keys().next().value as string);
 		await appendSecurityAuditRecord(config, {
 			timestamp: record.createdAt,
 			interceptId,

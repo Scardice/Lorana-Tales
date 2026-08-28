@@ -157,10 +157,20 @@ function projectSummary(project: Record<string, unknown> | null) {
 	return summary;
 }
 
+export function publicProjectPayload(project: Record<string, unknown>) {
+	return { ...projectSummary(project), document: project.document };
+}
+
 function sendProject(res: Response, project: Record<string, unknown> | null) {
 	if (!project) { json(res, 404, { error: "project_not_found" }); return; }
-	if (!Buffer.isBuffer(project.document)) { json(res, 200, project); return; }
 	const meta = projectSummary(project);
+	if (!Buffer.isBuffer(project.document)) {
+		// Shared legacy JSON projects used to expose the joined owner row here,
+		// including email, account status and policy fields. Keep the document
+		// payload but apply the same public metadata allow-list as SSP responses.
+		json(res, 200, publicProjectPayload(project));
+		return;
+	}
 	res.status(200).set({
 		"Cache-Control": "no-store",
 		"Content-Type": SSP_CONTENT_TYPE,
@@ -289,7 +299,7 @@ export class AccountService {
 		return { ...user, canAdmin: user.role === "admin" && user.group === String(this.config.admin_group || "admin") && !user.mustChangePassword, banReason: user.status === "banned" ? user.banReason : "", projectCount: this.store.projectCount(user.id) };
 	}
 
-	private storagePolicy(user: AccountUser) {
+	private storagePolicy(user: Pick<AccountUser, "id" | "group" | "quotaMbOverride" | "retentionDaysOverride">) {
 		const groups = this.config.storage_groups && typeof this.config.storage_groups === "object" ? this.config.storage_groups : {};
 		const fallbackName = String(this.config.default_group || "default");
 		const group = String(user.group || fallbackName);
@@ -411,9 +421,11 @@ export class AccountService {
 				const currentSession = this.getSession(req);
 				const subject = currentSession ? `${currentSession.user.id}:${this.prefix(req)}` : `${email}:${this.prefix(req)}`;
 				if (!this.captcha.consumeClearance(String(body.captchaClearance || ""), subject, "verification-send")) { json(res, 428, { error: "captcha_required", scope: "verification-send" }); return; }
+				if (!this.mailer) { json(res, 503, { error: "smtp_not_configured" }); return; }
 				// Do not disclose whether a registration email already exists. Return the
 				// same shaped success response after CAPTCHA without sending another mail.
-				if (purpose === "register" && this.store.getUserByEmail(email)) {
+				const targetAccount = this.store.getUserByEmail(email);
+				if ((purpose === "register" && targetAccount) || (["login", "reset-password"].includes(purpose) && !targetAccount)) {
 					json(res, 200, { id: crypto.randomUUID(), resendAfterSeconds: Number(this.config.email_code_resend_seconds || 60) });
 					return;
 				}
@@ -424,10 +436,9 @@ export class AccountService {
 					this.store.recordRisk("", this.prefix(req), "verification-rate-limit", email);
 					json(res, 429, { error: "verification_rate_limited" }); return;
 				}
-				if (!this.mailer) { json(res, 503, { error: "smtp_not_configured" }); return; }
 				const code = crypto.randomInt(100000, 1000000).toString();
 				const id = this.store.createVerificationCode(email, purpose, code, this.prefix(req), Number(this.config.email_code_ttl_minutes || 10));
-				const account = this.store.getUserByEmail(email) || currentSession?.user;
+				const account = targetAccount || currentSession?.user;
 				await this.mailer.sendCode(email, code, purpose, {
 					username: account?.username || String(body.username || ""),
 					nickname: account?.nickname || String(body.nickname || ""),
@@ -459,9 +470,9 @@ export class AccountService {
 				const body = readJson(req); const identity = String(body.email || body.username || "").trim(); const password = String(body.password || "");
 				if (identity.length > 254 || password.length > 256) { json(res, 401, { error: "invalid_credentials" }); return; }
 				const known = this.store.getUserByIdentity(identity);
-				if (known && !this.requireRiskClearance(known.id, "login", req, res)) return;
 				const user = await this.store.verifyPasswordIdentity(identity, password);
 				if (!user) { this.store.recordRisk(known?.id || "", this.prefix(req), "login-failed", identity); json(res, 401, { error: "invalid_credentials" }); return; }
+				if (!this.requireRiskClearance(user.id, "login", req, res)) return;
 				const current = this.store.refreshExpiredBan(user);
 				if (current.status === "banned") { json(res, 403, { error: "account_banned", reason: current.banReason, until: current.banUntil }); return; }
 				if (current.status !== "active") { json(res, 403, { error: "account_disabled" }); return; }
@@ -481,8 +492,10 @@ export class AccountService {
 			try {
 				const body = readJson(req); const email = normalizeEmail(body.email); const user = this.store.getUserByEmail(email);
 				if (!user) { json(res, 401, { error: "verification_invalid" }); return; }
+				const codeId = String(body.codeId || ""); const code = String(body.code || "");
+				if (!this.store.verifyCode(codeId, email, "login", code, false)) { json(res, 401, { error: "verification_invalid" }); return; }
 				if (!this.requireRiskClearance(user.id, "login-code", req, res)) return;
-				if (!this.store.verifyCode(String(body.codeId || ""), email, "login", String(body.code || ""))) { json(res, 401, { error: "verification_invalid" }); return; }
+				if (!this.store.verifyCode(codeId, email, "login", code)) { json(res, 401, { error: "verification_invalid" }); return; }
 				const current = this.store.refreshExpiredBan(user);
 				if (current.status === "banned") { json(res, 403, { error: "account_banned", reason: current.banReason, until: current.banUntil }); return; }
 				if (current.status !== "active") { json(res, 403, { error: "account_disabled" }); return; }
@@ -574,9 +587,9 @@ export class AccountService {
 		app.put("/api/account/effect-presets/:id", (req, res) => { const session = this.requireSession(req, res, true); if (!session) return; const body = readJson(req); const preset = sanitizeEffectPreset(body); if (!preset) { json(res, 400, { error: "effect_preset_invalid" }); return; } const folders=new Set(this.store.listEffectFolders(session.user.id).map((item)=>item.id));const folderId=folders.has(preset.folderId)?preset.folderId:"";const saved = this.store.updateEffectPreset(session.user.id, req.params.id, preset.name, preset.config,folderId,preset.kind); json(res, saved ? 200 : 404, saved || { error: "effect_preset_not_found" }); });
 		app.delete("/api/account/effect-presets/:id", (req, res) => { const session = this.requireSession(req, res, true); if (!session) return; json(res, this.store.deleteEffectPreset(session.user.id, req.params.id) ? 200 : 404, { ok: true }); });
 		app.post("/api/account/effect-presets/:id/share",(req,res)=>{const session=this.requireSession(req,res,true);if(!session)return;const share=this.store.createEffectShare(session.user.id,req.params.id);json(res,share?201:404,share||{error:"effect_preset_not_found"});});
-		app.post("/api/account/effect-presets/import",(req,res)=>{const session=this.requireSession(req,res,true);if(!session)return;if(this.store.effectPresetCount(session.user.id)>=Number(this.config.max_effect_presets||100)){json(res,413,{error:"effect_preset_limit"});return;}const body=readJson(req),shared=this.store.getEffectShare(String(body.code||"").trim());if(!shared){json(res,404,{error:"effect_share_not_found"});return;}const safe=sanitizeEffectPreset({name:shared.name,kind:shared.kind,config:shared.config});if(!safe){json(res,400,{error:"effect_preset_invalid"});return;}let folder=this.store.listEffectFolders(session.user.id).find(item=>item.name==="导入的特效");if(!folder)folder=this.store.createEffectFolder(session.user.id,"导入的特效");json(res,201,this.store.createEffectPreset(session.user.id,safe.name,safe.config,folder.id,safe.kind));});
+		app.post("/api/account/effect-presets/import",(req,res)=>{const session=this.requireSession(req,res,true);if(!session)return;if(this.store.effectPresetCount(session.user.id)>=Number(this.config.max_effect_presets||100)){json(res,413,{error:"effect_preset_limit"});return;}const body=readJson(req),shared=this.store.getEffectShare(String(body.code||"").trim());if(!shared){json(res,404,{error:"effect_share_not_found"});return;}const safe=sanitizeEffectPreset({name:shared.name,kind:shared.kind,config:shared.config});if(!safe){json(res,400,{error:"effect_preset_invalid"});return;}let folder=this.store.listEffectFolders(session.user.id).find(item=>item.name==="导入的特效");if(!folder){if(this.store.effectFolderCount(session.user.id)>=100){json(res,413,{error:"effect_folder_limit"});return;}folder=this.store.createEffectFolder(session.user.id,"导入的特效");}json(res,201,this.store.createEffectPreset(session.user.id,safe.name,safe.config,folder.id,safe.kind));});
 		app.get("/api/account/effect-folders",(req,res)=>{const session=this.requireSession(req,res);if(session)json(res,200,this.store.listEffectFolders(session.user.id));});
-		app.post("/api/account/effect-folders",(req,res)=>{const session=this.requireSession(req,res,true);if(!session)return;const name=String(readJson(req).name||"").trim();if(!name){json(res,400,{error:"effect_folder_invalid"});return;}json(res,201,this.store.createEffectFolder(session.user.id,name));});
+		app.post("/api/account/effect-folders",(req,res)=>{const session=this.requireSession(req,res,true);if(!session)return;if(this.store.effectFolderCount(session.user.id)>=100){json(res,413,{error:"effect_folder_limit"});return;}const name=String(readJson(req).name||"").trim();if(!name){json(res,400,{error:"effect_folder_invalid"});return;}json(res,201,this.store.createEffectFolder(session.user.id,name));});
 		app.put("/api/account/effect-folders/:id",(req,res)=>{const session=this.requireSession(req,res,true);if(!session)return;const name=String(readJson(req).name||"").trim();const saved=Boolean(name&&this.store.renameEffectFolder(session.user.id,req.params.id,name));json(res,saved?200:404,saved?{ok:true}:{error:"effect_folder_not_found"});});
 		app.delete("/api/account/effect-folders/:id",(req,res)=>{const session=this.requireSession(req,res,true);if(!session)return;json(res,this.store.deleteEffectFolder(session.user.id,req.params.id)?200:404,{ok:true});});
 		app.post("/api/account/projects", (req, res) => {

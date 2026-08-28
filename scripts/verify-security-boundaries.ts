@@ -1,0 +1,89 @@
+import assert from "node:assert/strict";
+import Database from "better-sqlite3";
+import { AccountStore } from "../src/accounts/account-store.js";
+import { publicProjectPayload } from "../src/accounts/router.js";
+import { getClientIp } from "../src/server/client-ip.js";
+import { isPublicIp } from "../src/storage/cq-resource-cache.js";
+
+for (const address of [
+	"127.0.0.1",
+	"169.254.169.254",
+	"192.168.1.1",
+	"::1",
+	"::ffff:127.0.0.1",
+	"64:ff9b::7f00:1",
+	"2001:0:4136:e378:8000:63bf:3fff:fdd2",
+	"2002:7f00:1::",
+	"fe80::1",
+	"febf::1",
+	"fec0::1",
+	"ff02::1",
+]) {
+	assert.equal(isPublicIp(address), false, `${address} must not pass remote-resource SSRF checks`);
+}
+
+for (const address of ["1.1.1.1", "8.8.8.8", "2606:4700:4700::1111"]) {
+	assert.equal(isPublicIp(address), true, `${address} should remain a valid public address`);
+}
+
+const shared = publicProjectPayload({
+	id: "project-1",
+	title: "public story",
+	document: { story: true },
+	owner: { email: "private@example.test", status: "active" },
+	shareExpiryMode: "fixed",
+	shareExpiresAt: "2030-01-01T00:00:00.000Z",
+	lastActivityAt: "2029-01-01T00:00:00.000Z",
+});
+assert.deepEqual(shared.document, { story: true });
+assert.equal("owner" in shared, false, "shared legacy projects must not expose account metadata");
+assert.equal("shareExpiryMode" in shared, false, "share policy internals must not leak in project payloads");
+
+const forwardedRequest = (forwardedFor: string) => ({
+	headers: { "x-forwarded-for": forwardedFor },
+	socket: { remoteAddress: "127.0.0.1" },
+});
+assert.equal(
+	getClientIp(forwardedRequest("198.51.100.50, 203.0.113.25") as never, ["127.0.0.1/32"]),
+	"203.0.113.25",
+	"a prepended X-Forwarded-For value must not override the nearest untrusted client hop",
+);
+assert.equal(
+	getClientIp(forwardedRequest("198.51.100.50, 10.0.0.5") as never, ["127.0.0.1/32", "10.0.0.0/8"]),
+	"198.51.100.50",
+	"trusted proxy hops should be skipped from right to left",
+);
+assert.equal(
+	getClientIp({ headers: { forwarded: "for=198.51.100.50, for=203.0.113.25" }, socket: { remoteAddress: "127.0.0.1" } } as never, ["127.0.0.1/32"]),
+	"203.0.113.25",
+	"a prepended RFC 7239 Forwarded value must not override the nearest untrusted client hop",
+);
+
+const database = new Database(":memory:");
+database.pragma("foreign_keys = ON");
+const accountStore = new AccountStore(database);
+const verificationId = accountStore.createVerificationCode("code@example.test", "login", "123456", "203.0.113.0/24", 10);
+assert.equal(accountStore.verifyCode(verificationId, "code@example.test", "login", "123456", false), true);
+assert.equal(accountStore.verifyCode(verificationId, "code@example.test", "login", "123456"), true, "risk checks must not consume the email code before CAPTCHA succeeds");
+const account = await accountStore.createUser({
+	email: "owner@example.test",
+	password: "test-password-not-for-production",
+	username: "security_owner",
+	nickname: "Security Owner",
+	group: "default",
+});
+const project = accountStore.createProject(account.id, "shared", { story: true });
+const share = accountStore.shareProject(account.id, project.id);
+assert.ok(share);
+const storedShare = accountStore.getSharedProject(share.token);
+assert.ok(storedShare);
+assert.deepEqual(storedShare.owner, {
+	id: account.id,
+	group: "default",
+	quotaMbOverride: null,
+	retentionDaysOverride: null,
+});
+assert.equal("email" in storedShare.owner, false, "shared-project lookup must not read private owner fields");
+database.close();
+
+console.log("Security boundary checks passed");

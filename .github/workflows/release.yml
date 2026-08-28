@@ -31,7 +31,7 @@ jobs:
       RELEASE_CHANNEL: ${{ inputs.channel }}
     steps:
       - name: Check out source
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Validate release input
         shell: bash
@@ -48,12 +48,12 @@ jobs:
           printf '%s\n' "$RELEASE_VERSION" > VERSION
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@f520eceda224fe1a4aed5a2a27a194379a409996 # v6
         with:
           version: 10
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "20.19.2"
           cache: pnpm
@@ -64,8 +64,11 @@ jobs:
 
       - name: Check source and story format
         run: |
+          pnpm audit
           pnpm lint
+          pnpm test:security
           pnpm test:story-format
+          pnpm test:account-groups
 
       - name: Build server and frontend
         run: pnpm build
@@ -101,7 +104,7 @@ jobs:
           (cd release && sha256sum "${base}.tar.gz" "${base}.zip" > "SHA256SUMS-${RELEASE_VERSION}.txt")
 
       - name: Publish retained GitHub Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@c12583777ecdfd3be55c69cf75464299dc01057e # v3
         with:
           tag_name: v${{ inputs.version }}
           target_commitish: ${{ github.sha }}

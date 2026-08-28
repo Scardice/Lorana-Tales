@@ -108,6 +108,7 @@ export class CaptchaService {
 
 	issueClearance(subject: string, scope: string): string {
 		this.cleanup();
+		if (this.clearanceTokens.size >= 5000) this.clearanceTokens.delete(this.clearanceTokens.keys().next().value as string);
 		const token = crypto.randomBytes(32).toString("base64url");
 		this.clearanceTokens.set(hash(token), {
 			subject,
@@ -123,6 +124,9 @@ export class CaptchaService {
 		const record = this.clearanceTokens.get(hash(token || ""));
 		if (!record || record.used || record.expiresAt <= Date.now() || record.subject !== subject || record.scope !== scope) return false;
 		record.used = true;
+		if (this.trustedSubjects.size >= 5000 && !this.trustedSubjects.has(subject)) {
+			this.trustedSubjects.delete(this.trustedSubjects.keys().next().value as string);
+		}
 		this.trustedSubjects.set(subject, record.expiresAt);
 		return true;
 	}

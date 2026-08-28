@@ -138,6 +138,10 @@ export function createAdminRouter({
 		return !!getSession(req) || !!accountService?.isAdmin(req);
 	}
 
+	function capMap(map: Map<unknown, unknown>, maximum = 5000) {
+		while (map.size > maximum) map.delete(map.keys().next().value);
+	}
+
 	function requireAuth(req, res) {
 		if (isAuthenticated(req)) return true;
 		sendJson(res, 401, { error: "admin authentication required" });
@@ -209,6 +213,7 @@ export function createAdminRouter({
 			credentials,
 		};
 		failedLogins.set(ip, next);
+		capMap(failedLogins);
 		if (
 			security.bruteforceBlockEnabled !== false &&
 			nextCount >= bruteForceMaxAttempts
@@ -275,6 +280,7 @@ export function createAdminRouter({
 			expiresAt: Date.now() + SESSION_TTL_MS,
 			ip: getClientIp(req, trustProxy),
 		});
+		capMap(sessions);
 		setSessionCookie(req, res, token);
 		sendJson(res, 200, { authenticated: true });
 	});
