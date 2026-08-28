@@ -1,9 +1,40 @@
 import assert from "node:assert/strict";
+import { deflateSync } from "node:zlib";
 import Database from "better-sqlite3";
 import { AccountStore } from "../src/accounts/account-store.js";
 import { publicProjectPayload } from "../src/accounts/router.js";
 import { getClientIp } from "../src/server/client-ip.js";
 import { isPublicIp } from "../src/storage/cq-resource-cache.js";
+import { inflateTextBounded, InflateLimitError } from "../src/security/bounded-inflate.js";
+import { decodeBase64UploadLimited } from "../src/api/dice.js";
+import { SqliteLogStore } from "../src/storage/sqlite-log-store.js";
+
+const compressed = deflateSync(Buffer.alloc(8 * 1024, 65));
+assert.throws(
+	() => inflateTextBounded(compressed, 4 * 1024),
+	(error) => error instanceof InflateLimitError,
+	"compressed uploads must stop at the configured decoded-size boundary",
+);
+assert.equal(inflateTextBounded(compressed, 16 * 1024).bytes.byteLength, 8 * 1024);
+assert.equal(decodeBase64UploadLimited(Buffer.alloc(2048).toString("base64"), 1024), null);
+assert.equal(decodeBase64UploadLimited(Buffer.alloc(512).toString("base64"), 1024)?.byteLength, 512);
+assert.equal(decodeBase64UploadLimited("not base64!", 1024), null);
+assert.equal(decodeBase64UploadLimited("=", 1024), null);
+assert.equal(decodeBase64UploadLimited("YQ=", 1024), null);
+assert.equal(Buffer.from(decodeBase64UploadLimited("YQ==", 1024) || []).toString(), "a");
+
+const quotaStore = new SqliteLogStore(":memory:", { maxTotalBytes: 32 });
+await assert.rejects(
+	quotaStore.addLogRecord({ publicKey: "quota", password: "secret", uniformId: "test:quota", storedText: JSON.stringify({ data: "payload larger than quota" }) }),
+	/log_storage_quota_exceeded/,
+);
+quotaStore.close();
+
+const writableQuotaStore = new SqliteLogStore(":memory:", { maxTotalBytes: 2 * 1024 * 1024 });
+const withinQuotaPayload = JSON.stringify({ data: "ok" });
+await writableQuotaStore.addLogRecord({ publicKey: "within-quota", password: "secret", uniformId: "test:within", storedText: withinQuotaPayload });
+assert.equal(await writableQuotaStore.readPublicLog("within-quota", "secret"), withinQuotaPayload);
+writableQuotaStore.close();
 
 for (const address of [
 	"127.0.0.1",

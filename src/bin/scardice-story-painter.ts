@@ -25,7 +25,9 @@ async function main() {
 
 	if (command === "db-maintain") {
 		const config = loadConfig();
-		const store = new SqliteLogStore(config.storage.sqlite_path);
+		const store = new SqliteLogStore(config.storage.sqlite_path, {
+			maxTotalBytes: Math.max(1, Number(config.storage.max_total_mb || 4096)) * 1024 * 1024,
+		});
 		try {
 			const result = await store.maintainDatabase({
 				vacuum: process.argv.includes("--vacuum"),

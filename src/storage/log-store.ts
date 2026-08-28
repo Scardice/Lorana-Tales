@@ -1,4 +1,6 @@
-import { strFromU8, unzlibSync } from "fflate";
+import { inflateTextBounded } from "../security/bounded-inflate.js";
+
+const MAX_DECODED_LOG_BYTES = 64 * 1024 * 1024;
 
 export interface LogSize {
 	storedBytes: number;
@@ -151,9 +153,9 @@ function decodeStoredPayload(data: unknown) {
 	let decodeError = "";
 
 	try {
-		const inflated = unzlibSync(compressed);
-		decodedBytes = inflated.byteLength;
-		decodedText = strFromU8(inflated);
+		const inflated = inflateTextBounded(compressed, MAX_DECODED_LOG_BYTES);
+		decodedBytes = inflated.bytes.byteLength;
+		decodedText = inflated.text;
 	} catch (error) {
 		decodeError = error?.message || "unable to inflate data";
 		try {

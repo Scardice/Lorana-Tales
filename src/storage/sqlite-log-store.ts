@@ -18,6 +18,7 @@ import {
 } from "./log-store.js";
 
 type SqlRow = Record<string, unknown>;
+const RECORD_STORAGE_OVERHEAD_BYTES = 64 * 1024;
 
 const MIGRATIONS = [
 	{
@@ -115,16 +116,19 @@ function rowToMetadata(row): LogMetadata {
 export class SqliteLogStore implements LogStore {
 	db: Database.Database;
 	dbPath: string;
+	maxTotalBytes: number;
 
-	constructor(dbPath: string) {
-		this.dbPath = path.resolve(dbPath);
-		fs.mkdirSync(path.dirname(this.dbPath), { recursive: true });
+	constructor(dbPath: string, options: { maxTotalBytes?: number } = {}) {
+		this.dbPath = dbPath === ":memory:" ? dbPath : path.resolve(dbPath);
+		this.maxTotalBytes = Math.max(1, Number(options.maxTotalBytes || 4096 * 1024 * 1024));
+		if (this.dbPath !== ":memory:") fs.mkdirSync(path.dirname(this.dbPath), { recursive: true });
 		this.db = new Database(this.dbPath);
 
 		this.db.pragma("journal_mode = WAL");
 		this.db.pragma("synchronous = NORMAL");
 		this.db.pragma("foreign_keys = ON");
 		this.db.pragma("busy_timeout = 5000");
+		this.db.pragma(`journal_size_limit = ${Math.min(64 * 1024 * 1024, Math.max(1024 * 1024, Math.floor(this.maxTotalBytes / 16)))}`);
 		this.migrate();
 	}
 
@@ -216,6 +220,14 @@ export class SqliteLogStore implements LogStore {
 		);
 
 		const write = this.db.transaction(() => {
+			const usage = this.db.prepare("SELECT COALESCE(SUM(stored_bytes), 0) AS total FROM log_records").get() as SqlRow;
+			const pageCount = Number(this.db.pragma("page_count", { simple: true }));
+			const pageSize = Number(this.db.pragma("page_size", { simple: true }));
+			const projectedContentBytes = Number(usage.total || 0) + metadata.size.storedBytes;
+			const projectedAllocatedBytes = pageCount * pageSize + metadata.size.storedBytes + RECORD_STORAGE_OVERHEAD_BYTES;
+			if (Math.max(projectedContentBytes, projectedAllocatedBytes) > this.maxTotalBytes) {
+				throw new Error("log_storage_quota_exceeded");
+			}
 			const result = insertRecord.run({
 				publicKey: input.publicKey,
 				accessPassword: input.password,

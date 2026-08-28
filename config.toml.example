@@ -36,6 +36,10 @@ hsts_max_age_seconds = 0
 # 相对路径会以项目根目录为基准；系统服务部署建议使用 /var/lib/scardice-story-painter/scardice.db，避免工作目录变化导致新建空库。
 sqlite_path = "./data/scardice.db"
 
+# 公共传统日志数据库的总容量硬上限，单位 MB。正文、数据库页、索引与保守行开销都会计入。
+# 可用环境变量 MAX_LOG_STORAGE_MB 覆盖；账号云端工程与 CQ 资源各自使用独立额度。
+max_total_mb = 4096
+
 [editor]
 # 裸路径 / 使用的默认编辑器：story（新版沉浸式）或 legacy（旧版）。
 # /story 和 /legacy 始终可直接进入对应页面。

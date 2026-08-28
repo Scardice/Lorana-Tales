@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { strFromU8, unzlibSync } from "fflate";
+import { inflateTextBounded } from "./bounded-inflate.js";
 
 export type InjectionFinding = {
 	ruleId: string;
@@ -46,6 +46,7 @@ export type SecurityWarningInput = {
 
 const MAX_FINDINGS = 12;
 const CONTEXT_RADIUS = 72;
+const MAX_INSPECTABLE_DECODED_BYTES = 16 * 1024 * 1024;
 export const UPLOAD_INJECTION_REASON =
 	"由于本次上传的日志包含危险的注入代码，已被安全系统拦截，请求内容以及IP已经被记录，请规范个人行为。";
 const DEFAULT_WARNING_QUOTES = [
@@ -164,7 +165,7 @@ function decodeInspectableTexts(part: InspectionPart): string[] {
 	if (!bytes || bytes.byteLength === 0) return texts;
 
 	try {
-		texts.push(strFromU8(unzlibSync(bytes)));
+		texts.push(inflateTextBounded(bytes, MAX_INSPECTABLE_DECODED_BYTES).text);
 		return texts;
 	} catch {
 		// Fall through to UTF-8/plaintext inspection below.

@@ -353,7 +353,9 @@ export async function startServer(
 		return record;
 	}
 
-	const store = new SqliteLogStore(config.storage.sqlite_path);
+	const store = new SqliteLogStore(config.storage.sqlite_path, {
+		maxTotalBytes: Math.max(1, Number(config.storage.max_total_mb || 4096)) * 1024 * 1024,
+	});
 	let accountService: AccountService | null = null;
 	if (config.accounts?.enabled) {
 		if (String(config.accounts.encryption_key || "").length < 32) {

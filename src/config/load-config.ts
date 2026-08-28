@@ -31,6 +31,7 @@ const DEFAULT_CONFIG = {
 	},
 	storage: {
 		sqlite_path: "./data/scardice.db",
+		max_total_mb: 4096,
 	},
 	editor: {
 		default_mode: "story",
@@ -278,6 +279,10 @@ export function loadConfig() {
 		config.storage.sqlite_path = process.env.SQLITE_PATH;
 	if (process.env.DATABASE_PATH)
 		config.storage.sqlite_path = process.env.DATABASE_PATH;
+	if (process.env.MAX_LOG_STORAGE_MB) {
+		const value = Number(process.env.MAX_LOG_STORAGE_MB);
+		if (Number.isFinite(value) && value > 0) config.storage.max_total_mb = value;
+	}
 	if (process.env.EDITOR_DEFAULT_MODE)
 		config.editor.default_mode = process.env.EDITOR_DEFAULT_MODE;
 	if (process.env.EDITOR_ENABLE_STORY_MODE !== undefined)

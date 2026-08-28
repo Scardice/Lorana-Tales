@@ -142,6 +142,7 @@ hsts_max_age_seconds = 0 # HTTPS 全站确认可用后建议设为 31536000
 
 [storage]
 sqlite_path = "./data/scardice.db" # SQLite 数据库路径
+max_total_mb = 4096 # 公共传统日志数据库总容量硬上限（MB）
 
 [editor]
 default_mode = "story" # 裸路径默认进入 story（新版）或 legacy（旧版）

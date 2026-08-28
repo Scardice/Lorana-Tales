@@ -9,13 +9,21 @@ import {
 } from "../security/injection-guard.js";
 import type { LogStore } from "../storage/log-store.js";
 import type { CqResourceCache } from "../storage/cq-resource-cache.js";
+import { inflateTextBounded, InflateLimitError } from "../security/bounded-inflate.js";
 
 const DEFAULT_FILE_SIZE_LIMIT_MB = 5;
 const API_PREFIXES = ["/api/dice", "/dice/api"];
 const LOAD_DATA_FAILURE_LIMIT = 10;
 const LOAD_DATA_FAILURE_WINDOW_MS = 10 * 60 * 1000;
+const LOAD_DATA_IP_FAILURE_LIMIT = 120;
 const UPLOAD_LIMIT = 30;
 const UPLOAD_WINDOW_MS = 10 * 60 * 1000;
+const MAX_RATE_LIMIT_RECORDS = 10_000;
+const MAX_NAME_CHARS = 256;
+const MAX_UNIFORM_ID_CHARS = 256;
+const MAX_CLIENT_CHARS = 128;
+const MAX_VERSION_CHARS = 128;
+const MAX_INFLATED_UPLOAD_BYTES = 64 * 1024 * 1024;
 
 type RateLimitRecord = {
 	count: number;
@@ -23,6 +31,7 @@ type RateLimitRecord = {
 };
 
 const loadDataFailures = new Map<string, RateLimitRecord>();
+const loadDataIpFailures = new Map<string, RateLimitRecord>();
 const uploadAttempts = new Map<string, RateLimitRecord>();
 
 function randomToken(bytes = 18): string {
@@ -50,6 +59,11 @@ function consumeRateLimit(
 	if (!current || current.resetAt <= now) {
 		const next = { count: 1, resetAt: now + windowMs };
 		records.set(key, next);
+		while (records.size > MAX_RATE_LIMIT_RECORDS) {
+			const oldestKey = records.keys().next().value;
+			if (oldestKey === undefined) break;
+			records.delete(oldestKey);
+		}
 		return next;
 	}
 	if (current.count >= limit) return null;
@@ -150,16 +164,10 @@ function getSecurityWarningQuotes(env): string[] {
 }
 
 function getUploaderIp(request: Request): string {
-	const forwardedFor = String(request.headers.get("x-forwarded-for") || "")
-		.split(",")[0]
-		.trim();
-	return (
-		request.headers.get("x-scardice-client-ip") ||
-		request.headers.get("cf-connecting-ip") ||
-		request.headers.get("x-real-ip") ||
-		forwardedFor ||
-		"unknown"
-	);
+	// The Node server always overwrites this internal header after applying the
+	// configured trusted-proxy policy. Never re-interpret client-controlled
+	// forwarding headers inside the API layer.
+	return request.headers.get("x-scardice-client-ip") || "unknown";
 }
 
 function normalize(url: string): string {
@@ -257,7 +265,33 @@ function matchesApiPath(pathname: string, routePath: string): boolean {
 }
 
 function validateUniformId(value: string): boolean {
-	return /^[^:]+:[A-Za-z0-9_.-]+$/.test(value);
+	return value.length <= MAX_UNIFORM_ID_CHARS && /^[^:]+:[A-Za-z0-9_.-]+$/.test(value);
+}
+
+function uploadMetadataIsTooLong(name: string, client: string, version: string): boolean {
+	return name.length > MAX_NAME_CHARS || client.length > MAX_CLIENT_CHARS || version.length > MAX_VERSION_CHARS;
+}
+
+export function decodeBase64UploadLimited(value: string, maxBytes: number): Uint8Array | null {
+	const normalized = value.replace(/\s+/g, "");
+	if (!normalized || normalized.length % 4 === 1) return null;
+	if (!/^[A-Za-z0-9+/]+={0,2}$/.test(normalized)) return null;
+	const padding = normalized.endsWith("==") ? 2 : normalized.endsWith("=") ? 1 : 0;
+	const coreLength = normalized.length - padding;
+	if (padding > 0 && (normalized.length % 4 !== 0 || coreLength % 4 !== 4 - padding)) return null;
+	if (normalized.length > Math.ceil(maxBytes / 3) * 4 + 4) return null;
+	const decoded = Buffer.from(normalized, "base64");
+	if (decoded.byteLength === 0 || decoded.byteLength > maxBytes) return null;
+	return new Uint8Array(decoded);
+}
+
+function compressedUploadExceedsLimit(bytes: Uint8Array): boolean {
+	try {
+		inflateTextBounded(bytes, MAX_INFLATED_UPLOAD_BYTES);
+		return false;
+	} catch (error) {
+		return error instanceof InflateLimitError;
+	}
 }
 
 function getTextField(value: FormDataEntryValue | null): string {
@@ -402,6 +436,10 @@ async function uploadToBackupApi(
 	logdata: string,
 	visitedHosts: string[] = [],
 ) {
+	visitedHosts = visitedHosts
+		.slice(0, 16)
+		.map((host) => String(host).trim())
+		.filter((host) => host.length > 0 && host.length <= 253);
 	const backupHost = new URL(backupApiUrl).host;
 	if (visitedHosts.includes(backupHost)) {
 		throw new Error(
@@ -482,6 +520,13 @@ async function persistLogOrBackup({
 			uploadError?.message || uploadError?.toString() || "Unknown error",
 		);
 		console.error(`Upload Error - database write failed: ${errorMsg}`);
+		if (errorMsg.includes("log_storage_quota_exceeded")) {
+			return jsonResponse(
+				{ success: false, message: "Log storage quota exceeded" },
+				507,
+				corsHeaders,
+			);
+		}
 
 		const backupApiUrl = await resolveBackupApi(env);
 		if (!backupApiUrl) {
@@ -599,6 +644,10 @@ export async function handleDiceApiRequest({ request, env }) {
 				);
 			}
 
+			if (uploadMetadataIsTooLong(name, client, version)) {
+				return jsonResponse({ success: false, message: "Upload metadata is too long" }, 400, corsHeaders);
+			}
+
 			if (file.size > maxUploadMb * 1024 * 1024) {
 				return jsonResponse(
 					{
@@ -611,6 +660,9 @@ export async function handleDiceApiRequest({ request, env }) {
 			}
 
 			const fileBytes = new Uint8Array(await file.arrayBuffer());
+			if (compressedUploadExceedsLimit(fileBytes)) {
+				return jsonResponse({ success: false, message: "Decoded log exceeds 64MB limit" }, 413, corsHeaders);
+			}
 			const blocked = await rejectDangerousUpload({
 				request,
 				env,
@@ -686,21 +738,24 @@ export async function handleDiceApiRequest({ request, env }) {
 					corsHeaders,
 				);
 			}
+			if (key.length > 128 || password.length > 256) {
+				return jsonResponse({ error: "Invalid key or password" }, 400, corsHeaders);
+			}
 
 			const clientIp = getUploaderIp(request);
 			const loadFailureKey = `${clientIp}:${key}`;
 			const activeRecord = loadDataFailures.get(loadFailureKey);
+			const activeIpRecord = loadDataIpFailures.get(clientIp);
 			if (
-				activeRecord &&
-				activeRecord.count >= LOAD_DATA_FAILURE_LIMIT &&
-				activeRecord.resetAt > Date.now()
+				(activeRecord && activeRecord.count >= LOAD_DATA_FAILURE_LIMIT && activeRecord.resetAt > Date.now()) ||
+				(activeIpRecord && activeIpRecord.count >= LOAD_DATA_IP_FAILURE_LIMIT && activeIpRecord.resetAt > Date.now())
 			) {
 				return jsonResponse(
 					{ error: "Too many failed load attempts" },
 					429,
 					{
 						...corsHeaders,
-						"Retry-After": retryAfterSeconds(activeRecord),
+						"Retry-After": retryAfterSeconds(activeIpRecord || activeRecord),
 					},
 				);
 			}
@@ -711,6 +766,12 @@ export async function handleDiceApiRequest({ request, env }) {
 					loadDataFailures,
 					loadFailureKey,
 					LOAD_DATA_FAILURE_LIMIT,
+					LOAD_DATA_FAILURE_WINDOW_MS,
+				);
+				consumeRateLimit(
+					loadDataIpFailures,
+					clientIp,
+					LOAD_DATA_IP_FAILURE_LIMIT,
 					LOAD_DATA_FAILURE_WINDOW_MS,
 				);
 				return jsonResponse({ error: "Data not found" }, 404, corsHeaders);
@@ -782,6 +843,17 @@ export async function handleDiceApiRequest({ request, env }) {
 					400,
 				);
 			}
+			if (uploadMetadataIsTooLong(name, client, version)) {
+				return jsonResponse({ success: false, message: "Upload metadata is too long" }, 400);
+			}
+
+			const logBytes = decodeBase64UploadLimited(logdata, maxUploadMb * 1024 * 1024);
+			if (!logBytes) {
+				return jsonResponse({ success: false, message: `Invalid logdata or decoded file exceeds ${maxUploadMb}MB limit` }, 413);
+			}
+			if (compressedUploadExceedsLimit(logBytes)) {
+				return jsonResponse({ success: false, message: "Decoded log exceeds 64MB limit" }, 413);
+			}
 
 			const blocked = await rejectDangerousUpload({
 				request,
@@ -794,7 +866,7 @@ export async function handleDiceApiRequest({ request, env }) {
 					{ source: "field:uniform_id", text: uniformId },
 					{ source: "field:client", text: client },
 					{ source: "field:version", text: version },
-					{ source: "field:logdata", base64: logdata },
+					{ source: "field:logdata", bytes: logBytes },
 				],
 			});
 			if (blocked) return blocked;
@@ -829,6 +901,12 @@ export async function handleDiceApiRequest({ request, env }) {
 					storageError?.message || storageError?.toString() || "Unknown error",
 				);
 				console.error(`Backup Upload: database storage failed: ${errorMsg}`);
+				if (errorMsg.includes("log_storage_quota_exceeded")) {
+					return jsonResponse(
+						{ success: false, message: "Log storage quota exceeded" },
+						507,
+					);
+				}
 
 				const backupApiUrl = await resolveBackupApi(env);
 				if (!backupApiUrl) {
@@ -840,7 +918,10 @@ export async function handleDiceApiRequest({ request, env }) {
 
 				try {
 					const visitedHosts = Array.isArray(body?.visitedHosts)
-						? body.visitedHosts.map(String)
+						? body.visitedHosts
+							.slice(0, 16)
+							.map((host) => String(host).trim())
+							.filter((host) => host.length > 0 && host.length <= 253)
 						: [];
 					const currentHost = new URL(request.url).host;
 					const backupResult = await uploadToBackupApi(
@@ -903,6 +984,7 @@ export async function handleDiceApiRequest({ request, env }) {
 			let logdata = "";
 			let textUpload = "";
 			let inspectionParts: InspectionPart[] = [];
+			let decodedJsonUpload: Uint8Array | null = null;
 
 			const contentType = request.headers.get("Content-Type") || "";
 			if (contentType.includes("multipart/form-data")) {
@@ -932,6 +1014,9 @@ export async function handleDiceApiRequest({ request, env }) {
 						corsHeaders,
 					);
 				}
+				if (name.length > MAX_NAME_CHARS) {
+					return jsonResponse({ success: false, message: "Upload metadata is too long" }, 400, corsHeaders);
+				}
 
 				const fileBytes = new Uint8Array(await file.arrayBuffer());
 				textUpload = new TextDecoder("utf-8").decode(fileBytes);
@@ -956,10 +1041,20 @@ export async function handleDiceApiRequest({ request, env }) {
 						corsHeaders,
 					);
 				}
+				if (name.length > MAX_NAME_CHARS) {
+					return jsonResponse({ success: false, message: "Upload metadata is too long" }, 400, corsHeaders);
+				}
+				decodedJsonUpload = decodeBase64UploadLimited(logdata, maxUploadMb * 1024 * 1024);
+				if (!decodedJsonUpload) {
+					return jsonResponse({ success: false, message: `Invalid logdata or decoded file exceeds ${maxUploadMb}MB limit` }, 413, corsHeaders);
+				}
+				if (compressedUploadExceedsLimit(decodedJsonUpload)) {
+					return jsonResponse({ success: false, message: "Decoded log exceeds 64MB limit" }, 413, corsHeaders);
+				}
 				inspectionParts = [
 					{ source: "field:name", text: name },
 					{ source: "field:uniform_id", text: uniformId },
-					{ source: "field:logdata", base64: logdata },
+					{ source: "field:logdata", bytes: decodedJsonUpload },
 				];
 			}
 
