@@ -2,7 +2,7 @@
   <Teleport to="body">
 	<div v-if="show" ref="scrollEl" class="player" :class="[isDark ? 'player--dark' : 'player--light', `player--${storyDocument.settings.density}`, screenEffectClass, persistentEffectClasses, { 'player--performance-edit': performanceEditMode, 'player--source-open': sourceActive }]" :style="playerStyle" @click="sourceActive || advanceFromCanvas()" @scroll.passive="schedulePlayerStickyAvatar">
       <header @click.stop>
-        <button @click="started ? stopPlayback() : $emit('close')">← 返回</button>
+        <button @click="sourceActive ? $emit('raw') : started ? stopPlayback() : $emit('close')">{{ sourceActive ? '← 返回演出编辑' : '← 返回' }}</button>
         <div class="player-title">
           <input v-if="performanceEditMode" v-model="titleDraft" maxlength="120" aria-label="故事名" @change="saveTitle" @keydown.enter.prevent="saveTitle" />
           <strong v-else>{{ storyDocument.title }}</strong>
@@ -482,5 +482,16 @@ onBeforeUnmount(() => { stopTimers();canvasResizeObserver?.disconnect();cancelAn
 .effect-brush-dialog>footer{flex:0 0 auto}
 .effect-brush-dialog>footer button,.effect-selection-dialog>footer button{box-sizing:border-box;min-width:68px;min-height:36px;border:1px solid var(--primary-bg)!important;border-radius:9px!important;padding:.45rem .8rem!important;background:var(--primary-bg)!important;color:var(--primary-text)!important;font:inherit;font-weight:650;cursor:pointer}
 .effect-brush-dialog>footer button:hover,.effect-selection-dialog>footer button:hover{background:var(--primary-hover)!important}
-@media(min-width:651px){.player--source-open{left:min(46vw,760px)}.player--source-open .player-message{cursor:text}.player--source-open .player-message:hover .bubble{box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--focus-color) 60%,transparent)}}
+@media(min-width:651px){.player--source-open{left:min(46vw,760px)}.player--source-open>header{grid-template-columns:auto minmax(0,1fr);grid-template-rows:auto auto;align-items:center}.player--source-open>header>.player-title{grid-column:2;grid-row:1}.player--source-open>header>.player-header-actions{grid-column:1/-1;grid-row:2;justify-self:stretch;justify-content:flex-start!important;flex-wrap:wrap;width:100%;overflow:visible}.player--source-open .player-message{cursor:text}.player--source-open .player-message:hover .bubble{box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--focus-color) 60%,transparent)}}
+
+/* Setting groups are already cards; keep their headings visually inside the card. */
+.settings-panel .performance-setting-group>header{min-height:0;padding:0;border:0;border-radius:0;background:transparent!important;box-shadow:none}
+.settings-panel .performance-setting-group>header strong{color:var(--control-text)}
+.settings-panel :deep(.n-input),.settings-panel :deep(.n-input-number),.settings-panel :deep(.n-base-selection){border-radius:9px!important;box-shadow:none!important}
+.settings-panel :deep(.n-input__border),.settings-panel :deep(.n-input__state-border),.settings-panel :deep(.n-base-selection__border),.settings-panel :deep(.n-base-selection__state-border){border-color:var(--control-border)!important;box-shadow:0 0 0 1px var(--control-border)!important}
+.settings-panel :deep(.n-input:hover .n-input__state-border),.settings-panel :deep(.n-input:focus-within .n-input__state-border),.settings-panel :deep(.n-base-selection:hover .n-base-selection__state-border),.settings-panel :deep(.n-base-selection--active .n-base-selection__state-border){box-shadow:0 0 0 1px var(--focus-color)!important}
+
+/* A base effect performs once; --screen-effect-repeat controls repetition. */
+@keyframes screen-glitch{0%,100%{opacity:0;transform:none}28%{opacity:0;transform:translateX(-5px)}36%{opacity:.68;transform:translateX(-5px)}58%{opacity:.3;transform:translateX(5px)}68%{opacity:0;transform:none}}
+@keyframes screen-double-pulse{0%,100%{opacity:0;transform:scale(1.08)}22%{opacity:.76;transform:scale(.97)}55%{opacity:.18;transform:scale(1.025)}}
 </style>

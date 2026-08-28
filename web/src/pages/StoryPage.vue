@@ -4,7 +4,7 @@
 	<template v-else-if="archive">
 	  <div class="story-workspace" :class="{ 'story-workspace--raw': rawOpen && rawContext === 'editor' }">
 		<Transition name="raw-pane"><section v-if="rawOpen" class="raw-pane" :class="{ 'raw-pane--player': rawContext === 'player' }">
-		  <header><div><strong>原始语法</strong><small :class="{ error: rawError }">{{ rawError || (rawPending ? '等待补全当前标签…' : '已实时同步到图形预览') }}</small></div><nav><button @click="downloadRaw">下载语法</button><button class="primary" @click="closeRawEditor">返回图形编辑</button></nav></header>
+		  <header><div><strong>原始语法</strong><small :class="{ error: rawError }">{{ rawError || (rawPending ? '等待补全当前标签…' : '已实时同步到图形预览') }}</small></div><nav><button @click="downloadRaw">下载语法</button><button class="primary" @click="closeRawEditor">{{ rawContext === 'player' ? '返回演出编辑' : '返回图形编辑' }}</button></nav></header>
 		  <StoryScriptEditor v-model="rawText" :error="rawError" :focus-request="rawFocusRequest" />
 		</section></Transition>
 		<div class="story-visual"><StoryEditor :archive="archive" :asset-url="assetUrl" :raw-active="rawOpen && rawContext === 'editor'" @change="onChange" @download="download" @legacy-text="downloadLegacyText" @html="downloadPerformanceHtml" @word="downloadWord" @long-image="openLongImageExport" @preview="playerVisible=true" @raw="toggleRawEditor" @source-message="focusRawMessage" @import="fileInput?.click()" @clear="clearDraft" @sync="syncStorySource" /></div>

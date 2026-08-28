@@ -58,7 +58,8 @@ const colorOptions:Array<{label:string;value:StoryEffectColor;hex:string;swatch?
 const colorHex=computed(()=>colorOptions.find(option=>option.value===props.color)?.hex||colorOptions[0].hex);
 const previewDuration=computed(()=>`${Math.max(80,Math.round(props.durationMs*100/Math.max(25,props.speedPercent)))}ms`);
 const previewStyle=computed(()=>({'--preview-color':colorHex.value,'--preview-duration':previewDuration.value,'--preview-repeat':String(Math.max(1,props.repeat))}));
-function requestPreview(){replay()}function chooseText(value:"inherit"|StoryStreamTokenAnimation){activeKind.value="text";emit("text",value);replay()}function chooseScreen(value:StoryScreenEffect){activeKind.value="screen";emit("screen",value);replay()}function choosePersistent(value:StoryPersistentEffect){emit("persistent",value);replay()}function chooseColor(value:StoryEffectColor){emit("color",value);replay()}function chooseDuration(value:number){emit("duration",Math.round(value));replay()}function chooseSpeed(value:number){emit("speed",Math.round(value));replay()}function chooseRepeat(value:number){emit("repeat",Math.round(value));replay()}
+const recommendedRepeat:Partial<Record<StoryScreenEffect,number>>={flicker:3,heartbeat:2};
+function requestPreview(){replay()}function chooseText(value:"inherit"|StoryStreamTokenAnimation){activeKind.value="text";emit("text",value);replay()}function chooseScreen(value:StoryScreenEffect){activeKind.value="screen";emit("screen",value);emit("repeat",recommendedRepeat[value]??1);replay()}function choosePersistent(value:StoryPersistentEffect){emit("persistent",value);replay()}function chooseColor(value:StoryEffectColor){emit("color",value);replay()}function chooseDuration(value:number){emit("duration",Math.round(value));replay()}function chooseSpeed(value:number){emit("speed",Math.round(value));replay()}function chooseRepeat(value:number){emit("repeat",Math.round(value));replay()}
 function chooseInteractionKind(){activeKind.value="interaction";replay()}function chooseInteraction(value:"none"|StoryInteractionEffect){activeKind.value="interaction";emit("interaction",value);replay()}function chooseReaction(value:StoryInteractionReaction){emit("reaction",value);replay()}function chooseEmoji(value:string){emit("emoji",value);replay()}
 function applyPreset(preset:EffectPreset){if(preset.kind==="interaction"){const config=preset.config as InteractionEffectPresetConfig;emit("interaction",config.interactionEffect);emit("reaction",config.reaction);emit("emoji",config.emoji);activeKind.value="interaction";replay();return}const config=preset.config as ScreenEffectPresetConfig;emit("screen",config.screenEffect);emit("color",config.color);emit("duration",config.durationMs);emit("speed",config.speedPercent);emit("repeat",config.repeat);replay()}
 </script>
@@ -89,4 +90,14 @@ function applyPreset(preset:EffectPreset){if(preset.kind==="interaction"){const 
 .effect-preview--damage .effect-preview__screen{animation-name:preview-edge-strips;background:linear-gradient(to bottom,color-mix(in srgb,var(--preview-color) 68%,transparent),transparent) top/100% 22% no-repeat,linear-gradient(to top,color-mix(in srgb,var(--preview-color) 68%,transparent),transparent) bottom/100% 22% no-repeat,linear-gradient(to right,color-mix(in srgb,var(--preview-color) 54%,transparent),transparent) left/15% 100% no-repeat,linear-gradient(to left,color-mix(in srgb,var(--preview-color) 54%,transparent),transparent) right/15% 100% no-repeat}
 @keyframes preview-edge-strips{0%,100%{opacity:0;background-size:100% 9%,100% 9%,6% 100%,6% 100%}16%{opacity:.82;background-size:100% 22%,100% 22%,15% 100%,15% 100%}38%{opacity:.16;background-size:100% 12%,100% 12%,8% 100%,8% 100%}58%{opacity:.52;background-size:100% 17%,100% 17%,11% 100%,11% 100%}82%{opacity:0}}
 @media(max-width:860px){.effect-parameters>div{grid-template-columns:1fr}}
+
+/* One animation iteration is one visual event. Repetition is configured separately. */
+@keyframes glitch{0%,100%{opacity:0;transform:none}30%{opacity:0;transform:translateX(-4px)}38%{opacity:.62;transform:translateX(-4px)}62%{opacity:.28;transform:translateX(5px)}70%{opacity:0;transform:none}}
+@keyframes pulse{0%,100%{opacity:0;transform:scale(1.12)}28%{opacity:.7;transform:scale(.97)}62%{opacity:.12;transform:scale(1.04)}}
+@keyframes preview-edge{0%,100%{opacity:0}24%{opacity:.8}62%{opacity:.18}}
+@keyframes preview-heartbeat{0%,100%{opacity:0;transform:scale(.76)}28%{opacity:.65;transform:scale(1)}64%{opacity:.12;transform:scale(1.06)}}
+.effect-preview--blackout .effect-preview__screen{opacity:.72;mix-blend-mode:multiply}
+.effect-preview--blackout .effect-preview__message{z-index:2}
+.effect-preview--blackout .effect-preview__message p{border:1px solid var(--control-border);background:var(--panel-surface);color:var(--control-text);box-shadow:0 4px 16px #0005}
+.effect-preview--blackout .effect-preview__message small{color:color-mix(in srgb,var(--preview-color) 68%,white)}
 </style>
