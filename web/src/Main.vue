@@ -3,9 +3,7 @@
     <Teleport to="#global-account-slot"><AccountPanel :archive="storyArchive" @load="onStoryChange" @sync="syncStorySource" /></Teleport>
     <n-layout-content class="painter-content">
       <div class="painter-workspace">
-        <n-text type="info" italic class="block text-center my-1"
-          >Lorana Tales 官方 QQ 群 1084726031</n-text
-        >
+		<n-text v-if="communityNotice" type="info" italic class="block text-center my-1">{{ communityNotice }}</n-text>
         <div class="remote-load-frame">
           <div
             v-if="loading"
@@ -465,7 +463,7 @@ import {
 } from "./utils/exporter";
 
 const isDark = useThemeDark();
-const { legacyOnly = false } = defineProps<{ legacyOnly?: boolean }>();
+const { legacyOnly = false, communityNotice = "" } = defineProps<{ legacyOnly?: boolean; communityNotice?: string }>();
 const _toggleDark = useToggle(isDark);
 
 // 不用他了 虽然很不错，但是没有屏幕取色

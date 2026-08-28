@@ -36,9 +36,10 @@ const DEFAULT_CONFIG = {
 	},
 	branding: {
 		site_title: "Lorana Tales",
-		show_site_title: true,
-		logo_path: "",
-		favicon_path: "",
+		show_site_title: false,
+		logo_path: "./web/public/lorana-tales-brand.png",
+		favicon_path: "./web/public/favicon.ico",
+		community_notice: "GitHub: https://github.com/Scardice/Lorana-Tales · QQ群：1080498667",
 	},
 	avatar_providers: {
 		discord_enabled: false,
@@ -280,6 +281,8 @@ export function loadConfig() {
 		config.branding.logo_path = process.env.SITE_LOGO_PATH;
 	if (process.env.SITE_FAVICON_PATH !== undefined)
 		config.branding.favicon_path = process.env.SITE_FAVICON_PATH;
+	if (process.env.SITE_COMMUNITY_NOTICE !== undefined)
+		config.branding.community_notice = process.env.SITE_COMMUNITY_NOTICE;
 	if (process.env.DISCORD_AVATAR_ENABLED !== undefined)
 		config.avatar_providers.discord_enabled = parseBoolean(process.env.DISCORD_AVATAR_ENABLED, config.avatar_providers.discord_enabled);
 	if (process.env.DISCORD_BOT_TOKEN)

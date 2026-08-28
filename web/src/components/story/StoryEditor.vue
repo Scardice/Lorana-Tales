@@ -46,6 +46,7 @@
 	  </div>
 	  </div>
     </main>
+    <div v-if="communityNotice" class="story-community-watermark">{{ communityNotice }}</div>
 
     <section v-if="!document.settings.previewOnly" class="composer">
 	  <div v-if="insertBatch" class="composer-reply composer-batch"><span><strong>多插中</strong>选择下方角色，发送后会依次插入标记位置</span><button class="composer-batch__end" title="退出多插" aria-label="退出多插" @click="cancelInsert">退出多插</button></div>
@@ -133,13 +134,14 @@ import { storyAvatarUrl } from "~/story/avatar";
 import { createStoryId, storyDisplayText, storyMessageGroupPosition, storyTextSegments } from "~/story/model";
 import { readableRoleColor, storyPalette, storyPalettes } from "~/story/palette";
 import type { StoryArchive, StoryAssetRef, StoryCharacter, StoryCharacterState, StoryMessage, StoryPosition, StorySettings } from "~/story/types";
-const props=defineProps<{archive:StoryArchive;assetUrl:(id:string)=>string;rawActive?:boolean}>();const emit=defineEmits<{change:[StoryArchive];download:[];preview:[];raw:[];import:[];clear:[];sync:[any];html:[];word:[];'legacy-text':[];'long-image':[];'source-message':[string]}>();
+const props=defineProps<{archive:StoryArchive;assetUrl:(id:string)=>string;rawActive?:boolean;communityNotice?:string}>();const emit=defineEmits<{change:[StoryArchive];download:[];preview:[];raw:[];import:[];clear:[];sync:[any];html:[];word:[];'legacy-text':[];'long-image':[];'source-message':[string]}>();
 const isDark=useThemeDark();
 const themeMode=useThemeMode();
 type StoryPlacement=StoryPosition|'narrator-avatar';
 type ComposerInputHandle={focus:()=>void;blur:()=>void;insertText:(value:string)=>void;insertToken:(value:string)=>void;insertNewline:()=>void;resize:()=>void};
 const virtualList=ref<HTMLElement>();
 const document=computed(()=>props.archive.document);const root=ref<HTMLElement>();const messageList=ref<HTMLElement>();const characterRail=ref<HTMLElement>();const imageInput=ref<HTMLInputElement>();const characterAvatarInput=ref<HTMLInputElement>();const editArea=ref<HTMLTextAreaElement[]>();const insertArea=ref<HTMLTextAreaElement[]>();const titleInput=ref<HTMLInputElement>();const composerInput=ref<ComposerInputHandle>();const fullscreen=ref(false);const moveMode=ref(false);const titleDraft=ref(document.value.title);const titleEditing=ref(false);const displaySettingsOpen=ref(false);const downloadMenuOpen=ref(false);const moreMenuOpen=ref(false);const emojiPickerOpen=ref(false);const emojiTab=ref<'emoji'|'qq'>('emoji');const characterOverviewOpen=ref(false);const charactersExpanded=ref(false);const imageViewerOpen=ref(false);const imageViewerSrc=ref('');const imageViewerAlt=ref('');const selected=reactive(new Set<string>());const selectedCharacterId=ref(document.value.characters.find(c=>!c.isNarrator)?.id||'character-narrator');const editingId=ref('');const editText=ref('');const editCharacterId=ref('');const editingBubbleWidth=ref(0);const mobileEditing=ref(false);const actionMenuId=ref('');const actionMenuOffset=ref(0);const draft=ref('');const composerReplyId=ref('');const insertDraft=ref('');const insertTarget=ref('');const insertDirection=ref<'above'|'below'>('below');const insertBatch=ref(false);const desktopInsert=ref(false);const mobileInsert=ref(false);const editingCharacter=ref<StoryCharacter|null>(null);const characterForm=reactive({name:'',imUserId:'',placement:'left' as StoryPlacement,paletteId:'neutral',bubblePaletteId:'',avatarUrl:'',localAssetId:'',avatarFileName:''});let sortable:Sortable|null=null;let iosEnterTimer=0;let iosEnterHeld=false;
+const communityNotice=computed(()=>props.communityNotice?.trim()||"");
 const characterStateLabels:Record<StoryCharacterState,string>={normal:"",gray:"灰化",injured:"受伤",frozen:"冻结",cursed:"诅咒",out:"OUT",dead:"阵亡",wasted:"WASTED"};
 const characterStateByMessage=computed(()=>{const result=new Map<string,{state:StoryCharacterState;label?:string}>(),active=new Map<string,{state:StoryCharacterState;label?:string}>(),events=new Map<string,typeof document.value.characterStateEvents>();for(const event of document.value.characterStateEvents){const list=events.get(event.afterMessageId)||[];list.push(event);events.set(event.afterMessageId,list)}for(const message of document.value.messages){const state=active.get(message.characterId);if(state&&state.state!=="normal")result.set(message.id,state);for(const event of events.get(message.id)||[])active.set(event.characterId,{state:event.state,label:event.label})}return result});
 function characterStateClass(messageId:string){const state=characterStateByMessage.value.get(messageId)?.state;return state?`story-message--character-${state}`:""}function characterStateDisplay(messageId:string){const state=characterStateByMessage.value.get(messageId);return state?(state.label||characterStateLabels[state.state]):""}
@@ -433,4 +435,5 @@ watch(moveMode,()=>{if(!sortable&&moveMode.value)nextTick(initSortable);else if(
 .characters>button{width:70px;max-width:70px;flex:0 0 70px}.characters>button small{width:100%;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.characters>button.character-add{width:76px;max-width:76px;flex-basis:76px}
 @media(max-width:650px){.characters>button{width:64px;max-width:64px;flex-basis:64px}.characters>button.character-add{width:68px;max-width:68px;flex-basis:68px}}
 .story-message--source-target{cursor:text}.story-message--source-target:hover .bubble{box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--focus-color) 60%,transparent)}
+.story-community-watermark{box-sizing:border-box;overflow:hidden;padding:.26rem .75rem;background:var(--soft-surface);color:var(--muted-text);font-size:.66rem;line-height:1.25;text-align:center;text-overflow:ellipsis;white-space:nowrap}
 </style>

@@ -14,6 +14,7 @@ type EditorShellConfig = {
 	showSiteTitle: boolean;
 	logoUrl: string;
 	faviconUrl: string;
+	communityNotice: string;
 };
 
 const isDark = useThemeDark();
@@ -27,9 +28,10 @@ const config = ref<EditorShellConfig>({
 	defaultMode: "story",
 	storyModeEnabled: true,
 	siteTitle: "Lorana Tales",
-	showSiteTitle: true,
+	showSiteTitle: false,
 	logoUrl: "",
 	faviconUrl: "",
+	communityNotice: "GitHub: https://github.com/Scardice/Lorana-Tales · QQ群：1080498667",
 });
 const requestedMode = computed<EditorMode>(() => {
 	if (!config.value.storyModeEnabled) return "legacy";
@@ -153,8 +155,8 @@ onBeforeUnmount(() => {
 							</div>
 						</nav>
 
-						<StoryPage v-if="requestedMode === 'story'" />
-						<Main v-else legacy-only />
+						<StoryPage v-if="requestedMode === 'story'" :community-notice="config.communityNotice" />
+						<Main v-else legacy-only :community-notice="config.communityNotice" />
 						<Teleport to="body"><Transition name="mode-warning"><div v-if="legacyWarningOpen" class="mode-warning" @click.self="closeLegacyWarning"><section role="alertdialog" aria-modal="true" aria-labelledby="legacy-warning-title"><header><div><strong id="legacy-warning-title">经典模式无法读取新版编辑</strong><small>当前故事包含 Lorana Tales 新版内容</small></div><button class="mode-warning__close" type="button" aria-label="关闭" @click="closeLegacyWarning"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15" /></svg></button></header><p>建议先从下载菜单导出“传统日志 TXT”，再到经典染色器中导入。</p><div v-if="legacyDiscardStep" class="mode-warning__danger"><strong>再次确认丢弃？</strong><span>只会删除当前日志在这个浏览器里的新版草稿；服务端原日志、已下载文件和其他工程不受影响。未导出的新版编辑无法恢复。</span></div><footer><button type="button" @click="closeLegacyWarning">返回编辑</button><button class="danger" type="button" :disabled="legacyDiscarding" @click="discardAndSwitchToLegacy">{{ legacyDiscarding ? "正在清除…" : legacyDiscardStep ? "确认丢弃并进入经典" : "丢弃新版修改" }}</button></footer></section></div></Transition></Teleport>
 					</div>
 				</n-notification-provider>

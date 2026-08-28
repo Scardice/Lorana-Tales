@@ -44,6 +44,7 @@ type SecurityBlockRecord = {
 type BrandingAsset = {
 	filePath: string;
 	contentType: string;
+	version: string;
 };
 
 const BRANDING_CONTENT_TYPES = new Map([
@@ -64,8 +65,10 @@ function resolveBrandingAsset(
 		console.warn(`[branding] Ignoring ${label}: unsupported file type ${extension || "(none)"}`);
 		return null;
 	}
+	let stat: fs.Stats;
 	try {
-		if (!fs.statSync(filePath).isFile()) throw new Error("not a file");
+		stat = fs.statSync(filePath);
+		if (!stat.isFile()) throw new Error("not a file");
 	} catch {
 		console.warn(`[branding] Ignoring ${label}: configured file is unavailable`);
 		return null;
@@ -73,6 +76,7 @@ function resolveBrandingAsset(
 	return {
 		filePath,
 		contentType: BRANDING_CONTENT_TYPES.get(extension) || "application/octet-stream",
+		version: `${Math.trunc(stat.mtimeMs).toString(36)}-${stat.size.toString(36)}`,
 	};
 }
 
@@ -350,7 +354,7 @@ export async function startServer(
 		const publicBase = String(config.app.frontend_url || "").replace(/\/$/, "");
 		accountService = new AccountService(new AccountStore(store.db), config.accounts, trustProxy, store, {
 			siteTitle: String(config.branding.site_title || "Lorana Tales"),
-			logoUrl: config.branding.logo_path && publicBase ? `${publicBase}/branding/logo` : "",
+			logoUrl: brandingLogo && publicBase ? `${publicBase}/branding/logo?v=${brandingLogo.version}` : "",
 		});
 		await accountService.ensureInitialAdmin();
 	}
@@ -474,7 +478,7 @@ export async function startServer(
 			res.status(404).type("text/plain").send("Not Found");
 			return;
 		}
-		res.setHeader("Cache-Control", "public, max-age=3600");
+		res.setHeader("Cache-Control", "public, max-age=0, must-revalidate");
 		res.setHeader("X-Content-Type-Options", "nosniff");
 		if (asset.contentType === "image/svg+xml") {
 			res.setHeader("Content-Security-Policy", "sandbox; default-src 'none'; style-src 'unsafe-inline'");
@@ -494,8 +498,9 @@ export async function startServer(
 			storyModeEnabled: config.editor?.enable_story_mode !== false,
 			siteTitle: String(config.branding?.site_title || "Lorana Tales").trim() || "Lorana Tales",
 			showSiteTitle: config.branding?.show_site_title !== false,
-			logoUrl: brandingLogo ? "/branding/logo" : "",
-			faviconUrl: brandingFavicon ? "/favicon.ico" : "",
+			logoUrl: brandingLogo ? `/branding/logo?v=${brandingLogo.version}` : "",
+			faviconUrl: brandingFavicon ? `/favicon.ico?v=${brandingFavicon.version}` : "",
+			communityNotice: String(config.branding?.community_notice || "").trim(),
 		}));
 	});
 

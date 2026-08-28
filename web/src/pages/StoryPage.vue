@@ -7,9 +7,9 @@
 		  <header><div><strong>原始语法</strong><small :class="{ error: rawError }">{{ rawError || (rawPending ? '等待补全当前标签…' : '已实时同步到图形预览') }}</small></div><nav><button @click="downloadRaw">下载语法</button><button class="primary" @click="closeRawEditor">{{ rawContext === 'player' ? '返回演出编辑' : '返回图形编辑' }}</button></nav></header>
 		  <StoryScriptEditor v-model="rawText" :error="rawError" :focus-request="rawFocusRequest" />
 		</section></Transition>
-		<div class="story-visual"><StoryEditor :archive="archive" :asset-url="assetUrl" :raw-active="rawOpen && rawContext === 'editor'" @change="onChange" @download="download" @legacy-text="downloadLegacyText" @html="downloadPerformanceHtml" @word="downloadWord" @long-image="openLongImageExport" @preview="playerVisible=true" @raw="toggleRawEditor" @source-message="focusRawMessage" @import="fileInput?.click()" @clear="clearDraft" @sync="syncStorySource" /></div>
+		<div class="story-visual"><StoryEditor :archive="archive" :asset-url="assetUrl" :raw-active="rawOpen && rawContext === 'editor'" :community-notice="communityNotice" @change="onChange" @download="download" @legacy-text="downloadLegacyText" @html="downloadPerformanceHtml" @word="downloadWord" @long-image="openLongImageExport" @preview="playerVisible=true" @raw="toggleRawEditor" @source-message="focusRawMessage" @import="fileInput?.click()" @clear="clearDraft" @sync="syncStorySource" /></div>
 	  </div>
-	  <StoryPlayer :show="playerVisible" :archive="archive" :asset-url="assetUrl" :image-export-request="imageExportRequest" :source-active="rawOpen && rawContext === 'player'" @change="onChange" @raw="openRawFromPlayer" @source-message="focusRawMessage" @close="closePlayer" @download="download" @legacy-text="downloadLegacyText" @html="downloadPerformanceHtml" @word="downloadWord" />
+	  <StoryPlayer :show="playerVisible" :archive="archive" :asset-url="assetUrl" :image-export-request="imageExportRequest" :source-active="rawOpen && rawContext === 'player'" :community-notice="communityNotice" @change="onChange" @raw="openRawFromPlayer" @source-message="focusRawMessage" @close="closePlayer" @download="download" @legacy-text="downloadLegacyText" @html="downloadPerformanceHtml" @word="downloadWord" />
 	</template>
     <section v-else class="story-page__error"><h2>故事加载失败</h2><p>{{ errorText }}</p><button @click="reloadPage">重试</button></section>
     <input ref="fileInput" hidden type="file" accept=".ssp,.story.txt,text/plain" @change="importFile" />
@@ -39,6 +39,8 @@ import { storyAvatarUrl } from "~/story/avatar";
 import { useStore } from "~/store";
 import { applyQQImageRKeyReplacement, shouldApplyQQImageRKeyReplacement } from "~/utils";
 import { exportFileDocx } from "~/utils/exporter";
+
+const { communityNotice = "" } = defineProps<{ communityNotice?: string }>();
 
 const store = useStore();
 const archive = ref<StoryArchive>(); const loading = ref(true); const errorText = ref(""); const playerVisible = ref(false); const imageExportRequest = ref(0); const fileInput = ref<HTMLInputElement>();

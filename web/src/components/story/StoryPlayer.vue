@@ -75,6 +75,7 @@
           <span class="player-avatar typing-indicator__avatar"><img v-if="avatar(typingCharacter)" :src="avatar(typingCharacter)" alt="" /><i v-else>{{ typingCharacter.name.slice(0, 1) }}</i></span>
           <span class="typing-indicator__bubble"><b>{{ typingCharacter.name }}</b><span>{{ storyDocument.settings.typingIndicatorText || '正在输入' }}</span><span class="typing-dots" aria-hidden="true"><i></i><i></i><i></i></span></span>
         </article>
+        <div v-if="!started && communityNotice" class="player-community-watermark">{{ communityNotice }}</div>
       </main>
 
       <footer v-if="!started" @click.stop>
@@ -170,11 +171,12 @@ import { createStoryId, playbackDelay, segmentStoryText, storyDisplayText, story
 import { readableRoleColor, storyPalette } from "~/story/palette";
 import type { StoryArchive, StoryAssetRef, StoryCharacter, StoryCharacterState, StoryEffectColor, StoryInteractionEffect, StoryInteractionReaction, StoryMessage, StoryPersistentEffect, StoryScreenEffect, StorySettings, StoryStreamTokenAnimation } from "~/story/types";
 
-const props = defineProps<{ show: boolean; archive: StoryArchive; assetUrl: (id: string) => string; imageExportRequest?: number; sourceActive?: boolean }>();
+const props = defineProps<{ show: boolean; archive: StoryArchive; assetUrl: (id: string) => string; imageExportRequest?: number; sourceActive?: boolean; communityNotice?: string }>();
 const isDark = useThemeDark();
 const themeMode = useThemeMode();
 const emit = defineEmits<{ close: []; raw: []; change: [StoryArchive]; download: []; 'legacy-text': []; html: []; word: []; 'source-message': [string] }>();
 const storyDocument = computed(() => props.archive.document);
+const communityNotice = computed(() => props.communityNotice?.trim() || "");
 const scrollEl = ref<HTMLElement>();
 const playerMain = ref<HTMLElement>();
 const canvasWidthMax=ref(Math.max(240,Math.floor(globalThis.innerWidth||1280)));const canvasWidthMin=computed(()=>Math.min(360,canvasWidthMax.value));const effectiveCanvasWidth=computed(()=>Math.min(storyDocument.value.settings.canvasWidth,canvasWidthMax.value));let canvasResizeObserver:ResizeObserver|null=null;
@@ -370,6 +372,7 @@ function onMessageClick(message: StoryMessage) { if (props.sourceActive) { emit(
 function togglePerformanceEdit() { stopTimers(); started.value = false; paused.value = false; phase.value = "idle"; visibleCount.value = playbackMessages.value.length; performanceEditMode.value = !performanceEditMode.value; performanceToolsOpen.value = performanceEditMode.value; performanceTool.value = "single"; performanceSelection.clear(); rangeStartId.value = ""; titleDraft.value = storyDocument.value.title; displaySettingsOpen.value = false; performanceSettingsOpen.value = false; }
 function syncPerformanceToolsBoundary() { stickyCharacterId.value = ""; nextTick(() => { const player = scrollEl.value; const tools = player?.querySelector<HTMLElement>(":scope > .performance-tools"); if (!player) return; if (tools) player.style.setProperty("--performance-tools-bottom", `${tools.getBoundingClientRect().bottom}px`); else player.style.removeProperty("--performance-tools-bottom"); updateStickyAvatar(); }); }
 watch([performanceEditMode, performanceToolsOpen, performanceTool], syncPerformanceToolsBoundary);
+watch(() => props.sourceActive, () => nextTick(() => { playerVirtualizer.value.measure(); syncPerformanceToolsBoundary(); }));
 function toggleDisplaySettings() { performanceSettingsOpen.value = false; displaySettingsOpen.value = !displaySettingsOpen.value; }
 function togglePerformanceSettings() { displaySettingsOpen.value = false; performanceSettingsOpen.value = !performanceSettingsOpen.value; }
 function tokenSelected(token:{index:number}){return tokenSelection.value.includes(token.index)}
@@ -482,7 +485,7 @@ onBeforeUnmount(() => { stopTimers();canvasResizeObserver?.disconnect();cancelAn
 .effect-brush-dialog>footer{flex:0 0 auto}
 .effect-brush-dialog>footer button,.effect-selection-dialog>footer button{box-sizing:border-box;min-width:68px;min-height:36px;border:1px solid var(--primary-bg)!important;border-radius:9px!important;padding:.45rem .8rem!important;background:var(--primary-bg)!important;color:var(--primary-text)!important;font:inherit;font-weight:650;cursor:pointer}
 .effect-brush-dialog>footer button:hover,.effect-selection-dialog>footer button:hover{background:var(--primary-hover)!important}
-@media(min-width:651px){.player--source-open{left:min(46vw,760px)}.player--source-open>header{grid-template-columns:auto minmax(0,1fr);grid-template-rows:auto auto;align-items:center}.player--source-open>header>.player-title{grid-column:2;grid-row:1}.player--source-open>header>.player-header-actions{grid-column:1/-1;grid-row:2;justify-self:stretch;justify-content:flex-start!important;flex-wrap:wrap;width:100%;overflow:visible}.player--source-open .player-message{cursor:text}.player--source-open .player-message:hover .bubble{box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--focus-color) 60%,transparent)}}
+@media(min-width:651px){.player--source-open{left:min(46vw,760px)}.player--source-open>header{position:relative;grid-template-columns:auto minmax(0,1fr);grid-template-rows:auto auto;align-items:center}.player--source-open>.performance-tools{top:0}.player--source-open>header>.player-title{grid-column:2;grid-row:1}.player--source-open>header>.player-header-actions{grid-column:1/-1;grid-row:2;justify-self:stretch;justify-content:flex-start!important;flex-wrap:wrap;width:100%;overflow:visible}.player--source-open .player-message{cursor:text}.player--source-open .player-message:hover .bubble{box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--focus-color) 60%,transparent)}}
 
 /* Setting groups are already cards; keep their headings visually inside the card. */
 .settings-panel .performance-setting-group>header{min-height:0;padding:0;border:0;border-radius:0;background:transparent!important;box-shadow:none}
@@ -494,4 +497,5 @@ onBeforeUnmount(() => { stopTimers();canvasResizeObserver?.disconnect();cancelAn
 /* A base effect performs once; --screen-effect-repeat controls repetition. */
 @keyframes screen-glitch{0%,100%{opacity:0;transform:none}28%{opacity:0;transform:translateX(-5px)}36%{opacity:.68;transform:translateX(-5px)}58%{opacity:.3;transform:translateX(5px)}68%{opacity:0;transform:none}}
 @keyframes screen-double-pulse{0%,100%{opacity:0;transform:scale(1.08)}22%{opacity:.76;transform:scale(.97)}55%{opacity:.18;transform:scale(1.025)}}
+.player-community-watermark{box-sizing:border-box;width:min(var(--canvas-width),calc(100% - 2rem));margin:1.5rem auto 0;overflow:hidden;padding:.3rem .7rem;color:var(--muted-text);font-size:.68rem;line-height:1.3;text-align:center;text-overflow:ellipsis;white-space:nowrap;opacity:.72;pointer-events:none}
 </style>

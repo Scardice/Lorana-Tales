@@ -40,12 +40,14 @@ enable_story_mode = true
 [branding]
 # 顶栏最右侧显示的网站标题。
 site_title = "Lorana Tales"
-# 是否在顶栏 Logo 旁显示网站标题文本；关闭后浏览器标签标题仍保留。
-show_site_title = true
+# 默认只显示组合品牌图；开启后会在 Logo 旁额外显示网站标题。
+show_site_title = false
 # 顶栏 Logo 的本地 PNG 或 SVG 路径；相对路径以项目目录为基准，留空使用内置图标。
-logo_path = ""
+logo_path = "./web/public/lorana-tales-brand.png"
 # 浏览器图标的本地 ICO、PNG 或 SVG 路径；相对路径以项目目录为基准，留空使用前端默认图标。
-favicon_path = ""
+favicon_path = "./web/public/favicon.ico"
+# 经典提示与沉浸画布水印共用；留空可完全隐藏。
+community_notice = "GitHub: https://github.com/Scardice/Lorana-Tales · QQ群：1080498667"
 
 [avatar_providers]
 # Discord 与 KOOK 用户资料接口都需要 Bot Token；Token 只在服务端使用，绝不会返回给前端。

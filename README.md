@@ -7,7 +7,9 @@
 [![Node](https://img.shields.io/badge/node-%3E=20.19-green)](https://nodejs.org/)
 [![pnpm](https://img.shields.io/badge/pnpm-latest-orange)](https://pnpm.io/)
 
-前后端一体的余烬 TRPG 跑团 Log 着色器部署版本。
+前后端一体的 Lorana Tales TRPG 跑团 Log 着色器。
+
+当前版本：`0.1.0-testify.1`。`Testify` 是项目的快速测试阶段，版本号遵循 SemVer：同一开发里程碑的快速迭代递增末尾序号（如 `0.1.0-testify.2`）；进入新的不兼容开发里程碑时递增次版本并从 `testify.1` 重新开始（如 `0.2.0-testify.1`）；功能冻结后进入 `1.0.0-rc.1`，通过发布验收后发布 `1.0.0`。正式版之后按 `主版本.次版本.修订号` 维护，Nightly Release 继续作为滚动构建，不占用稳定版本号。
 
 - 前端：Vue 3 + Vite，源码在 `web/`
 - 后端：Express + SQLite/WAL，TypeScript 源码按 Linux 服务程序结构放在 `src/`
@@ -143,9 +145,10 @@ enable_story_mode = true # 关闭后隐藏新版入口，/story 自动回落旧�
 
 [branding]
 site_title = "Lorana Tales" # 浏览器标题及上顶栏最右侧的网站名
-show_site_title = true # 是否在顶栏 Logo 旁显示网站名；不影响浏览器标签标题
-logo_path = "" # PNG/SVG 本地路径；相对路径以项目根目录为准，留空使用内置图标
-favicon_path = "" # ICO/PNG/SVG 本地路径；留空沿用前端默认 favicon
+show_site_title = false # 默认只显示组合品牌图；开启后在 Logo 旁额外显示网站名
+logo_path = "./web/public/lorana-tales-brand.png" # PNG/SVG 本地路径；相对路径以项目根目录为准
+favicon_path = "./web/public/favicon.ico" # ICO/PNG/SVG 本地路径
+community_notice = "GitHub: https://github.com/Scardice/Lorana-Tales · QQ群：1080498667" # 经典提示与沉浸画布水印；留空隐藏
 
 [resource_cache]
 enabled = false # 上传时归档 CQ 图片、语音和附件；视频仅保留【视频】占位且不下载
