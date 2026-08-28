@@ -245,6 +245,15 @@ export class AccountService {
 		}
 	}
 
+	private clearSessionCookies(req: Request, res: Response) {
+		// Signing out ends only the current authenticated session. The separate,
+		// long-lived trusted-device cookie must survive so a later password login
+		// from the same browser and network prefix does not require email again.
+		for (const [name, httpOnly] of [[SESSION_COOKIE, true], [CSRF_COOKIE, false]] as const) {
+			res.append("Set-Cookie", this.cookie(req, name, "", 0, httpOnly));
+		}
+	}
+
 	private publicUser(user: AccountUser) {
 		return { ...user, banReason: user.status === "banned" ? user.banReason : "", projectCount: this.store.projectCount(user.id) };
 	}
@@ -460,7 +469,7 @@ export class AccountService {
 
 		app.post("/api/account/logout", (req, res) => {
 			const session = this.requireSession(req, res, true, true); if (!session) return;
-			this.store.revokeSession(session.token); this.clearAuthCookies(req, res); json(res, 200, { authenticated: false });
+			this.store.revokeSession(session.token); this.clearSessionCookies(req, res); json(res, 200, { authenticated: false });
 		});
 
 		app.post("/api/account/password/reset", async (req, res) => {

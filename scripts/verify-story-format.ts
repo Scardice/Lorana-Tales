@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
+import { once } from "node:events";
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import vm from "node:vm";
 import Database from "better-sqlite3";
+import express from "express";
 import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
 
 import { AccountStore } from "../src/accounts/account-store";
+import { AccountService } from "../src/accounts/router";
 import { storyFromLogItems, storyStreamingText } from "../web/src/story/model";
 import { createStoryPackage, readStoryPackage } from "../web/src/story/package";
 import { createPerformanceHtml } from "../web/src/story/standalone-performance";
@@ -123,6 +126,62 @@ const cleanupResult = accountStore.cleanupInactiveProjects((user) => user.retent
 assert.equal(cleanupResult.deletedProjects, 1);
 assert.equal(accountStore.getProject(testUser.id, legacyProject!.id), null);
 assert.ok(accountStore.getProject(testUser.id, binaryProject!.id));
+
+const trustedDeviceAgent = "Lorana-Trusted-Device-Test";
+const trustedDevicePrefix = "127.0.0.0/24";
+const trustedDevice = accountStore.createTrustedDevice(testUser.id, trustedDevicePrefix, trustedDeviceAgent, 90);
+const trustedSession = accountStore.createSession(testUser, {
+	sessionDays: 30,
+	deviceToken: trustedDevice,
+	ipPrefix: trustedDevicePrefix,
+	userAgent: trustedDeviceAgent,
+});
+const accountService = new AccountService(accountStore, {
+	session_days: 30,
+	trusted_device_days: 90,
+	cookie_same_site: "lax",
+	captcha_provider: "image",
+	encryption_key: "test-only-encryption-key-that-is-long-enough",
+});
+const accountApp = express();
+accountApp.use(express.raw({ type: "application/json", limit: "1mb" }));
+accountService.register(accountApp);
+const accountServer = accountApp.listen(0, "127.0.0.1");
+await once(accountServer, "listening");
+try {
+	const address = accountServer.address();
+	assert.ok(address && typeof address === "object");
+	const accountBase = `http://127.0.0.1:${address.port}`;
+	const logoutResponse = await fetch(`${accountBase}/api/account/logout`, {
+		method: "POST",
+		headers: {
+			"content-type": "application/json",
+			"user-agent": trustedDeviceAgent,
+			"x-csrf-token": trustedSession.csrfToken,
+			cookie: `scardice_account_session=${trustedSession.token}; scardice_account_device=${trustedDevice}; scardice_account_csrf=${trustedSession.csrfToken}`,
+		},
+		body: "{}",
+	});
+	assert.equal(logoutResponse.status, 200);
+	const logoutCookies = logoutResponse.headers.getSetCookie();
+	assert.ok(logoutCookies.some((value) => value.startsWith("scardice_account_session=")));
+	assert.ok(logoutCookies.some((value) => value.startsWith("scardice_account_csrf=")));
+	assert.ok(!logoutCookies.some((value) => value.startsWith("scardice_account_device=")), "登出不应忘记受信任设备");
+
+	const reloginResponse = await fetch(`${accountBase}/api/account/login`, {
+		method: "POST",
+		headers: {
+			"content-type": "application/json",
+			"user-agent": trustedDeviceAgent,
+			cookie: `scardice_account_device=${trustedDevice}`,
+		},
+		body: JSON.stringify({ email: testUser.email, password: "not-a-real-password" }),
+	});
+	assert.equal(reloginResponse.status, 200, "同一浏览器和网段再次登录不应要求邮件验证码");
+} finally {
+	accountServer.close();
+	await once(accountServer, "close");
+}
 database.close();
 
 const withUnknownFile = { ...entries, "unlisted.bin": new Uint8Array([1]) };
