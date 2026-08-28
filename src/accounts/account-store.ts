@@ -76,6 +76,7 @@ export interface EditorProjectSummary {
 	sourceRevision: string;
 	createdAt: string;
 	updatedAt: string;
+	lastActivityAt: string;
 	storedBytes: number;
 }
 
@@ -670,13 +671,18 @@ export class AccountStore {
 	}
 
 	listProjects(userId: string): EditorProjectSummary[] {
-		return (this.db.prepare(`SELECT id, title, revision, source_key, source_revision, created_at, updated_at, length(document_blob) AS stored_bytes
+		return (this.db.prepare(`SELECT id, title, revision, source_key, source_revision, created_at, updated_at, last_activity_at, length(document_blob) AS stored_bytes
 			FROM editor_projects WHERE user_id = ? AND archived = 0 ORDER BY updated_at DESC`).all(userId) as SqlRow[])
 			.map((row) => ({
 				id: String(row.id), title: String(row.title), revision: Number(row.revision),
 				sourceKey: String(row.source_key || ""), sourceRevision: String(row.source_revision || ""),
-				createdAt: String(row.created_at), updatedAt: String(row.updated_at), storedBytes: Number(row.stored_bytes || 0),
+				createdAt: String(row.created_at), updatedAt: String(row.updated_at), lastActivityAt: String(row.last_activity_at || row.updated_at), storedBytes: Number(row.stored_bytes || 0),
 			}));
+	}
+
+	getProjectShareInfo(userId: string, id: string) {
+		const row = this.db.prepare("SELECT id, last_activity_at, updated_at FROM editor_projects WHERE id = ? AND user_id = ? AND archived = 0").get(id, userId) as SqlRow | undefined;
+		return row ? { id: String(row.id), lastActivityAt: String(row.last_activity_at || row.updated_at) } : null;
 	}
 
 	listAllProjects(page = 1, pageSize = 50) {
@@ -740,7 +746,7 @@ export class AccountStore {
 		return this.db.prepare("DELETE FROM editor_projects WHERE id = ? AND user_id = ?").run(id, userId).changes === 1;
 	}
 
-	shareProject(userId: string, id: string, expiryMode: "project" | "fixed" | "never" = "project", expiresAt = "") {
+	shareProject(userId: string, id: string, expiryMode: "project" | "fixed" = "project", expiresAt = "") {
 		const project = this.db.prepare("SELECT id FROM editor_projects WHERE id = ? AND user_id = ? AND archived = 0").get(id, userId) as SqlRow | undefined;
 		if (!project) return null;
 		const existing = this.db.prepare("SELECT token FROM editor_project_shares WHERE project_id = ?").get(id) as SqlRow | undefined;
@@ -771,7 +777,7 @@ export class AccountStore {
 			id: String(row.project_id), title: String(row.title), revision: Number(row.revision),
 			document: decompressDocument(row.document_blob as Buffer), createdAt: String(row.project_created_at), updatedAt: String(row.project_updated_at),
 			lastActivityAt: String(row.last_activity_at || row.project_updated_at),
-			shareExpiryMode: ["project", "fixed", "never"].includes(String(row.share_expiry_mode)) ? String(row.share_expiry_mode) : "project",
+			shareExpiryMode: String(row.share_expiry_mode || ""),
 			shareExpiresAt: String(row.share_expires_at || ""), owner: rowToUser(row),
 		};
 	}

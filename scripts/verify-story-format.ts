@@ -183,7 +183,29 @@ try {
 	const share = await shareResponse.json() as { token: string };
 	const publicShareResponse = await fetch(`${accountBase}/api/shared-projects/${share.token}`);
 	assert.equal(publicShareResponse.status, 200, "有效分享链接应直接返回播放器工程");
-	database.prepare("UPDATE editor_project_shares SET expires_at = ? WHERE project_id = ?").run("2020-01-01T00:00:00.000Z", binaryProject!.id);
+	const permanentShareResponse = await fetch(`${accountBase}/api/account/projects/${binaryProject!.id}/share`, {
+		method: "POST",
+		headers: { "content-type": "application/json", "user-agent": trustedDeviceAgent, "x-csrf-token": trustedSession.csrfToken, cookie: authCookie },
+		body: JSON.stringify({ expiryMode: "never" }),
+	});
+	assert.equal(permanentShareResponse.status, 400, "服务端必须拒绝永久分享模式");
+	const overlongShareResponse = await fetch(`${accountBase}/api/account/projects/${binaryProject!.id}/share`, {
+		method: "POST",
+		headers: { "content-type": "application/json", "user-agent": trustedDeviceAgent, "x-csrf-token": trustedSession.csrfToken, cookie: authCookie },
+		body: JSON.stringify({ expiryMode: "fixed", durationDays: 30 }),
+	});
+	assert.equal(overlongShareResponse.status, 400, "固定分享期限不得超过工程到期时间");
+	database.prepare("UPDATE editor_project_shares SET expiry_mode = ?, expires_at = ? WHERE project_id = ?").run("never", "2099-01-01T00:00:00.000Z", binaryProject!.id);
+	const legacyPermanentShareResponse = await fetch(`${accountBase}/api/shared-projects/${share.token}`);
+	assert.equal(legacyPermanentShareResponse.status, 410, "历史永久分享记录不得继续公开访问");
+	accountStore.updateUser(testUser.id, { retentionDaysOverride: 0 });
+	const permanentProjectFollowResponse = await fetch(`${accountBase}/api/account/projects/${binaryProject!.id}/share`, {
+		method: "POST",
+		headers: { "content-type": "application/json", "user-agent": trustedDeviceAgent, "x-csrf-token": trustedSession.csrfToken, cookie: authCookie },
+		body: JSON.stringify({ expiryMode: "project" }),
+	});
+	assert.equal(permanentProjectFollowResponse.status, 400, "永久保留工程不得创建无期限的跟随分享");
+	database.prepare("UPDATE editor_project_shares SET expiry_mode = ?, expires_at = ? WHERE project_id = ?").run("fixed", "2020-01-01T00:00:00.000Z", binaryProject!.id);
 	const expiredShareResponse = await fetch(`${accountBase}/api/shared-projects/${share.token}`);
 	assert.equal(expiredShareResponse.status, 410, "过期分享链接应明确返回 410");
 

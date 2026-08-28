@@ -307,17 +307,17 @@ export class AccountService {
 
 	private sharedProjectIsActive(project: Record<string, unknown>) {
 		const mode = String(project.shareExpiryMode || "project");
-		if (mode === "never") return true;
-		if (mode === "fixed") {
-			const expires = Date.parse(String(project.shareExpiresAt || ""));
-			return Number.isFinite(expires) && expires > Date.now();
-		}
 		const owner = project.owner as AccountUser | undefined;
 		if (!owner) return false;
 		const days = this.storagePolicy(owner).retentionDays;
-		if (days === 0) return true;
 		const lastActivity = Date.parse(String(project.lastActivityAt || project.updatedAt || ""));
-		return Number.isFinite(lastActivity) && lastActivity + days * 86400000 > Date.now();
+		if (!Number.isFinite(lastActivity)) return false;
+		const projectExpires = days > 0 ? lastActivity + days * 86400000 : Number.POSITIVE_INFINITY;
+		if (projectExpires <= Date.now()) return false;
+		if (mode === "project") return days > 0;
+		if (mode !== "fixed") return false;
+		const shareExpires = Date.parse(String(project.shareExpiresAt || ""));
+		return Number.isFinite(shareExpires) && shareExpires > Date.now();
 	}
 
 	cleanupInactiveProjects() {
@@ -595,12 +595,24 @@ export class AccountService {
 			const session = this.requireSession(req, res, true); if (!session) return;
 			const body = readJson(req);
 			const requestedMode = String(body.expiryMode || "project");
-			const expiryMode: "project" | "fixed" | "never" = requestedMode === "fixed" ? "fixed" : requestedMode === "never" ? "never" : "project";
+			if (requestedMode !== "project" && requestedMode !== "fixed") { json(res, 400, { error: "share_expiry_invalid" }); return; }
+			const expiryMode: "project" | "fixed" = requestedMode;
+			const project = this.store.getProjectShareInfo(session.user.id, req.params.id);
+			if (!project) { json(res, 404, { error: "project_not_found" }); return; }
+			const retentionDays = this.storagePolicy(session.user).retentionDays;
+			const lastActivity = Date.parse(project.lastActivityAt);
+			if (!Number.isFinite(lastActivity)) { json(res, 400, { error: "share_expiry_invalid" }); return; }
+			const projectExpires = retentionDays > 0 ? lastActivity + retentionDays * 86400000 : Number.POSITIVE_INFINITY;
+			if (projectExpires <= Date.now()) { json(res, 410, { error: "project_expired" }); return; }
 			let expiresAt = "";
-			if (expiryMode === "fixed") {
+			if (expiryMode === "project") {
+				if (retentionDays === 0) { json(res, 400, { error: "share_expiry_required" }); return; }
+			} else {
 				const durationDays = Math.floor(Number(body.durationDays));
 				if (![1, 3, 7, 14, 30, 90, 180, 365].includes(durationDays)) { json(res, 400, { error: "share_expiry_invalid" }); return; }
-				expiresAt = new Date(Date.now() + durationDays * 86400000).toISOString();
+				const requestedExpiry = Date.now() + durationDays * 86400000;
+				if (requestedExpiry > projectExpires) { json(res, 400, { error: "share_expiry_exceeds_project", projectExpiresAt: new Date(projectExpires).toISOString() }); return; }
+				expiresAt = new Date(requestedExpiry).toISOString();
 			}
 			const share = this.store.shareProject(session.user.id, req.params.id, expiryMode, expiresAt);
 			json(res, share ? 200 : 404, share || { error: "project_not_found" });
