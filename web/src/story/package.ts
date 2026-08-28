@@ -8,6 +8,7 @@ import type { StoryArchive, StoryAssetRef } from "./types";
 const PACKAGE_VERSION = 2;
 const STORY_PATH = "story.lorana";
 const MANIFEST_PATH = "manifest.lorana";
+const PACKAGE_MTIME = new Date("2020-01-01T00:00:00.000Z");
 
 export interface StoryPackageLimits {
   maxFiles: number;
@@ -40,7 +41,7 @@ const unquote = (value="") => value.replace(/\\(n|"|\\)/g, (_match, escaped) => 
 function attributes(line:string){const result=new Map<string,string>();for(const match of line.matchAll(/([\w-]+)="((?:\\.|[^"\\])*)"/g))result.set(match[1],unquote(match[2]));return result}
 function mimeExtension(mime:string){const known:Record<string,string>={"image/jpeg":"jpg","image/png":"png","image/webp":"webp","image/gif":"gif","image/avif":"avif","image/svg+xml":"svg","audio/ogg":"ogg","audio/opus":"opus","audio/mpeg":"mp3","audio/mp4":"m4a","audio/webm":"webm","audio/wav":"wav","audio/flac":"flac","audio/aac":"aac"};return known[mime.toLowerCase().split(";")[0]]||"bin"}
 async function sha256(bytes:Uint8Array){return bytesToHex(nobleSha256(bytes))}
-function zipAsync(files:Record<string,Uint8Array>){return new Promise<Uint8Array>((resolve,reject)=>zip(files,{level:9},(error,data)=>error?reject(error):resolve(data)))}
+function zipAsync(files:Record<string,Uint8Array>){return new Promise<Uint8Array>((resolve,reject)=>zip(files,{level:9,mtime:PACKAGE_MTIME},(error,data)=>error?reject(error):resolve(data)))}
 function unzipAsync(bytes:Uint8Array,limits:StoryPackageLimits){let files=0,total=0;return new Promise<Record<string,Uint8Array>>((resolve,reject)=>unzip(bytes,{filter(file){if(!safeArchivePath(file.name))throw new Error("压缩包包含不安全路径");files+=1;total+=Number(file.originalSize||0);if(files>limits.maxFiles)throw new Error("压缩包文件数量过多");if(total>limits.maxUncompressedBytes)throw new Error("压缩包声明的解压大小过大");if(file.name.startsWith("assets/")&&Number(file.originalSize||0)>limits.maxAssetBytes)throw new Error("压缩包包含过大的单个资源");return true}},(error,data)=>error?reject(error):resolve(data)))}
 function assetReferences(archive:StoryArchive){const refs=new Map<string,StoryAssetRef>();for(const character of archive.document.characters)if(character.avatar)refs.set(character.avatar.id,character.avatar);for(const message of archive.document.messages)if(message.kind!=="text")refs.set(message.asset.id,message.asset);return refs}
 function serializeManifest(assets:ManifestAsset[]){const lines=["<!-- Lorana Tales Package Manifest 2 -->",`<package version="${PACKAGE_VERSION}" story="${STORY_PATH}">`,""];for(const asset of assets){const fields=[`id="${quote(asset.id)}"`,`path="${asset.path}"`,`hash="sha256:${asset.hash}"`,`size="${asset.size}"`,`mime="${quote(asset.mime)}"`];if(asset.name)fields.push(`name="${quote(asset.name)}"`);if(asset.width!=null)fields.push(`width="${asset.width}"`);if(asset.height!=null)fields.push(`height="${asset.height}"`);lines.push(`<asset ${fields.join(" ")}>`)}return`${lines.join("\n").trimEnd()}\n`}
