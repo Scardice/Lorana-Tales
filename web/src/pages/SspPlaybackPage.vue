@@ -20,7 +20,7 @@
       <footer><a href="/story">返回编辑器</a><button type="button" @click="openTutorials">浏览内置教程</button></footer>
     </section>
   </main>
-  <StoryPlayer v-if="archive" :show="playerOpen" :archive="archive" :asset-url="assetUrl" playback-only @change="archive=$event" @close="closePlayer" />
+  <StoryPlayer v-if="archive" :show="playerOpen" :archive="archive" :asset-url="assetUrl" playback-only :auto-start="sharedPlayback" @change="archive=$event" @close="closePlayer" />
 </template>
 
 <script setup lang="ts">
@@ -29,7 +29,7 @@ import StoryPlayer from "~/components/story/StoryPlayer.vue";
 import { readStoryPackage } from "~/story/package";
 import type { StoryArchive, StoryAssetRef } from "~/story/types";
 
-const archive=ref<StoryArchive>();const playerOpen=ref(false);const loading=ref(false);const error=ref("");
+const archive=ref<StoryArchive>();const playerOpen=ref(false);const loading=ref(false);const error=ref("");const sharedPlayback=ref(false);
 const objectUrls=new Map<string,string>();
 
 function clearObjectUrls(){for(const url of objectUrls.values())URL.revokeObjectURL(url);objectUrls.clear()}
@@ -40,7 +40,8 @@ function onDrop(event:DragEvent){const file=event.dataTransfer?.files?.[0];if(fi
 function closePlayer(){playerOpen.value=false;archive.value=undefined;clearObjectUrls()}
 function openTutorials(){window.dispatchEvent(new Event("lorana-open-tutorials"))}
 async function openSourceFromQuery(){const source=new URLSearchParams(location.search).get("src")?.trim();if(!source)return;try{const url=new URL(source,location.href);if(!["http:","https:"].includes(url.protocol))throw new Error("只允许 HTTP 或 HTTPS 的 SSP 地址");loading.value=true;const response=await fetch(url,{cache:"no-store",credentials:url.origin===location.origin?"same-origin":"omit"});if(!response.ok)throw new Error(`SSP 请求失败（${response.status}）`);await openBlob(await response.blob())}catch(exception){error.value=exception instanceof Error?exception.message:"无法载入分享内容";loading.value=false}}
-onMounted(()=>void openSourceFromQuery());
+async function openSharedProject(){const token=new URLSearchParams(location.search).get("share")?.trim();if(!token)return false;try{loading.value=true;const response=await fetch(`/api/shared-projects/${encodeURIComponent(token)}`,{cache:"no-store"});if(!response.ok)throw new Error(response.status===404?"分享链接无效，或原文档已被删除":"无法载入分享内容");sharedPlayback.value=true;await openBlob(await response.blob());return true}catch(exception){error.value=exception instanceof Error?exception.message:"无法载入分享内容";loading.value=false;return true}}
+onMounted(async()=>{if(!await openSharedProject())void openSourceFromQuery()});
 onBeforeUnmount(clearObjectUrls);
 </script>
 

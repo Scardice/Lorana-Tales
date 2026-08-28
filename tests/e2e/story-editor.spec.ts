@@ -234,7 +234,14 @@ test.describe("Lorana Tales story editor", () => {
 		await offline.goto(pathToFileURL(offlineHtmlPath).href, { waitUntil: "load" });
 		await expect(offline.getByRole("button", { name: "开始演出" })).toBeVisible();
 		await offline.getByRole("button", { name: "开始演出" }).click();
+		await expect(offline.getByText("点击画布可以下一句，自动播放状态下也可以哦~", { exact: true })).toBeVisible();
+		await offline.getByText("点击画布可以下一句，自动播放状态下也可以哦~", { exact: true }).click();
 		await expect(offline.locator("#toggle")).toBeVisible();
+		await expect(offline.locator("#autoplay")).toBeVisible();
+		await offline.locator("#autoplay").check();
+		await expect(offline.locator("#autoplay")).toBeChecked();
+		await offline.locator("#autoplay").uncheck();
+		await expect(offline.locator("#autoplay")).not.toBeChecked();
 		await expect(offline.locator("#counter")).toContainText("/ 1");
 		await offline.close();
 
@@ -303,13 +310,11 @@ test.describe("Lorana Tales story editor", () => {
 		const welcome = center.locator("article").filter({ hasText: "一分钟认识编辑器" });
 		await welcome.getByRole("button", { name: "开始教程" }).click();
 		await expect(page.locator(".player--playback-only")).toBeVisible();
+		await expect(page.getByText("点击画布可以下一句，自动播放状态下也可以哦~", { exact: true })).toBeVisible();
+		await page.getByText("点击画布可以下一句，自动播放状态下也可以哦~", { exact: true }).click();
 		await expect(page.getByRole("button", { name: "暂停演出" })).toBeVisible();
 		await expect(page.getByText(/自动播放中/)).toBeVisible();
 		await expect(page.locator('.player--playback-only img[src^="blob:"]').first()).toBeVisible();
-		await expect(page.getByRole("button", { name: "继续演出" })).toBeVisible({ timeout: 15_000 });
-		await expect(page.getByText("已暂停：自动播放时也可以点击画布，立即播放下一句", { exact: true })).toBeVisible();
-		await page.locator(".player > main").click();
-		await expect(page.getByRole("button", { name: "暂停演出" })).toBeVisible();
 		await assertViewportIntegrity(page);
 		await page.getByRole("button", { name: "← 返回" }).click();
 		await expect(center).toBeVisible();

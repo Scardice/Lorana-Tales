@@ -439,5 +439,5 @@ watch(moveMode,()=>{if(!sortable&&moveMode.value)nextTick(initSortable);else if(
 .story-message--source-target{cursor:text}.story-message--source-target:hover .bubble{box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--focus-color) 60%,transparent)}
 .resource-placeholder{color:var(--bubble-text,currentColor);font-weight:600;opacity:.72}.story-community-watermark{box-sizing:border-box;display:flex;justify-content:center;gap:.3rem .75rem;overflow:hidden;padding:.26rem .75rem;background:var(--soft-surface);color:var(--muted-text);font-size:.66rem;line-height:1.25;text-align:center;flex-wrap:wrap}.story-community-watermark span:last-child{font-variant-numeric:tabular-nums;opacity:.72}
 .download-menu nav{width:190px}
-.settings-header-actions{display:flex!important;align-items:center;gap:.4rem}.settings-header-actions>button:first-child{min-width:58px;color:var(--focus-color)}.settings-header-actions>button:last-child{display:grid;width:34px;height:34px;padding:0;place-items:center}
+.settings-header-actions{display:flex!important;align-items:center;gap:.4rem}.settings-header-actions>button{height:34px!important}.settings-header-actions>button:first-child{min-width:0;padding:0 .65rem!important;color:var(--focus-color)}.settings-header-actions>button:last-child{display:grid;width:34px;padding:0;place-items:center}
 </style>

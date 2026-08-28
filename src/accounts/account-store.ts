@@ -219,6 +219,14 @@ export class AccountStore {
 				FOREIGN KEY(user_id) REFERENCES account_users(id) ON DELETE SET NULL
 			);
 			CREATE INDEX IF NOT EXISTS idx_editor_projects_user ON editor_projects(user_id, updated_at DESC);
+			CREATE TABLE IF NOT EXISTS editor_project_shares (
+				token TEXT PRIMARY KEY,
+				project_id TEXT NOT NULL UNIQUE,
+				created_by TEXT NOT NULL,
+				created_at TEXT NOT NULL,
+				FOREIGN KEY(project_id) REFERENCES editor_projects(id) ON DELETE CASCADE,
+				FOREIGN KEY(created_by) REFERENCES account_users(id) ON DELETE CASCADE
+			);
 
 			CREATE TABLE IF NOT EXISTS account_effect_presets (
 				id TEXT PRIMARY KEY,
@@ -638,6 +646,27 @@ export class AccountStore {
 
 	deleteProject(userId: string, id: string) {
 		return this.db.prepare("DELETE FROM editor_projects WHERE id = ? AND user_id = ?").run(id, userId).changes === 1;
+	}
+
+	shareProject(userId: string, id: string) {
+		const project = this.db.prepare("SELECT id FROM editor_projects WHERE id = ? AND user_id = ? AND archived = 0").get(id, userId) as SqlRow | undefined;
+		if (!project) return null;
+		const existing = this.db.prepare("SELECT token FROM editor_project_shares WHERE project_id = ?").get(id) as SqlRow | undefined;
+		if (existing) return { token: String(existing.token) };
+		const token = randomToken(18);
+		this.db.prepare("INSERT INTO editor_project_shares (token, project_id, created_by, created_at) VALUES (?, ?, ?, ?)").run(token, id, userId, nowIso());
+		return { token };
+	}
+
+	getSharedProject(token: string) {
+		const row = this.db.prepare(`SELECT p.* FROM editor_project_shares s
+			JOIN editor_projects p ON p.id = s.project_id
+			WHERE s.token = ? AND p.archived = 0`).get(token) as SqlRow | undefined;
+		if (!row) return null;
+		return {
+			id: String(row.id), title: String(row.title), revision: Number(row.revision),
+			document: decompressDocument(row.document_blob as Buffer), createdAt: String(row.created_at), updatedAt: String(row.updated_at),
+		};
 	}
 
 	listEffectPresets(userId: string) {

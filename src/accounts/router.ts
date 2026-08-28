@@ -474,6 +474,11 @@ export class AccountService {
 		});
 
 		app.get("/api/account/projects", (req, res) => { const session = this.requireSession(req, res); if (session) json(res, 200, this.store.listProjects(session.user.id)); });
+		app.get("/api/shared-projects/:token", (req, res) => {
+			const token = String(req.params.token || "");
+			if (!/^[A-Za-z0-9_-]{20,40}$/.test(token)) { json(res, 404, { error: "share_not_found" }); return; }
+			sendProject(res, this.store.getSharedProject(token) as unknown as Record<string, unknown> | null);
+		});
 		app.get("/api/account/effect-presets", (req, res) => { const session = this.requireSession(req, res); if (session) json(res, 200, { items: this.store.listEffectPresets(session.user.id), folders: this.store.listEffectFolders(session.user.id), limit: Number(this.config.max_effect_presets || 100) }); });
 		app.post("/api/account/effect-presets", (req, res) => { const session = this.requireSession(req, res, true); if (!session) return; if(this.store.effectPresetCount(session.user.id)>=Number(this.config.max_effect_presets||100)){json(res,413,{error:"effect_preset_limit"});return;} const body = readJson(req); const preset = sanitizeEffectPreset(body); if (!preset) { json(res, 400, { error: "effect_preset_invalid" }); return; } const folders=new Set(this.store.listEffectFolders(session.user.id).map((item)=>item.id));const folderId=folders.has(preset.folderId)?preset.folderId:"";json(res, 201, this.store.createEffectPreset(session.user.id, preset.name, preset.config,folderId,preset.kind)); });
 		app.put("/api/account/effect-presets/:id", (req, res) => { const session = this.requireSession(req, res, true); if (!session) return; const body = readJson(req); const preset = sanitizeEffectPreset(body); if (!preset) { json(res, 400, { error: "effect_preset_invalid" }); return; } const folders=new Set(this.store.listEffectFolders(session.user.id).map((item)=>item.id));const folderId=folders.has(preset.folderId)?preset.folderId:"";const saved = this.store.updateEffectPreset(session.user.id, req.params.id, preset.name, preset.config,folderId,preset.kind); json(res, saved ? 200 : 404, saved || { error: "effect_preset_not_found" }); });
@@ -496,6 +501,11 @@ export class AccountService {
 			} catch (error) { const code = error instanceof Error ? error.message : ""; json(res, code === "storage_quota_exceeded" || code === "project_limit_reached" ? 413 : 400, { error: code || "project_invalid" }); }
 		});
 		app.get("/api/account/projects/:id", (req, res) => { const session = this.requireSession(req, res); if (!session) return; sendProject(res, this.store.getProject(session.user.id, req.params.id) as unknown as Record<string, unknown> | null); });
+		app.post("/api/account/projects/:id/share", (req, res) => {
+			const session = this.requireSession(req, res, true); if (!session) return;
+			const share = this.store.shareProject(session.user.id, req.params.id);
+			json(res, share ? 200 : 404, share || { error: "project_not_found" });
+		});
 		app.get("/api/account/projects/:id/source", async (req, res) => {
 			const session = this.requireSession(req, res); if (!session) return;
 			const source = this.store.getProjectSource(session.user.id, req.params.id);
