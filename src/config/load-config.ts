@@ -68,10 +68,11 @@ const DEFAULT_CONFIG = {
 		initial_admin_password: "",
 		initial_admin_email: "",
 		default_group: "default",
-		admin_group: "advanced",
+		admin_group: "admin",
 		storage_groups: {
 			default: { quota_mb: 256, max_projects: 100, retention_days: 180 },
 			advanced: { quota_mb: 2048, max_projects: 1000, retention_days: 365 },
+			admin: { quota_mb: 8192, max_projects: 5000, retention_days: 0 },
 		},
 		encryption_key: "",
 		session_days: 30,

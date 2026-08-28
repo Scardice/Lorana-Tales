@@ -357,6 +357,33 @@ test.describe("Lorana Tales story editor", () => {
 		expect(layers.player).toBeGreaterThan(layers.account);
 	});
 
+	test("account workspace survives rapid section switching", async ({ page }) => {
+		const pageErrors: string[] = [];
+		page.on("pageerror", error => pageErrors.push(error.message));
+		await page.addInitScript(() => { document.cookie = "lorana_tutorial_prompt_seen=1; Path=/; Max-Age=315360000; SameSite=Lax"; });
+		await page.route("**/api/account/config", route => route.fulfill({ json: { enabled: true, registrationEnabled: true, captchaProvider: "image", turnstileSiteKey: "", hcaptchaSiteKey: "" } }));
+		await page.route("**/api/account/me", route => route.fulfill({ json: { authenticated: true, user: { id: "qa-admin", username: "qa_admin", nickname: "快速切换验收", email: "qa@example.test", avatarUrl: "", mustChangePassword: false, group: "admin", role: "admin", canAdmin: true }, storage: { group: "admin", usedBytes: 1024, quotaBytes: 8589934592, remainingBytes: 8589933568, projectCount: 1, maxProjects: 5000, retentionDays: 0, retentionSource: "group" } } }));
+		await page.route("**/api/account/projects", route => route.fulfill({ json: [] }));
+		await page.route("**/api/account/effect-presets", route => route.fulfill({ json: { items: [], folders: [], limit: 100 } }));
+		await page.goto("/story?account-switch-qa=1", { waitUntil: "networkidle" });
+		await page.getByRole("button", { name: /快速切换验收/ }).click();
+		const panel = page.getByRole("dialog", { name: "个人中心" });
+		await expect(panel).toBeVisible();
+
+		await page.evaluate(() => {
+			const labels = ["教程", "我的", "文档", "我的", "教程", "文档", "我的"];
+			const buttons = [...document.querySelectorAll<HTMLButtonElement>(".workspace-nav nav button")];
+			for (const label of labels) buttons.find(button => button.textContent?.trim() === label)?.click();
+		});
+		await expect(panel.locator(".account-page")).toBeVisible();
+		for (const label of ["账号安全", "外观", "特效预设", "个人资料", "外观", "个人资料"]) {
+			await panel.getByRole("button", { name: label, exact: true }).click();
+		}
+		await expect(panel.getByText("快速切换验收", { exact: true }).first()).toBeVisible();
+		await expect(panel.getByRole("link", { name: "进入管理员面板" })).toBeVisible();
+		expect(pageErrors).toEqual([]);
+	});
+
 
 	test("first editor visit offers the tutorial once", async ({ page }) => {
 		await page.context().clearCookies();

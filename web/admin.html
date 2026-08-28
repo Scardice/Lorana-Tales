@@ -535,13 +535,35 @@
       .account-admin { margin-top: 34px; padding-top: 24px; border-top: 1px solid var(--line); }
       .account-admin__head { display:flex; align-items:end; justify-content:space-between; gap:12px; margin-bottom:14px; }
       .account-admin__head h2 { margin:0; font-size:24px; }
-      .user-create { display:grid; grid-template-columns:1.3fr 1fr 1fr 120px auto; gap:8px; margin-bottom:12px; }
+      .user-create { display:grid; grid-template-columns:1.3fr 1fr 1fr 110px 120px auto; gap:8px; margin-bottom:12px; }
       .user-create input,.user-create select { min-height:38px; border:1px solid var(--line); border-radius:6px; background:var(--input-bg); color:var(--ink); padding:8px 10px; }
       .user-list { display:grid; gap:8px; }
-      .user-row { display:grid; grid-template-columns:minmax(180px,1fr) 110px 120px minmax(220px,auto); gap:10px; align-items:center; padding:12px; border:1px solid var(--line); background:var(--panel); }
+      .user-row { display:grid; grid-template-columns:minmax(220px,1.4fr) minmax(300px,1fr) auto; gap:14px; align-items:center; padding:16px; border:1px solid var(--line); border-radius:10px; background:var(--panel); }
       .user-row__name { min-width:0; display:grid; }
       .user-row__name strong,.user-row__name small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .user-row__tags { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+      .user-row__policy { display:grid; grid-template-columns:repeat(3,minmax(88px,1fr)); gap:8px; }
+      .user-row__metric { display:grid; gap:3px; min-width:0; padding:9px 10px; border-radius:8px; background:var(--soft); }
+      .user-row__metric small { color:var(--muted); }
+      .user-row__metric strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; }
       .user-row__actions { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:6px; }
+      .modal-backdrop { position:fixed; inset:0; z-index:90; display:grid; place-items:center; padding:20px; background:rgba(6,10,14,.58); animation:modal-fade .16s ease; }
+      .modal-backdrop.hidden { display:none; }
+      .admin-modal { width:min(620px,100%); max-height:min(760px,calc(100dvh - 40px)); overflow:auto; border:1px solid var(--line); border-radius:14px; background:var(--panel); box-shadow:0 20px 60px rgba(0,0,0,.3); animation:modal-rise .18s ease; }
+      .admin-modal__head,.admin-modal__foot { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:16px 18px; }
+      .admin-modal__head { position:sticky; top:0; z-index:2; border-bottom:1px solid var(--line); background:var(--panel); }
+      .admin-modal__head h3 { margin:0; }
+      .admin-modal__body { display:grid; grid-template-columns:1fr 1fr; gap:14px; padding:18px; }
+      .admin-modal__body label { display:grid; gap:6px; color:var(--muted); font-size:12px; font-weight:700; }
+      .admin-modal__body label.wide,.policy-preview { grid-column:1/-1; }
+      .admin-modal__body input,.admin-modal__body select { width:100%; min-height:40px; border:1px solid var(--line); border-radius:7px; background:var(--input-bg); color:var(--ink); padding:8px 10px; }
+      .admin-modal__body small { font-weight:400; line-height:1.45; }
+      .policy-preview { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; padding:12px; border-radius:9px; background:var(--soft); }
+      .policy-preview span { display:grid; gap:3px; }
+      .policy-preview small { color:var(--muted); }
+      .admin-modal__foot { position:sticky; bottom:0; justify-content:flex-end; border-top:1px solid var(--line); background:var(--panel); }
+      @keyframes modal-fade { from { opacity:0 } }
+      @keyframes modal-rise { from { opacity:0; transform:translateY(10px) scale(.985) } }
 
       @media (max-width: 1080px) {
         .hero,
@@ -551,6 +573,8 @@
         .user-row {
           grid-template-columns: 1fr;
         }
+
+        .user-row__actions { justify-content:flex-start; }
 
         .check-cell {
           justify-content: flex-start;
@@ -577,6 +601,14 @@
         .drawer-panel {
           grid-column: 1;
         }
+      }
+
+      @media (max-width: 620px) {
+        .modal-backdrop { padding:0; place-items:stretch; }
+        .admin-modal { width:100%; height:100dvh; max-height:none; border:0; border-radius:0; }
+        .admin-modal__body { grid-template-columns:1fr; }
+        .admin-modal__body label.wide,.policy-preview { grid-column:1; }
+        .policy-preview,.user-row__policy { grid-template-columns:1fr; }
       }
 
       @media (max-width: 620px) {
@@ -787,6 +819,7 @@
             <input id="newUserName" pattern="[A-Za-z0-9_-]{3,32}" placeholder="用户名（字母/数字/_/-）" required />
             <input id="newUserPassword" type="password" minlength="10" placeholder="临时密码（至少 10 位）" required />
             <select id="newUserRole"><option value="user">用户</option><option value="admin">管理员</option></select>
+            <select id="newUserGroup" aria-label="用户组"></select>
             <button class="button primary" type="submit">新增用户</button>
           </form>
           <div id="userStatus" class="loading">加载中</div><div id="userList" class="user-list"></div>
@@ -798,6 +831,23 @@
       </section>
       <div id="toast-host" aria-live="polite"></div>
     </main>
+
+    <div id="userEditBackdrop" class="modal-backdrop hidden" aria-hidden="true">
+      <form id="userEditForm" class="admin-modal" role="dialog" aria-modal="true" aria-labelledby="userEditTitle">
+        <header class="admin-modal__head"><div><h3 id="userEditTitle">编辑账户</h3><span id="userEditIdentity" class="subtle"></span></div><button id="closeUserEdit" class="button" type="button" aria-label="关闭">×</button></header>
+        <div class="admin-modal__body">
+          <label>昵称<input id="editUserNickname" maxlength="80" required /></label>
+          <label>用户名<input id="editUserUsername" pattern="[A-Za-z0-9_-]{3,32}" required /></label>
+          <label class="wide">邮箱<input id="editUserEmail" type="email" required /></label>
+          <label>角色<select id="editUserRole"><option value="user">用户</option><option value="admin">管理员</option></select><small>管理员会自动归入管理员组。</small></label>
+          <label>用户组<select id="editUserGroup"></select><small>管理员组仅允许管理员角色使用。</small></label>
+          <label>存储额度覆盖（MB）<input id="editUserQuota" type="number" min="1" step="1" placeholder="留空则跟随组" /><small>留空继承组额度；填写后仅覆盖此用户。</small></label>
+          <label>不活跃清理期限（天）<input id="editUserRetention" type="number" min="0" step="1" placeholder="留空则跟随组" /><small>0 为永久保留，留空继承组期限。</small></label>
+          <div id="editPolicyPreview" class="policy-preview"></div>
+        </div>
+        <footer class="admin-modal__foot"><button id="cancelUserEdit" class="button" type="button">取消</button><button class="button primary" type="submit">保存账户</button></footer>
+      </form>
+    </div>
 
     <aside
       id="drawer"

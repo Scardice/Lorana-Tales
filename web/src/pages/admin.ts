@@ -38,7 +38,10 @@ interface SessionResponse {
   mode?: "root" | "account" | "none";
 }
 
-interface AccountUser { id:string; email:string; username:string; nickname:string; displayName:string; role:"user"|"admin"; group:string; retentionDaysOverride:number|null; status:"active"|"disabled"|"banned"; banReason:string; banUntil:string; projectCount?:number; }
+interface AccountStorage { group:string; usedBytes:number; quotaBytes:number; maxProjects:number; projectCount:number; retentionDays:number; quotaSource:"group"|"user"; retentionSource:"group"|"user"; }
+interface AccountUser { id:string; email:string; username:string; nickname:string; displayName:string; role:"user"|"admin"; group:string; quotaMbOverride:number|null; retentionDaysOverride:number|null; status:"active"|"disabled"|"banned"; banReason:string; banUntil:string; projectCount?:number; storage?:AccountStorage; }
+interface AccountGroupPolicy { name:string; quota_mb:number; max_projects:number; retention_days:number; }
+interface AccountPolicies { defaultGroup:string; adminGroup:string; groups:AccountGroupPolicy[]; }
 interface UserProject { id:string; title:string; revision:number; username:string; nickname:string; email:string; updatedAt:string; }
 
 interface DeleteResponse {
@@ -123,13 +126,30 @@ const els = {
   newUserName: requireElement<HTMLInputElement>("#newUserName"),
   newUserPassword: requireElement<HTMLInputElement>("#newUserPassword"),
   newUserRole: requireElement<HTMLSelectElement>("#newUserRole"),
+  newUserGroup: requireElement<HTMLSelectElement>("#newUserGroup"),
   refreshUsersButton: requireElement<HTMLButtonElement>("#refreshUsersButton"),
   userStatus: requireElement<HTMLElement>("#userStatus"),
   userList: requireElement<HTMLElement>("#userList"),
   refreshProjectsButton: requireElement<HTMLButtonElement>("#refreshProjectsButton"),
   projectStatus: requireElement<HTMLElement>("#projectStatus"),
   projectList: requireElement<HTMLElement>("#projectList"),
+  userEditBackdrop: requireElement<HTMLElement>("#userEditBackdrop"),
+  userEditForm: requireElement<HTMLFormElement>("#userEditForm"),
+  closeUserEdit: requireElement<HTMLButtonElement>("#closeUserEdit"),
+  cancelUserEdit: requireElement<HTMLButtonElement>("#cancelUserEdit"),
+  userEditIdentity: requireElement<HTMLElement>("#userEditIdentity"),
+  editUserNickname: requireElement<HTMLInputElement>("#editUserNickname"),
+  editUserUsername: requireElement<HTMLInputElement>("#editUserUsername"),
+  editUserEmail: requireElement<HTMLInputElement>("#editUserEmail"),
+  editUserRole: requireElement<HTMLSelectElement>("#editUserRole"),
+  editUserGroup: requireElement<HTMLSelectElement>("#editUserGroup"),
+  editUserQuota: requireElement<HTMLInputElement>("#editUserQuota"),
+  editUserRetention: requireElement<HTMLInputElement>("#editUserRetention"),
+  editPolicyPreview: requireElement<HTMLElement>("#editPolicyPreview"),
 };
+
+let accountPolicies: AccountPolicies = { defaultGroup:"default", adminGroup:"admin", groups:[] };
+let editingUser: AccountUser | null = null;
 
 function escapeHtml(value: unknown): string {
   return String(value ?? "")
@@ -299,6 +319,7 @@ async function checkSession() {
     if (session.authenticated) {
       showAdmin(session.mode === "account" ? "account" : "root");
       await loadLogs();
+      await loadAccountPolicies();
       await Promise.all([loadUsers(), loadProjects()]);
     } else {
       showLogin();
@@ -327,6 +348,7 @@ async function login(event: SubmitEvent): Promise<void> {
     els.password.value = "";
     showAdmin("root");
     await loadLogs();
+    await loadAccountPolicies();
     await Promise.all([loadUsers(), loadProjects()]);
   } catch (error) {
     const status = error instanceof AdminApiError ? error.status : 0;
@@ -587,16 +609,87 @@ async function runMaintenance(): Promise<void> {
   }
 }
 
+function groupOptions(selected = ""): string {
+  return accountPolicies.groups.map((group) => `<option value="${escapeHtml(group.name)}"${group.name === selected ? " selected" : ""}>${escapeHtml(group.name)}</option>`).join("");
+}
+
+async function loadAccountPolicies(): Promise<void> {
+  try {
+    accountPolicies = await api<AccountPolicies>("/admin/api/account-policies");
+    els.newUserGroup.innerHTML = groupOptions(accountPolicies.defaultGroup);
+    els.editUserGroup.innerHTML = groupOptions(accountPolicies.defaultGroup);
+  } catch {
+    accountPolicies = { defaultGroup:"default", adminGroup:"admin", groups:[
+      { name:"default", quota_mb:256, max_projects:100, retention_days:180 },
+      { name:"advanced", quota_mb:2048, max_projects:1000, retention_days:365 },
+      { name:"admin", quota_mb:8192, max_projects:5000, retention_days:0 },
+    ] };
+    els.newUserGroup.innerHTML = groupOptions(accountPolicies.defaultGroup);
+    els.editUserGroup.innerHTML = groupOptions(accountPolicies.defaultGroup);
+  }
+}
+
+function retentionText(days: number): string { return days === 0 ? "永久" : `${days} 天`; }
+
 function renderUsers(items: AccountUser[]): void {
   els.userList.innerHTML = items.map((user) => `<article class="user-row" data-user-id="${escapeHtml(user.id)}">
-    <div class="user-row__name"><strong>${escapeHtml(user.nickname || user.displayName || user.username)}</strong><small>@${escapeHtml(user.username)} · ${escapeHtml(user.email)} · ${user.projectCount || 0} 个工程</small></div>
-    <span class="pill">${user.role === "admin" ? "管理员" : "用户"}</span><span class="pill">${escapeHtml(user.group || "default")} 组</span><span class="pill">${user.retentionDaysOverride === null ? "期限随组" : user.retentionDaysOverride === 0 ? "永久保留" : `${user.retentionDaysOverride} 天未活动清理`}</span>
-    <span class="pill">${user.status === "banned" ? `已封禁：${escapeHtml(user.banReason)}` : user.status === "disabled" ? "已停用" : "正常"}</span>
+    <div class="user-row__name"><strong>${escapeHtml(user.nickname || user.displayName || user.username)}</strong><small>@${escapeHtml(user.username)} · ${escapeHtml(user.email)}</small><div class="user-row__tags"><span class="pill">${user.role === "admin" ? "管理员" : "用户"}</span><span class="pill">${escapeHtml(user.group || "default")} 组</span><span class="pill">${user.status === "banned" ? `已封禁：${escapeHtml(user.banReason)}` : user.status === "disabled" ? "已停用" : "正常"}</span></div></div>
+    <div class="user-row__policy"><span class="user-row__metric"><small>存储空间</small><strong>${formatBytes(user.storage?.usedBytes)} / ${formatBytes(user.storage?.quotaBytes)}</strong></span><span class="user-row__metric"><small>云端工程</small><strong>${user.storage?.projectCount ?? user.projectCount ?? 0} / ${user.storage?.maxProjects ?? "-"}</strong></span><span class="user-row__metric"><small>不活跃期限</small><strong>${retentionText(user.storage?.retentionDays ?? 0)}${user.storage?.retentionSource === "user" ? " · 单独" : " · 随组"}</strong></span></div>
     <div class="user-row__actions"><button class="button" data-user-action="edit">编辑</button><button class="button" data-user-action="password">改密码</button><button class="button warning" data-user-action="status">${user.status === "active" ? "封禁/停用" : "恢复"}</button><button class="button danger" data-user-action="delete">删除</button></div>
   </article>`).join("");
   els.userList.querySelectorAll<HTMLElement>("[data-user-action]").forEach((button) => button.addEventListener("click", () => {
     const row = button.closest<HTMLElement>("[data-user-id]"); const user = items.find((item) => item.id === row?.dataset.userId); if (user) manageUser(user, button.dataset.userAction || "");
   }));
+}
+
+function updatePolicyPreview(): void {
+  if (!editingUser) return;
+  const groupName = els.editUserRole.value === "admin" ? accountPolicies.adminGroup : els.editUserGroup.value;
+  const group = accountPolicies.groups.find((item) => item.name === groupName);
+  const quota = els.editUserQuota.value ? Number(els.editUserQuota.value) : Number(group?.quota_mb || 0);
+  const retention = els.editUserRetention.value !== "" ? Number(els.editUserRetention.value) : Number(group?.retention_days || 0);
+  els.editUserGroup.value = groupName;
+  els.editUserGroup.disabled = els.editUserRole.value === "admin";
+  els.editPolicyPreview.innerHTML = `<span><small>生效用户组</small><strong>${escapeHtml(groupName)}</strong></span><span><small>生效存储额度</small><strong>${quota.toLocaleString()} MB</strong></span><span><small>生效清理期限</small><strong>${retentionText(retention)}</strong></span>`;
+}
+
+function openUserEditor(user: AccountUser): void {
+  editingUser = user;
+  els.userEditIdentity.textContent = `@${user.username} · ${user.email}`;
+  els.editUserNickname.value = user.nickname || user.displayName || user.username;
+  els.editUserUsername.value = user.username;
+  els.editUserEmail.value = user.email;
+  els.editUserRole.value = user.role;
+  els.editUserGroup.innerHTML = groupOptions(user.group);
+  els.editUserQuota.value = user.quotaMbOverride === null ? "" : String(user.quotaMbOverride);
+  els.editUserRetention.value = user.retentionDaysOverride === null ? "" : String(user.retentionDaysOverride);
+  updatePolicyPreview();
+  els.userEditBackdrop.classList.remove("hidden");
+  els.userEditBackdrop.setAttribute("aria-hidden", "false");
+  requestAnimationFrame(() => els.editUserNickname.focus());
+}
+
+function closeUserEditor(): void {
+  editingUser = null;
+  els.userEditBackdrop.classList.add("hidden");
+  els.userEditBackdrop.setAttribute("aria-hidden", "true");
+}
+
+async function saveUserEditor(event: SubmitEvent): Promise<void> {
+  event.preventDefault();
+  if (!editingUser) return;
+  const quotaMbOverride = els.editUserQuota.value.trim() === "" ? null : Number(els.editUserQuota.value);
+  const retentionDaysOverride = els.editUserRetention.value.trim() === "" ? null : Number(els.editUserRetention.value);
+  if ((quotaMbOverride !== null && (!Number.isInteger(quotaMbOverride) || quotaMbOverride < 1)) || (retentionDaysOverride !== null && (!Number.isInteger(retentionDaysOverride) || retentionDaysOverride < 0))) {
+    showAdminToast("额度须为正整数；期限须留空、填 0 或正整数", "warning"); return;
+  }
+  try {
+    await api(`/admin/api/users/${encodeURIComponent(editingUser.id)}`, { method:"PATCH", body:JSON.stringify({
+      email:els.editUserEmail.value, username:els.editUserUsername.value, nickname:els.editUserNickname.value,
+      role:els.editUserRole.value, group:els.editUserGroup.value, quotaMbOverride, retentionDaysOverride,
+    }) });
+    closeUserEditor(); showAdminToast("账户设置已保存", "success"); await loadUsers();
+  } catch (error) { showAdminToast(error instanceof Error ? error.message : "账户保存失败", "error"); }
 }
 
 async function loadUsers(): Promise<void> {
@@ -628,9 +721,7 @@ async function loadProjects(): Promise<void> {
 async function manageUser(user: AccountUser, action: string): Promise<void> {
   try {
     if (action === "edit") {
-      const email = prompt("邮箱", user.email); if (email === null) return; const username = prompt("用户名（字母、数字、_、-）", user.username); if (username === null) return; const nickname = prompt("昵称", user.nickname || user.displayName); if (nickname === null) return; const role = prompt("角色：admin 或 user", user.role); if (role !== "admin" && role !== "user") return; const group = prompt("存储组（需与配置文件一致）", user.group || "default"); if (!group?.trim()) return;
-      const retentionInput = prompt("云端工程未活动保留天数：留空继承组，0 永久保留，正整数为单独期限", user.retentionDaysOverride === null ? "" : String(user.retentionDaysOverride)); if (retentionInput === null) return; const retentionDaysOverride = retentionInput.trim() === "" ? null : Number(retentionInput); if (retentionDaysOverride !== null && (!Number.isInteger(retentionDaysOverride) || retentionDaysOverride < 0)) { showAdminToast("保留期限必须留空、填 0 或填写正整数天数", "warning"); return; }
-      await api(`/admin/api/users/${encodeURIComponent(user.id)}`, { method:"PATCH", body:JSON.stringify({ email, username, nickname, role, group, retentionDaysOverride }) });
+      openUserEditor(user); return;
     } else if (action === "password") {
       const password = prompt("输入至少 10 位的新密码。用户下次登录必须修改。", ""); if (!password) return;
       await api(`/admin/api/users/${encodeURIComponent(user.id)}/password`, { method:"POST", body:JSON.stringify({ password, mustChangePassword:true }) });
@@ -646,7 +737,7 @@ async function manageUser(user: AccountUser, action: string): Promise<void> {
 
 async function createUser(event: SubmitEvent): Promise<void> {
   event.preventDefault();
-  try { await api("/admin/api/users", { method:"POST", body:JSON.stringify({ email:els.newUserEmail.value, username:els.newUserName.value, nickname:els.newUserName.value, password:els.newUserPassword.value, role:els.newUserRole.value, mustChangePassword:true }) }); els.createUserForm.reset(); showAdminToast("用户已创建", "success"); await loadUsers(); }
+  try { await api("/admin/api/users", { method:"POST", body:JSON.stringify({ email:els.newUserEmail.value, username:els.newUserName.value, nickname:els.newUserName.value, password:els.newUserPassword.value, role:els.newUserRole.value, group:els.newUserGroup.value, mustChangePassword:true }) }); els.createUserForm.reset(); els.newUserGroup.value=accountPolicies.defaultGroup; showAdminToast("用户已创建", "success"); await loadUsers(); }
   catch (error) { showAdminToast(error instanceof Error ? error.message : "创建失败", "error"); }
 }
 
@@ -662,6 +753,19 @@ function openCurrentPainter(): void {
 
 els.loginForm.addEventListener("submit", login);
 els.createUserForm.addEventListener("submit", createUser);
+els.userEditForm.addEventListener("submit", saveUserEditor);
+els.closeUserEdit.addEventListener("click", closeUserEditor);
+els.cancelUserEdit.addEventListener("click", closeUserEditor);
+els.userEditBackdrop.addEventListener("click", (event) => { if (event.target === els.userEditBackdrop) closeUserEditor(); });
+els.editUserRole.addEventListener("change", updatePolicyPreview);
+els.editUserGroup.addEventListener("change", updatePolicyPreview);
+els.editUserQuota.addEventListener("input", updatePolicyPreview);
+els.editUserRetention.addEventListener("input", updatePolicyPreview);
+els.newUserRole.addEventListener("change", () => {
+  els.newUserGroup.value = els.newUserRole.value === "admin" ? accountPolicies.adminGroup : accountPolicies.defaultGroup;
+  els.newUserGroup.disabled = els.newUserRole.value === "admin";
+});
+document.addEventListener("keydown", (event) => { if (event.key === "Escape" && !els.userEditBackdrop.classList.contains("hidden")) closeUserEditor(); });
 els.refreshUsersButton.addEventListener("click", loadUsers);
 els.refreshProjectsButton.addEventListener("click", loadProjects);
 els.logoutButton.addEventListener("click", logout);

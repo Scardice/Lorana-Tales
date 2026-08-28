@@ -153,7 +153,7 @@ export function createAdminRouter({
 	function requireMutationAuth(req, res) {
 		if (getSession(req)) return true;
 		const session = accountService?.getSession(req);
-		if (session?.user.role === "admin" && !session.user.mustChangePassword && accountService?.store.verifyCsrf(session, String(req.headers["x-csrf-token"] || ""))) return true;
+		if (accountService?.isAdmin(req) && session && accountService.store.verifyCsrf(session, String(req.headers["x-csrf-token"] || ""))) return true;
 		sendJson(res, session ? 403 : 401, { error: session ? "csrf_failed" : "admin authentication required" });
 		return false;
 	}
@@ -243,7 +243,8 @@ export function createAdminRouter({
 
 	app.get("/admin/api/session", (req, res) => {
 		const account = accountService?.getSession(req);
-		sendJson(res, 200, { authenticated: isAuthenticated(req), accountMode: !!accountService, mode: getSession(req) ? "root" : account?.user.role === "admin" && !account.user.mustChangePassword ? "account" : "none", user: account?.user.role === "admin" && !account.user.mustChangePassword ? account.user : null });
+		const accountAdmin = !!accountService?.isAdmin(req);
+		sendJson(res, 200, { authenticated: isAuthenticated(req), accountMode: !!accountService, mode: getSession(req) ? "root" : accountAdmin ? "account" : "none", user: accountAdmin ? account?.user : null });
 	});
 
 	app.post("/admin/api/login", async (req, res) => {
@@ -295,7 +296,19 @@ export function createAdminRouter({
 	app.get("/admin/api/users", (req, res) => {
 		if (!requireAuth(req, res)) return;
 		if (!accountService) { sendJson(res, 404, { error: "accounts_disabled" }); return; }
-		sendJson(res, 200, accountService.store.listUsers(String(req.query.q || ""), clampInt(req.query.page, 1, 1, Number.MAX_SAFE_INTEGER), clampInt(req.query.pageSize, 20, 1, 100)));
+		const result = accountService.store.listUsers(String(req.query.q || ""), clampInt(req.query.page, 1, 1, Number.MAX_SAFE_INTEGER), clampInt(req.query.pageSize, 20, 1, 100));
+		sendJson(res, 200, { ...result, items: result.items.map((user) => ({ ...user, storage: accountService.storageUsage(user) })) });
+	});
+
+	app.get("/admin/api/account-policies", (req, res) => {
+		if (!requireAuth(req, res)) return;
+		if (!accountService) { sendJson(res, 404, { error: "accounts_disabled" }); return; }
+		const groups = accountService.config.storage_groups && typeof accountService.config.storage_groups === "object" ? accountService.config.storage_groups : {};
+		sendJson(res, 200, {
+			defaultGroup: String(accountService.config.default_group || "default"),
+			adminGroup: String(accountService.config.admin_group || "admin"),
+			groups: Object.entries(groups).map(([name, value]) => ({ name, ...(value as Record<string, unknown>) })),
+		});
 	});
 
 	app.get("/admin/api/account-audit", (req, res) => {
@@ -329,7 +342,11 @@ export function createAdminRouter({
 			const body = readJsonBody(req); const email = String(body.email || ""); const newPassword = String(body.password || ""); const username = String(body.username || body.displayName || email.split("@")[0]).trim(); const nickname = String(body.nickname || body.displayName || username).trim();
 			if (!email.includes("@") || newPassword.length < 10) { sendJson(res, 400, { error: "invalid_user" }); return; }
 			if (accountService.store.getUserByIdentity(username)) { sendJson(res, 409, { error: "user_exists" }); return; }
-			const user = await accountService.store.createUser({ email, password: newPassword, username, nickname, role: body.role === "admin" ? "admin" : "user", group: String(body.group || accountService.config.default_group || "default"), mustChangePassword: body.mustChangePassword !== false });
+			const role = body.role === "admin" ? "admin" : "user";
+			const adminGroup = String(accountService.config.admin_group || "admin");
+			const defaultGroup = String(accountService.config.default_group || "default");
+			const group = role === "admin" ? adminGroup : String(body.group || defaultGroup) === adminGroup ? defaultGroup : String(body.group || defaultGroup);
+			const user = await accountService.store.createUser({ email, password: newPassword, username, nickname, role, group, mustChangePassword: body.mustChangePassword !== false });
 			accountService.store.audit(actor(req), "admin.user-create", user.id, { email: user.email, role: user.role }); sendJson(res, 201, user);
 		} catch (error) { console.error("[admin] create user failed", error); sendJson(res, 409, { error: "user_exists" }); }
 	});
@@ -347,7 +364,15 @@ export function createAdminRouter({
 				? null
 				: body.retentionDaysOverride === undefined ? undefined : Math.max(0, Math.floor(Number(body.retentionDaysOverride)));
 			if (retentionDaysOverride !== undefined && retentionDaysOverride !== null && !Number.isFinite(retentionDaysOverride)) { sendJson(res, 400, { error: "invalid_retention_days" }); return; }
-			const user = accountService.store.updateUser(current.id, { email: typeof body.email === "string" ? body.email : undefined, username: typeof body.username === "string" ? body.username : undefined, nickname: typeof body.nickname === "string" ? body.nickname : typeof body.displayName === "string" ? body.displayName : undefined, role: body.role === "admin" || body.role === "user" ? body.role : undefined, group: typeof body.group === "string" ? body.group : undefined, retentionDaysOverride });
+			const quotaMbOverride = body.quotaMbOverride === null
+				? null
+				: body.quotaMbOverride === undefined ? undefined : Math.max(1, Math.floor(Number(body.quotaMbOverride)));
+			if (quotaMbOverride !== undefined && quotaMbOverride !== null && !Number.isFinite(quotaMbOverride)) { sendJson(res, 400, { error: "invalid_quota_mb" }); return; }
+			const adminGroup = String(accountService.config.admin_group || "admin");
+			const defaultGroup = String(accountService.config.default_group || "default");
+			const requestedGroup = typeof body.group === "string" ? body.group.trim() : current.group;
+			const nextGroup = nextRole === "admin" ? adminGroup : requestedGroup === adminGroup ? defaultGroup : requestedGroup;
+			const user = accountService.store.updateUser(current.id, { email: typeof body.email === "string" ? body.email : undefined, username: typeof body.username === "string" ? body.username : undefined, nickname: typeof body.nickname === "string" ? body.nickname : typeof body.displayName === "string" ? body.displayName : undefined, role: nextRole, group: nextGroup, quotaMbOverride, retentionDaysOverride });
 			accountService.store.audit(actor(req), "admin.user-update", current.id, body); sendJson(res, 200, user);
 		} catch { sendJson(res, 409, { error: "user_update_failed" }); }
 	});

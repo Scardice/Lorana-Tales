@@ -162,6 +162,8 @@ export class AccountService {
 	}
 
 	async ensureInitialAdmin() {
+		const adminGroup = String(this.config.admin_group || "admin");
+		this.store.normalizeAdminGroup(adminGroup, String(this.config.default_group || "default"));
 		if (this.store.activeAdminCount() > 0) return;
 		const username = String(this.config.initial_admin_username || "").trim();
 		const password = String(this.config.initial_admin_password || "");
@@ -172,12 +174,12 @@ export class AccountService {
 		const email = validEmail(configuredEmail) ? configuredEmail : `${crypto.createHash("sha256").update(username).digest("hex").slice(0, 16)}@bootstrap.invalid`;
 		const existing = this.store.getUserByEmail(email);
 		if (existing) {
-			this.store.updateUser(existing.id, { username, nickname: username, role: "admin", group: String(this.config.admin_group || "advanced") });
+			this.store.updateUser(existing.id, { username, nickname: username, role: "admin", group: adminGroup });
 			await this.store.updatePassword(existing.id, password, true);
 			this.store.audit("system", "account.bootstrap-admin", existing.id);
 			return;
 		}
-		const user = await this.store.createUser({ email, password, username, nickname: username, role: "admin", group: String(this.config.admin_group || "advanced"), mustChangePassword: true });
+		const user = await this.store.createUser({ email, password, username, nickname: username, role: "admin", group: adminGroup, mustChangePassword: true });
 		this.store.audit("system", "account.bootstrap-admin", user.id);
 	}
 
@@ -215,7 +217,7 @@ export class AccountService {
 		return { ...session, user };
 	}
 
-	isAdmin(req: Request) { const user = this.getSession(req)?.user; return user?.role === "admin" && !user.mustChangePassword; }
+	isAdmin(req: Request) { const user = this.getSession(req)?.user; return user?.role === "admin" && user.group === String(this.config.admin_group || "admin") && !user.mustChangePassword; }
 
 	private requireSession(req: Request, res: Response, mutate = false, allowInitialChange = false) {
 		const session = this.getSession(req);
@@ -255,7 +257,7 @@ export class AccountService {
 	}
 
 	private publicUser(user: AccountUser) {
-		return { ...user, banReason: user.status === "banned" ? user.banReason : "", projectCount: this.store.projectCount(user.id) };
+		return { ...user, canAdmin: user.role === "admin" && user.group === String(this.config.admin_group || "admin") && !user.mustChangePassword, banReason: user.status === "banned" ? user.banReason : "", projectCount: this.store.projectCount(user.id) };
 	}
 
 	private storagePolicy(user: AccountUser) {
@@ -266,7 +268,8 @@ export class AccountService {
 		const groupRetentionDays = Math.max(0, Math.floor(Number(raw.retention_days ?? 180)));
 		return {
 			group,
-			quotaBytes: Math.max(1, Number(raw.quota_mb || 256)) * 1024 * 1024,
+			quotaBytes: Math.max(1, user.quotaMbOverride ?? Number(raw.quota_mb || 256)) * 1024 * 1024,
+			quotaSource: user.quotaMbOverride === null ? "group" : "user",
 			maxProjects: Math.max(1, Math.floor(Number(raw.max_projects || 100))),
 			retentionDays: user.retentionDaysOverride === null ? groupRetentionDays : user.retentionDaysOverride,
 			retentionSource: user.retentionDaysOverride === null ? "group" : "user",
@@ -277,7 +280,7 @@ export class AccountService {
 		return this.store.cleanupInactiveProjects((user) => this.storagePolicy(user).retentionDays);
 	}
 
-	private storageUsage(user: AccountUser) {
+	storageUsage(user: AccountUser) {
 		const policy = this.storagePolicy(user);
 		const usedBytes = this.store.projectStorageBytes(user.id);
 		const projectCount = this.store.projectCount(user.id);

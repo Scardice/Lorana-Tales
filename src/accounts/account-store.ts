@@ -22,6 +22,7 @@ export interface AccountUser {
 	displayName: string;
 	role: AccountRole;
 	group: string;
+	quotaMbOverride: number | null;
 	retentionDaysOverride: number | null;
 	status: AccountStatus;
 	banReason: string;
@@ -94,6 +95,9 @@ function rowToUser(row: SqlRow): AccountUser {
 		displayName: String(row.nickname || row.display_name || row.username || ""),
 		role: row.role === "admin" ? "admin" : "user",
 		group: String(row.account_group || "default"),
+		quotaMbOverride: row.quota_mb_override === null || row.quota_mb_override === undefined
+			? null
+			: Math.max(1, Number(row.quota_mb_override)),
 		retentionDaysOverride: row.retention_days_override === null || row.retention_days_override === undefined
 			? null
 			: Math.max(0, Number(row.retention_days_override)),
@@ -157,6 +161,7 @@ export class AccountStore {
 				password_hash TEXT NOT NULL,
 				role TEXT NOT NULL DEFAULT 'user',
 				account_group TEXT NOT NULL DEFAULT 'default',
+				quota_mb_override INTEGER,
 				retention_days_override INTEGER,
 				status TEXT NOT NULL DEFAULT 'active',
 				ban_reason TEXT NOT NULL DEFAULT '',
@@ -275,6 +280,7 @@ export class AccountStore {
 		if (!columns.has("nickname")) this.db.exec("ALTER TABLE account_users ADD COLUMN nickname TEXT NOT NULL DEFAULT ''");
 		if (!columns.has("avatar_url")) this.db.exec("ALTER TABLE account_users ADD COLUMN avatar_url TEXT NOT NULL DEFAULT ''");
 		if (!columns.has("account_group")) this.db.exec("ALTER TABLE account_users ADD COLUMN account_group TEXT NOT NULL DEFAULT 'default'");
+		if (!columns.has("quota_mb_override")) this.db.exec("ALTER TABLE account_users ADD COLUMN quota_mb_override INTEGER");
 		if (!columns.has("retention_days_override")) this.db.exec("ALTER TABLE account_users ADD COLUMN retention_days_override INTEGER");
 		if (!columns.has("tutorial_prompt_seen")) this.db.exec("ALTER TABLE account_users ADD COLUMN tutorial_prompt_seen INTEGER NOT NULL DEFAULT 0");
 		if (!columns.has("manual_playback_hint_seen")) this.db.exec("ALTER TABLE account_users ADD COLUMN manual_playback_hint_seen INTEGER NOT NULL DEFAULT 0");
@@ -406,7 +412,7 @@ export class AccountStore {
 		return this.getUserById(userId);
 	}
 
-	updateUser(userId: string, input: Partial<{ email: string; username: string; nickname: string; displayName: string; avatarUrl: string; role: AccountRole; group: string; retentionDaysOverride: number | null }>) {
+	updateUser(userId: string, input: Partial<{ email: string; username: string; nickname: string; displayName: string; avatarUrl: string; role: AccountRole; group: string; quotaMbOverride: number | null; retentionDaysOverride: number | null }>) {
 		const current = this.getUserById(userId);
 		if (!current) return null;
 		const email = input.email ? normalizeEmail(input.email) : current.email;
@@ -416,11 +422,14 @@ export class AccountStore {
 		const avatarUrl = input.avatarUrl === undefined ? current.avatarUrl : String(input.avatarUrl).trim().slice(0, 2048);
 		const role = input.role || current.role;
 		const group = input.group === undefined ? current.group : String(input.group).trim().slice(0, 40) || "default";
+		const quotaMbOverride = input.quotaMbOverride === undefined
+			? current.quotaMbOverride
+			: input.quotaMbOverride === null ? null : Math.max(1, Math.floor(Number(input.quotaMbOverride)));
 		const retentionDaysOverride = input.retentionDaysOverride === undefined
 			? current.retentionDaysOverride
 			: input.retentionDaysOverride === null ? null : Math.max(0, Math.floor(Number(input.retentionDaysOverride)));
-		this.db.prepare("UPDATE account_users SET email = ?, username = ?, nickname = ?, avatar_url = ?, display_name = ?, role = ?, account_group = ?, retention_days_override = ?, updated_at = ? WHERE id = ?")
-			.run(email, username, nickname, avatarUrl, nickname, role, group, retentionDaysOverride, nowIso(), userId);
+		this.db.prepare("UPDATE account_users SET email = ?, username = ?, nickname = ?, avatar_url = ?, display_name = ?, role = ?, account_group = ?, quota_mb_override = ?, retention_days_override = ?, updated_at = ? WHERE id = ?")
+			.run(email, username, nickname, avatarUrl, nickname, role, group, quotaMbOverride, retentionDaysOverride, nowIso(), userId);
 		return this.getUserById(userId);
 	}
 
@@ -445,6 +454,15 @@ export class AccountStore {
 
 	activeAdminCount(): number {
 		return Number((this.db.prepare("SELECT COUNT(*) AS total FROM account_users WHERE role = 'admin' AND status = 'active'").get() as SqlRow).total || 0);
+	}
+
+	normalizeAdminGroup(adminGroup: string, defaultGroup: string): void {
+		const safeAdminGroup = String(adminGroup || "admin").trim().slice(0, 40) || "admin";
+		const safeDefaultGroup = String(defaultGroup || "default").trim().slice(0, 40) || "default";
+		this.db.prepare("UPDATE account_users SET account_group = ?, updated_at = ? WHERE role = 'admin' AND account_group <> ?")
+			.run(safeAdminGroup, nowIso(), safeAdminGroup);
+		this.db.prepare("UPDATE account_users SET account_group = ?, updated_at = ? WHERE role <> 'admin' AND account_group = ?")
+			.run(safeDefaultGroup, nowIso(), safeAdminGroup);
 	}
 
 	listUsers(query = "", page = 1, pageSize = 20) {

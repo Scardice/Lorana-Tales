@@ -105,7 +105,7 @@ initial_admin_password = "change-this-initial-password"
 # 可留空；首次登录会强制填写正式邮箱。若填写，仍需在首次登录确认或修改。
 initial_admin_email = ""
 default_group = "default"
-admin_group = "advanced"
+admin_group = "admin"
 # 用于 AES-256-GCM 加密日志源访问密钥，启用账号时必须设置至少 32 个随机字符。
 # 可用 `openssl rand -base64 48` 生成；修改后旧工程中的加密源密钥将无法解密。
 encryption_key = ""
@@ -139,6 +139,12 @@ retention_days = 180
 quota_mb = 2048
 max_projects = 1000
 retention_days = 365
+
+# 管理员专用组。只有 role=admin 且属于该组的账户才能进入管理员面板。
+[accounts.storage_groups.admin]
+quota_mb = 8192
+max_projects = 5000
+retention_days = 0
 
 [accounts.smtp]
 host = ""
