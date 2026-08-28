@@ -280,7 +280,9 @@ admin_bruteforce_block_seconds = 60 # 触发后的封禁时长；期间访问会
 PORT=8080 SQLITE_PATH=/mnt/data/scardice.db pnpm start
 ```
 
-存储组可按需增加，额度按工程压缩后的实际数据库占用计算，并由服务端强制执行：
+默认预制 `default`、`advanced`、`admin` 三个存储组；额度按工程压缩后的实际数据库占用计算，并由服务端强制执行。`default_group` 决定新用户所属组，`admin_group` 决定管理员专用组。只有同时具有 `admin` 角色并属于 `admin_group` 的账户才能进入管理面板；服务启动时会把已有管理员迁移到管理员组，并把误入管理员组的普通用户迁回默认组。
+
+管理员可在账户编辑弹窗中切换普通用户的存储组，也可为单个用户覆盖存储额度和不活跃清理期限：留空表示继承组策略，期限填 `0` 表示永久保留。管理员角色会自动锁定到 `admin` 组，但同样允许单独覆盖额度与期限。默认策略如下：
 
 ```toml
 [accounts.storage_groups.default]
