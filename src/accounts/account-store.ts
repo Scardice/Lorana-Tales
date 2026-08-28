@@ -1,13 +1,39 @@
 import crypto from "node:crypto";
-import { deflateRawSync, inflateRawSync } from "node:zlib";
+import { inflateRawSync } from "node:zlib";
 import type Database from "better-sqlite3";
 
 const PASSWORD_PREFIX = "scrypt-v1";
 
+class WorkQueue {
+	private active = 0;
+	private readonly waiting: Array<() => void> = [];
+	constructor(private readonly limit: number, private readonly maxWaiting: number) {}
+	async run<T>(task: () => Promise<T>): Promise<T> {
+		if (this.active >= this.limit) {
+			if (this.waiting.length >= this.maxWaiting) throw new Error("password_work_queue_busy");
+			await new Promise<void>((resolve) => this.waiting.push(resolve));
+		}
+		this.active += 1;
+		try { return await task(); }
+		finally {
+			this.active -= 1;
+			this.waiting.shift()?.();
+		}
+	}
+}
+
+// Scrypt is intentionally expensive. Bound parallel work so a burst of login
+// attempts cannot reserve unbounded native memory and take down the process.
+const passwordWork = new WorkQueue(
+	Math.max(1, Math.min(4, Number(process.env.ACCOUNT_KDF_CONCURRENCY || 2) || 2)),
+	Math.max(8, Math.min(256, Number(process.env.ACCOUNT_KDF_QUEUE_LIMIT || 64) || 64)),
+);
+const DUMMY_PASSWORD_HASH = [PASSWORD_PREFIX, crypto.randomBytes(16).toString("base64url"), crypto.randomBytes(64).toString("base64url")].join("$");
+
 function scryptAsync(password: string, salt: Buffer, length: number): Promise<Buffer> {
-	return new Promise((resolve, reject) => crypto.scrypt(password, salt, length, {
+	return passwordWork.run(() => new Promise((resolve, reject) => crypto.scrypt(password, salt, length, {
 		N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024,
-	}, (error, result) => error ? reject(error) : resolve(result)));
+	}, (error, result) => error ? reject(error) : resolve(result))));
 }
 
 export type AccountRole = "user" | "admin";
@@ -130,15 +156,21 @@ async function passwordMatches(password: string, encoded: string): Promise<boole
 
 
 const SSP_BINARY_PREFIX = Buffer.from("LORANA_SSP2\0", "ascii");
+const JSON_BINARY_PREFIX = Buffer.from("LORANA_JSON2\0", "ascii");
+const MAX_LEGACY_JSON_BYTES = 64 * 1024 * 1024;
 
 function compressDocument(value: unknown): Buffer {
 	if (Buffer.isBuffer(value)) return Buffer.concat([SSP_BINARY_PREFIX, value]);
-	return deflateRawSync(Buffer.from(JSON.stringify(value), "utf-8"), { level: 9 });
+	// New JSON records are stored directly. SQLite already accounts for their
+	// size, and avoiding synchronous level-9 deflate keeps large saves off the
+	// event-loop hot path. Legacy compressed records remain readable below.
+	return Buffer.concat([JSON_BINARY_PREFIX, Buffer.from(JSON.stringify(value), "utf-8")]);
 }
 
 function decompressDocument(value: Buffer): unknown {
 	if (value.subarray(0, SSP_BINARY_PREFIX.length).equals(SSP_BINARY_PREFIX)) return value.subarray(SSP_BINARY_PREFIX.length);
-	return JSON.parse(inflateRawSync(value).toString("utf-8"));
+	if (value.subarray(0, JSON_BINARY_PREFIX.length).equals(JSON_BINARY_PREFIX)) return JSON.parse(value.subarray(JSON_BINARY_PREFIX.length).toString("utf-8"));
+	return JSON.parse(inflateRawSync(value, { maxOutputLength: MAX_LEGACY_JSON_BYTES }).toString("utf-8"));
 }
 
 export class AccountStore {
@@ -290,6 +322,9 @@ export class AccountStore {
 			this.db.exec("ALTER TABLE editor_projects ADD COLUMN last_activity_at TEXT NOT NULL DEFAULT ''");
 			this.db.exec("UPDATE editor_projects SET last_activity_at = updated_at WHERE last_activity_at = ''");
 		}
+		const shareColumns = new Set((this.db.prepare("PRAGMA table_info(editor_project_shares)").all() as SqlRow[]).map((row) => String(row.name || "")));
+		if (!shareColumns.has("expiry_mode")) this.db.exec("ALTER TABLE editor_project_shares ADD COLUMN expiry_mode TEXT NOT NULL DEFAULT 'project'");
+		if (!shareColumns.has("expires_at")) this.db.exec("ALTER TABLE editor_project_shares ADD COLUMN expires_at TEXT NOT NULL DEFAULT ''");
 		const presetColumns = new Set((this.db.prepare("PRAGMA table_info(account_effect_presets)").all() as SqlRow[]).map((row) => String(row.name || "")));
 		if (!presetColumns.has("kind")) this.db.exec("ALTER TABLE account_effect_presets ADD COLUMN kind TEXT NOT NULL DEFAULT 'screen'");
 		if (!presetColumns.has("folder_id")) this.db.exec("ALTER TABLE account_effect_presets ADD COLUMN folder_id TEXT NOT NULL DEFAULT ''");
@@ -383,13 +418,14 @@ export class AccountStore {
 
 	async verifyPassword(email: string, password: string): Promise<AccountUser | null> {
 		const row = this.db.prepare("SELECT * FROM account_users WHERE email = ? COLLATE NOCASE").get(normalizeEmail(email)) as SqlRow | undefined;
-		if (!row || !(await passwordMatches(password, String(row.password_hash || "")))) return null;
+		if (!row) { await passwordMatches(password, DUMMY_PASSWORD_HASH); return null; }
+		if (!(await passwordMatches(password, String(row.password_hash || "")))) return null;
 		return rowToUser(row);
 	}
 
 	async verifyPasswordIdentity(identity: string, password: string): Promise<AccountUser | null> {
 		const user = this.getUserByIdentity(identity);
-		if (!user) return null;
+		if (!user) { await passwordMatches(password, DUMMY_PASSWORD_HASH); return null; }
 		const row = this.db.prepare("SELECT password_hash FROM account_users WHERE id = ?").get(user.id) as SqlRow | undefined;
 		if (!row || !(await passwordMatches(password, String(row.password_hash || "")))) return null;
 		return user;
@@ -704,24 +740,39 @@ export class AccountStore {
 		return this.db.prepare("DELETE FROM editor_projects WHERE id = ? AND user_id = ?").run(id, userId).changes === 1;
 	}
 
-	shareProject(userId: string, id: string) {
+	shareProject(userId: string, id: string, expiryMode: "project" | "fixed" | "never" = "project", expiresAt = "") {
 		const project = this.db.prepare("SELECT id FROM editor_projects WHERE id = ? AND user_id = ? AND archived = 0").get(id, userId) as SqlRow | undefined;
 		if (!project) return null;
 		const existing = this.db.prepare("SELECT token FROM editor_project_shares WHERE project_id = ?").get(id) as SqlRow | undefined;
-		if (existing) return { token: String(existing.token) };
+		if (existing) {
+			this.db.prepare("UPDATE editor_project_shares SET expiry_mode = ?, expires_at = ? WHERE project_id = ?").run(expiryMode, expiresAt, id);
+			return { token: String(existing.token), expiryMode, expiresAt };
+		}
 		const token = randomToken(18);
-		this.db.prepare("INSERT INTO editor_project_shares (token, project_id, created_by, created_at) VALUES (?, ?, ?, ?)").run(token, id, userId, nowIso());
-		return { token };
+		this.db.prepare("INSERT INTO editor_project_shares (token, project_id, created_by, created_at, expiry_mode, expires_at) VALUES (?, ?, ?, ?, ?, ?)").run(token, id, userId, nowIso(), expiryMode, expiresAt);
+		return { token, expiryMode, expiresAt };
 	}
 
 	getSharedProject(token: string) {
-		const row = this.db.prepare(`SELECT p.* FROM editor_project_shares s
+		const row = this.db.prepare(`SELECT
+			p.id AS project_id, p.title, p.revision, p.document_blob,
+			p.created_at AS project_created_at, p.updated_at AS project_updated_at, p.last_activity_at,
+			s.expiry_mode AS share_expiry_mode, s.expires_at AS share_expires_at,
+			u.id, u.email, u.username, u.nickname, u.avatar_url, u.display_name, u.role,
+			u.account_group, u.quota_mb_override, u.retention_days_override, u.status,
+			u.ban_reason, u.ban_until, u.must_change_password, u.tutorial_prompt_seen,
+			u.manual_playback_hint_seen, u.tutorial_playback_coach_seen, u.created_at, u.updated_at
+			FROM editor_project_shares s
 			JOIN editor_projects p ON p.id = s.project_id
+			JOIN account_users u ON u.id = p.user_id
 			WHERE s.token = ? AND p.archived = 0`).get(token) as SqlRow | undefined;
 		if (!row) return null;
 		return {
-			id: String(row.id), title: String(row.title), revision: Number(row.revision),
-			document: decompressDocument(row.document_blob as Buffer), createdAt: String(row.created_at), updatedAt: String(row.updated_at),
+			id: String(row.project_id), title: String(row.title), revision: Number(row.revision),
+			document: decompressDocument(row.document_blob as Buffer), createdAt: String(row.project_created_at), updatedAt: String(row.project_updated_at),
+			lastActivityAt: String(row.last_activity_at || row.project_updated_at),
+			shareExpiryMode: ["project", "fixed", "never"].includes(String(row.share_expiry_mode)) ? String(row.share_expiry_mode) : "project",
+			shareExpiresAt: String(row.share_expires_at || ""), owner: rowToUser(row),
 		};
 	}
 

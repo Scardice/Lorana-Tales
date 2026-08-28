@@ -29,7 +29,7 @@
 - PUT `/api/dice/log` 或 `/dice/api/log`（multipart/form-data：`name`、`uniform_id=命名空间:标识符`、`file`；默认上传限制 5 MB）
 - POST/PUT `/api/dice/w4123` 或 `/dice/api/w4123`（专门为 w4123/Dice 的第三方日志上传插件提供的上传接口）
 - PUT `/api/dice/backup-upload` 或 `/dice/api/backup-upload`（备用上传接口，主存储失败时自动调用，支持级联）
-- GET `/api/dice/load_data?key=AbCd&password=123456` 或 `/dice/api/load_data?key=AbCd&password=123456`
+- POST `/api/dice/load_data` 或 `/dice/api/load_data`，JSON：`{"key":"AbCd","password":"123456"}`。旧 GET 查询参数形式仅为兼容保留，公网部署请勿使用，避免密码进入浏览器历史和代理日志。
 - 成功返回示例：`{"url":"http://localhost:3000/?key=AbCd#123456"}`
 
 `uniform_id` 冒号后的标识符允许字母、数字、下划线、点和短横线。手动清理日志请使用登录后的管理后台。完整接口、健康检查、指标和管理 API 说明见 `/api-docs`。
@@ -136,7 +136,9 @@ cp config.toml.example config.toml
 host = "0.0.0.0"       # 监听地址
 port = 3000             # 监听端口
 trust_proxy = false     # 可信 CDN/反代链路才设为 true；直连部署保持 false
+trusted_proxy_cidrs = ["127.0.0.1/32", "::1/128"] # 只有实际 TCP 对端命中时才信任转发头
 allowed_hosts = ["localhost", "127.0.0.1", "::1"] # 加入用户实际访问的公开域名
+hsts_max_age_seconds = 0 # HTTPS 全站确认可用后建议设为 31536000
 
 [storage]
 sqlite_path = "./data/scardice.db" # SQLite 数据库路径
@@ -164,6 +166,9 @@ ffmpeg_path = "ffmpeg" # 系统 FFmpeg 路径；项目不捆绑 GPL 二进制
 allowed_hosts = ["*.qq.com", "*.qlogo.cn", "*.qpic.cn", "*.gtimg.cn", "*.discordapp.com", "*.kookapp.cn", "*.kookcdn.com", "*.kaiheila.cn"] # 可信上游资源与平台头像域名
 allow_public_hosts = false # 不建议开启；true 时允许任意公网域名
 download_timeout_seconds = 15 # 单资源下载超时
+max_concurrent_jobs = 2 # 图片/音频/无损压缩后台并发；上限 4
+max_image_pixels = 40000000 # 图片像素总数硬限制
+max_total_mb = 4096 # CQ 资源目录硬盘总配额
 
 [accounts]
 enabled = false # 开启账号注册、登录与云端工程
@@ -199,7 +204,7 @@ password = ""            # 仅账号模式关闭时使用；留空则启动时�
 
 [metrics]
 enabled = false           # 默认关闭 /metrics
-token = ""                # 可选：开启后要求 Authorization: Bearer <token>
+token = ""                # enabled=true 时必填，否则服务拒绝启动
 
 [security]
 injection_guard_enabled = true # 上传内容注入拦截；命中后拒绝写库并记录审计日志
@@ -247,6 +252,9 @@ admin_bruteforce_block_seconds = 60 # 触发后的封禁时长；期间访问会
 | `ACCOUNTS_INITIAL_ADMIN_PASSWORD` | 首次启动临时管理员密码；首次登录后强制更换               |
 | `ACCOUNTS_INITIAL_ADMIN_EMAIL`    | 临时管理员初始邮箱，可留空                               |
 | `ACCOUNTS_ENCRYPTION_KEY`         | 工程源密钥加密主密钥，至少 32 字符                       |
+| `ACCOUNTS_PASSWORD_ATTEMPTS_PER_MINUTE` | 单一来源网段每分钟密码登录尝试上限                  |
+| `ACCOUNT_KDF_CONCURRENCY`         | 密码 scrypt 并发上限，默认 2、最高 4                    |
+| `ACCOUNT_KDF_QUEUE_LIMIT`         | 等待密码校验的队列上限，默认 64、最高 256               |
 | `ACCOUNTS_CAPTCHA_PROVIDER`       | `image`、`altcha`、`turnstile` 或 `hcaptcha`             |
 | `SMTP_HOST` / `SMTP_PORT`         | SMTP 主机与端口                                           |
 | `SMTP_SECURE`                     | 是否使用隐式 TLS                                          |
@@ -264,6 +272,11 @@ admin_bruteforce_block_seconds = 60 # 触发后的封禁时长；期间访问会
 | `ADMIN_PASSWORD`                  | 仅账号模式关闭时使用的旧管理后台密码                       |
 | `METRICS_ENABLED`                 | 是否开启 `/metrics`                                        |
 | `METRICS_TOKEN`                   | `/metrics` Bearer token                                    |
+| `TRUSTED_PROXY_CIDRS`             | 允许提供转发头的直接代理 CIDR，逗号分隔                    |
+| `HSTS_MAX_AGE_SECONDS`            | HTTPS HSTS 秒数；本地 HTTP 保持 0                           |
+| `CQ_RESOURCE_CACHE_MAX_CONCURRENT_JOBS` | 资源处理并发上限                                      |
+| `CQ_RESOURCE_CACHE_MAX_IMAGE_PIXELS` | 图片最大像素总数                                         |
+| `CQ_RESOURCE_CACHE_MAX_TOTAL_MB`  | CQ 资源目录硬盘总配额                                      |
 | `INJECTION_GUARD_ENABLED`         | 是否开启上传内容注入拦截                                   |
 | `SECURITY_AUDIT_LOG_PATH`         | 安全审计日志路径                                           |
 | `SECURITY_WARNING_QUOTES`         | 安全拦截调笑语句，逗号分隔                                 |
@@ -303,13 +316,14 @@ retention_days = 0 # 管理员默认永久保留
 
 ### 反向代理与 CDN 客户端 IP
 
-当服务位于可信的 Nginx、Caddy、Cloudflare、Fastly 或其他 CDN 后方时，将 `trust_proxy = true`，或设置 `TRUST_PROXY=true`。服务端按以下优先级读取真实客户端 IP：`CF-Connecting-IP`、`True-Client-IP`、`Fastly-Client-IP`、`X-Real-IP`、`X-Client-IP`、`X-Forwarded-For`，最后兼容 RFC 7239 的 `Forwarded: for=`。
+当服务位于可信的 Nginx、Caddy、Cloudflare、Fastly 或其他 CDN 后方时，将 `trust_proxy = true`，并把直接连接本服务的代理地址或网段写入 `trusted_proxy_cidrs`（或 `TRUSTED_PROXY_CIDRS`）。服务端只有在 TCP 对端命中该列表时，才按以下优先级读取真实客户端 IP：`CF-Connecting-IP`、`True-Client-IP`、`Fastly-Client-IP`、`X-Real-IP`、`X-Client-IP`、`X-Forwarded-For`，最后兼容 RFC 7239 的 `Forwarded: for=`。
 
-这些请求头只有在 `trust_proxy` 开启时才会被信任；直连部署保持 `false`，这样客户端不能伪造 IP。反向代理应覆盖或清理来自公网请求的同名请求头，并把 CDN 到代理之间的链路设为可信。`allowed_hosts` 仍必须加入用户实际访问的域名；它与 `trust_proxy` 是两项独立的安全检查。
+这些请求头需要同时满足 `trust_proxy=true` 与直接对端命中 `trusted_proxy_cidrs` 才会被信任；直连部署保持 `false`。不要使用 `0.0.0.0/0` 或 `::/0`，反向代理也应覆盖或清理公网请求携带的同名头。`allowed_hosts` 仍必须加入用户实际访问的域名；它与代理信任是两项独立检查。
 
 ```toml
 [server]
 trust_proxy = true
+trusted_proxy_cidrs = ["127.0.0.1/32", "::1/128"]
 ```
 
 如果使用 Cloudflare，通常保留 `CF-Connecting-IP`，并让 Cloudflare 转发到源站；如果使用普通反代，至少配置 `X-Forwarded-For` 或 `X-Real-IP`。真实 IP 会用于上传记录、限流、管理后台爆破防护和安全拦截关联。
@@ -320,7 +334,7 @@ trust_proxy = true
 
 PNG、JPEG 和 WebP 会以 `image_quality` 重编码为 WebP；只有更小才替换原文件。GIF 会保持原格式和动画。语音会通过系统 FFmpeg 转为 128kbps（或 `audio_bitrate_kbps`）的 Ogg Opus；如果输出反而更大则保留较小的原文件。项目只调用运维环境提供的 FFmpeg，不捆绑其二进制，从而不把 GPL 分发义务混入 MIT 发布包。所有保存后的资源还会使用最高质量 Brotli 无损压缩；支持 Brotli 的浏览器直接得到压缩流，其他客户端由服务端即时解压。
 
-资源在有损处理后以 SHA-256 命名，相同内容只保存一份；编辑器上传重复文件时会提示并复用现有资源。`retention_days` 从资源归档成功时计算，与日志的 `log_retention_days` 独立。未归档的 CQ 图片和语音在新版界面只显示 `【图片】` / `【语音】`，不会暴露 CQ 原文；用户也可以主动填写并验证一个 HTTP(S) 直链，这类资源直接由浏览器读取、不写入服务端。被拒绝、超限、超时或下载失败的 CQ 资源不会导致日志上传失败。
+资源在有损处理后以 SHA-256 命名，相同内容只保存一份；编辑器上传重复文件时会提示并复用现有资源。处理任务受 `max_concurrent_jobs` 限制，图片同时受 `max_image_pixels` 限制，整个目录受 `max_total_mb` 硬配额限制。`retention_days` 从资源归档成功时计算，与日志的 `log_retention_days` 独立。未归档的 CQ 图片和语音在新版界面只显示 `【图片】` / `【语音】`，不会暴露 CQ 原文；用户也可以主动填写并验证一个 HTTP(S) 直链，这类资源直接由浏览器读取、不写入服务端。远程资源解析会锁定已校验的公网 IP，并在每次重定向后重新校验，避免 DNS 重绑定访问内网。被拒绝、超限、超时或下载失败的 CQ 资源不会导致日志上传失败。
 
 ### QQ、Discord 与 KOOK 头像
 
@@ -336,9 +350,20 @@ PNG、JPEG 和 WebP 会以 `image_quality` 重编码为 WebP；只有更小才�
 
 预览支持手动/自动演出、逐词动画、录制编排、组内头像跟随滚动、图片查看、语音波形播放、按消息边界分页的长图导出，以及尽可能把资源内嵌为 Data URL 的独立 HTML。传统 Word 导出仍采用原先的角色名与正文排版，不导出聊天气泡。
 
-开启 `[accounts].enabled` 后，注册时会分别填写只允许字母、数字、`_`、`-` 的登录用户名和可自由显示的昵称；登录既支持“用户名或邮箱 + 密码”，也支持邮箱验证码免密登录。用户可在个人中心修改昵称、头像和邮箱，并把自有编辑副本保存为云端工程；登录状态下从网页上传的旧日志会自动归入账号，骰子机器人上传的匿名日志仍可由用户另存为自己的工程。个人中心会同时显示空间、工程数量和未活动保留期限；打开或保存工程都会续期。管理员可以让用户继承账号组期限、永久保留，或单独分配天数。新设备、浏览器指纹或 IP 网段变化（IPv4 `/24`、IPv6 `/64`）以及异常行为会要求邮件验证码或 CAPTCHA。风控只要求验证或冷却，不会自动永久封号。管理员既能访问原有的全部服务端日志，也能在 `/admin` 查看所有用户云端工程副本，并可新增、删除、编辑、升降管理员、改邮箱和密码、分配存储组与保留期限、停用或带理由封禁用户；系统阻止移除最后一个可用管理员。账号模式使用配置中的初始管理员账号完成首次引导，首次登录必须更换正式用户名、邮箱和密码；完成后初始凭据和旧 `[admin].password` 都不能再登录。
+开启 `[accounts].enabled` 后，注册时会分别填写只允许字母、数字、`_`、`-` 的登录用户名和可自由显示的昵称；登录既支持“用户名或邮箱 + 密码”，也支持邮箱验证码免密登录。用户可在个人中心修改昵称、头像和邮箱，并把自有编辑副本保存为云端工程；登录状态下从网页上传的旧日志会自动归入账号，骰子机器人上传的匿名日志仍可由用户另存为自己的工程。工程分享链接本身就是无需登录的只读播放链接：默认有效期动态跟随工程的不活跃保留期限，也可在分享弹窗选择固定 1–365 天或永久；过期链接返回 410，重新生成/更新有效期不会暴露源工程写权限。个人中心会同时显示空间、工程数量和未活动保留期限；打开或保存工程都会续期。管理员可以让用户继承账号组期限、永久保留，或单独分配天数。新设备、浏览器指纹或 IP 网段变化（IPv4 `/24`、IPv6 `/64`）以及异常行为会要求邮件验证码或 CAPTCHA。风控只要求验证或冷却，不会自动永久封号。管理员既能访问原有的全部服务端日志，也能在 `/admin` 查看所有用户云端工程副本，并可新增、删除、编辑、升降管理员、改邮箱和密码、分配存储组与保留期限、停用或带理由封禁用户；系统阻止移除最后一个可用管理员。账号模式使用配置中的初始管理员账号完成首次引导，首次登录必须更换正式用户名、邮箱和密码；完成后初始凭据和旧 `[admin].password` 都不能再登录。
 
 账号开启时 `accounts.encryption_key` 必须至少 32 字符。注册与新设备登录还需要可用 SMTP；建议生产环境使用 HTTPS，并保护配置文件中的 SMTP 密码、CAPTCHA 密钥与加密主密钥。
+
+### 公网部署安全核对表
+
+- 只让 HTTPS 反代/CDN 暴露公网端口，Node 源站绑定内网地址；确认 `allowed_hosts` 只包含真实域名。
+- 只有启用反代时才打开 `trust_proxy`，并把 `trusted_proxy_cidrs` 收窄到实际直连源站的代理网段；不要使用全网 CIDR。
+- 通过环境变量注入 SMTP、Discord/KOOK、CAPTCHA、初始管理员和 `accounts.encryption_key` 等密钥，不提交真实 `config.toml`。
+- 开启 `/metrics` 时必须设置高强度 `metrics.token`；不需要指标时保持关闭。
+- 按硬盘容量设置日志、账号工程和 CQ 资源配额，定期备份 SQLite 数据库及资源目录，并实际演练恢复。
+- 首次登录后立即更换引导管理员凭据；管理员必须同时具有 `admin` 角色并处于 `admin` 组。
+- 分享地址是公开只读播放器链接。固定或永久链接不会延长工程自身保留期；删除/到期的工程无法再通过分享访问。
+- 上线前运行 `pnpm audit --prod`、`npm run lint`、`npm run test:story-format`、`npm run test:account-groups` 与 `npm run build`。
 
 ### 备用API（可选）
 

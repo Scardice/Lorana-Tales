@@ -10,7 +10,7 @@ import { AccountStore } from "../accounts/account-store.js";
 import { createAdminRouter } from "../api/admin.js";
 import { handleDiceApiRequest } from "../api/dice.js";
 import { loadConfig } from "../config/load-config.js";
-import { getClientIp } from "./client-ip.js";
+import { getClientIp, isTrustedProxyRequest, type TrustedProxyPolicy } from "./client-ip.js";
 import {
 	createSecurityInterceptId,
 	formatBruteforceDetail,
@@ -88,8 +88,8 @@ function firstHeaderValue(value) {
 	return String(value || "");
 }
 
-function getExternalProtocol(req, trustProxy) {
-	if (trustProxy) {
+function getExternalProtocol(req, trustProxy: TrustedProxyPolicy) {
+	if (isTrustedProxyRequest(req, trustProxy)) {
 		const forwardedProto = firstHeaderValue(req.headers["x-forwarded-proto"])
 			.split(",")[0]
 			.trim();
@@ -98,8 +98,8 @@ function getExternalProtocol(req, trustProxy) {
 	return req.protocol;
 }
 
-function getExternalHost(req, trustProxy) {
-	if (trustProxy) {
+function getExternalHost(req, trustProxy: TrustedProxyPolicy) {
+	if (isTrustedProxyRequest(req, trustProxy)) {
 		const forwardedHost = firstHeaderValue(req.headers["x-forwarded-host"])
 			.split(",")[0]
 			.trim();
@@ -258,10 +258,16 @@ export async function startServer(
 	config = loadConfig(),
 ): Promise<StartServerResult> {
 	const configuredAdminPassword = String(config.admin?.password || "").trim();
+	if (config.metrics?.enabled && !String(config.metrics?.token || "").trim()) {
+		throw new Error("metrics.token (or METRICS_TOKEN) is required when metrics are enabled");
+	}
 	const accountMode = !!config.accounts?.enabled;
 	const adminPassword = accountMode ? "" : configuredAdminPassword || crypto.randomUUID();
 	const isGeneratedAdminPassword = !accountMode && !configuredAdminPassword;
 	const trustProxy = !!config.server?.trust_proxy;
+	const trustProxyPolicy: TrustedProxyPolicy = trustProxy
+		? (Array.isArray(config.server?.trusted_proxy_cidrs) ? config.server.trusted_proxy_cidrs.map(String) : [])
+		: false;
 	const allowedHosts = getAllowedHosts(config);
 	const brandingLogo = resolveBrandingAsset(
 		config.branding?.logo_path,
@@ -352,7 +358,7 @@ export async function startServer(
 			throw new Error("accounts.encryption_key must contain at least 32 characters when accounts are enabled");
 		}
 		const publicBase = String(config.app.frontend_url || "").replace(/\/$/, "");
-		accountService = new AccountService(new AccountStore(store.db), config.accounts, trustProxy, store, {
+		accountService = new AccountService(new AccountStore(store.db), config.accounts, trustProxyPolicy, store, {
 			siteTitle: String(config.branding.site_title || "Lorana Tales"),
 			logoUrl: brandingLogo && publicBase ? `${publicBase}/branding/logo?v=${brandingLogo.version}` : "",
 		});
@@ -401,10 +407,17 @@ export async function startServer(
 
 	const app = express();
 	app.disable("x-powered-by");
-	app.set("trust proxy", trustProxy);
+	app.set("trust proxy", trustProxy ? trustProxyPolicy : false);
 	app.use(setSecurityHeaders);
 	app.use((req, res, next) => {
-		const host = getExternalHost(req, trustProxy);
+		const hstsSeconds = Math.max(0, Math.min(63_072_000, Number(config.server?.hsts_max_age_seconds || 0)));
+		if (hstsSeconds > 0 && getExternalProtocol(req, trustProxyPolicy) === "https") {
+			res.setHeader("Strict-Transport-Security", `max-age=${Math.floor(hstsSeconds)}`);
+		}
+		next();
+	});
+	app.use((req, res, next) => {
+		const host = getExternalHost(req, trustProxyPolicy);
 		if (!isAllowedHost(host, allowedHosts)) {
 			res.status(400).type("text/plain").send("Invalid Host header");
 			return;
@@ -416,7 +429,7 @@ export async function startServer(
 			next();
 			return;
 		}
-		const block = activeSecurityBlockForIp(getClientIp(req, trustProxy));
+		const block = activeSecurityBlockForIp(getClientIp(req, trustProxyPolicy));
 		if (block) {
 			res.redirect(
 				302,
@@ -465,7 +478,7 @@ export async function startServer(
 		if (
 			!record ||
 			record.expiresAt <= Date.now() ||
-			record.clientIp !== getClientIp(req, trustProxy)
+			record.clientIp !== getClientIp(req, trustProxyPolicy)
 		) {
 			res.status(404).type("application/json").send(JSON.stringify({ error: "Not Found" }));
 			return;
@@ -518,6 +531,10 @@ export async function startServer(
 	app.post("/api/editor/resources", async (req, res) => {
 		if (!resourceCache.enabled) {
 			res.status(503).type("application/json").send(JSON.stringify({ error: "服务端资源存储未开启" }));
+			return;
+		}
+		if (!takeEditorFetchQuota("asset", getClientIp(req, trustProxyPolicy), 20)) {
+			res.status(429).type("application/json").send(JSON.stringify({ error: "resource_upload_rate_limited" }));
 			return;
 		}
 		const kind = String(req.headers["x-resource-kind"] || "").toLowerCase();
@@ -650,7 +667,7 @@ export async function startServer(
 	app.get("/api/editor/avatar/candidates/:id", async (req, res) => {
 		const userId = String(req.params.id || "");
 		if (!/^\d{5,20}$/.test(userId)) { res.status(400).type("application/json").send(JSON.stringify({ error: "invalid_platform_user_id" })); return; }
-		if (!takeEditorFetchQuota("avatar-candidates", getClientIp(req, trustProxy), 30)) { res.status(429).type("application/json").send(JSON.stringify({ error: "avatar_fetch_rate_limited" })); return; }
+		if (!takeEditorFetchQuota("avatar-candidates", getClientIp(req, trustProxyPolicy), 30)) { res.status(429).type("application/json").send(JSON.stringify({ error: "avatar_fetch_rate_limited" })); return; }
 		try {
 			const candidates = await resolveAvatarCandidates(userId, String(req.query.name || ""));
 			res.status(200).set({ "Cache-Control": "no-store", "Content-Type": "application/json; charset=utf-8" }).send(JSON.stringify({ candidates }));
@@ -663,7 +680,7 @@ export async function startServer(
 	app.get("/api/editor/avatar/user/:id", async (req, res) => {
 		const userId = String(req.params.id || "");
 		if (!/^\d{5,20}$/.test(userId)) { res.status(400).type("text/plain").send("Invalid platform user id"); return; }
-		if (!takeEditorFetchQuota("avatar", getClientIp(req, trustProxy), 120)) { res.status(429).type("text/plain").send("Avatar fetch rate limited"); return; }
+		if (!takeEditorFetchQuota("avatar", getClientIp(req, trustProxyPolicy), 120)) { res.status(429).type("text/plain").send("Avatar fetch rate limited"); return; }
 		try {
 			const candidate = await resolveUserAvatar(userId, String(req.query.name || ""));
 			const resourceId = await resourceCache.cacheRemoteImage(candidate.imageUrl);
@@ -682,7 +699,7 @@ export async function startServer(
 			res.status(400).type("text/plain").send("Invalid user id");
 			return;
 		}
-		if (!takeEditorFetchQuota("avatar", getClientIp(req, trustProxy), 120)) {
+		if (!takeEditorFetchQuota("avatar", getClientIp(req, trustProxyPolicy), 120)) {
 			res.status(429).type("text/plain").send("Avatar fetch rate limited");
 			return;
 		}
@@ -699,7 +716,7 @@ export async function startServer(
 	});
 
 	app.post("/api/editor/assets/fetch", async (req, res) => {
-		const clientIp = getClientIp(req, trustProxy);
+		const clientIp = getClientIp(req, trustProxyPolicy);
 		if (!takeEditorFetchQuota("asset", clientIp, 40)) {
 			res.status(429).type("application/json").send(JSON.stringify({ error: "asset_fetch_rate_limited" }));
 			return;
@@ -729,7 +746,7 @@ export async function startServer(
 		store,
 		password: adminPassword,
 		adminFilePath: path.resolve(staticDir, "admin.html"),
-		trustProxy,
+		trustProxy: trustProxyPolicy,
 		retentionDays: config.app.log_retention_days,
 		accountService,
 		security: {
@@ -763,8 +780,8 @@ export async function startServer(
 
 	app.all(/^\/(?:api\/dice|dice\/api)\//, async (req, res) => {
 		try {
-			const protocol = getExternalProtocol(req, trustProxy);
-			const host = getExternalHost(req, trustProxy);
+			const protocol = getExternalProtocol(req, trustProxyPolicy);
+			const host = getExternalHost(req, trustProxyPolicy);
 			const url = `${protocol}://${host}${req.originalUrl}`;
 
 			const headers = new Headers();
@@ -776,7 +793,7 @@ export async function startServer(
 					headers.set(key, value);
 				}
 			}
-			headers.set("x-scardice-client-ip", getClientIp(req, trustProxy));
+			headers.set("x-scardice-client-ip", getClientIp(req, trustProxyPolicy));
 
 			const hasBody = !["GET", "HEAD"].includes(req.method.toUpperCase());
 			const body = hasBody && req.body instanceof Buffer ? req.body : undefined;

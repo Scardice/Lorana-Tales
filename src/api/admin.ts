@@ -1,7 +1,8 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import type { LogStore } from "../storage/log-store.js";
-import { getClientIp } from "../server/client-ip.js";
+import { getClientIp, isTrustedProxyRequest } from "../server/client-ip.js";
+import type { TrustedProxyPolicy } from "../server/client-ip.js";
 import type { AccountService } from "../accounts/router.js";
 
 const SESSION_COOKIE = "scardice_admin_session";
@@ -79,13 +80,6 @@ function keysFromRequest(req) {
 	return keys.map((key) => String(key || "").trim()).filter(Boolean);
 }
 
-function sanitizeCredential(value: unknown): string {
-	const text = String(value ?? "")
-		.replaceAll(/[\r\n\t]+/g, " ")
-		.trim();
-	return text.length > 160 ? `${text.slice(0, 160)}...` : text;
-}
-
 export function createAdminRouter({
 	app,
 	store,
@@ -100,7 +94,7 @@ export function createAdminRouter({
 	store: LogStore;
 	password: string;
 	adminFilePath: string;
-	trustProxy?: boolean;
+	trustProxy?: TrustedProxyPolicy;
 	retentionDays?: number;
 	accountService?: AccountService | null;
 	security?: {
@@ -168,7 +162,7 @@ export function createAdminRouter({
 			: String(req.headers["x-forwarded-proto"] || "");
 		const secure =
 			req.secure ||
-			(trustProxy && forwardedProto.split(",")[0].trim() === "https");
+			(isTrustedProxyRequest(req, trustProxy) && forwardedProto.split(",")[0].trim() === "https");
 		const parts = [
 			`${SESSION_COOKIE}=${encodeURIComponent(token)}`,
 			"Path=/",
@@ -195,24 +189,23 @@ export function createAdminRouter({
 			failedLogins.delete(ip);
 			return true;
 		}
-		return true;
+		return record.lastFailedAt + Math.min(5000, record.count * 500) <= Date.now();
 	}
 
-	async function recordFailedLogin(req, credential: unknown) {
+	async function recordFailedLogin(req, _credential: unknown) {
 		const ip = getClientIp(req, trustProxy);
 		const now = Date.now();
 		const current =
 			failedLogins.get(ip)?.firstFailedAt + bruteForceWindowMs > now
 				? failedLogins.get(ip)
-				: { count: 0, firstFailedAt: now, credentials: [] };
+				: { count: 0, firstFailedAt: now, lastFailedAt: 0, credentials: [] };
 		const nextCount = current.count + 1;
-		const credentials = [
-			...current.credentials,
-			sanitizeCredential(credential),
-		].slice(-bruteForceMaxAttempts);
+		// Never retain submitted passwords. The audit only needs attempt markers.
+		const credentials = [...current.credentials, `[redacted attempt ${nextCount}]`].slice(-bruteForceMaxAttempts);
 		const next = {
 			count: nextCount,
 			firstFailedAt: current.firstFailedAt,
+			lastFailedAt: now,
 			credentials,
 		};
 		failedLogins.set(ip, next);
@@ -340,7 +333,7 @@ export function createAdminRouter({
 		if (!accountService) { sendJson(res, 404, { error: "accounts_disabled" }); return; }
 		try {
 			const body = readJsonBody(req); const email = String(body.email || ""); const newPassword = String(body.password || ""); const username = String(body.username || body.displayName || email.split("@")[0]).trim(); const nickname = String(body.nickname || body.displayName || username).trim();
-			if (!email.includes("@") || newPassword.length < 10) { sendJson(res, 400, { error: "invalid_user" }); return; }
+			if (!email.includes("@") || newPassword.length < 10 || newPassword.length > 256) { sendJson(res, 400, { error: "invalid_user" }); return; }
 			if (accountService.store.getUserByIdentity(username)) { sendJson(res, 409, { error: "user_exists" }); return; }
 			const role = body.role === "admin" ? "admin" : "user";
 			const adminGroup = String(accountService.config.admin_group || "admin");
@@ -380,7 +373,7 @@ export function createAdminRouter({
 	app.post("/admin/api/users/:id/password", async (req, res) => {
 		if (!requireMutationAuth(req, res)) return;
 		if (!accountService) { sendJson(res, 404, { error: "accounts_disabled" }); return; }
-		try { const body = readJsonBody(req); const newPassword = String(body.password || ""); if (newPassword.length < 10 || !accountService.store.getUserById(req.params.id)) { sendJson(res, 400, { error: "invalid_password" }); return; } await accountService.store.updatePassword(req.params.id, newPassword, body.mustChangePassword !== false); accountService.store.audit(actor(req), "admin.password-reset", req.params.id); sendJson(res, 200, { ok: true }); }
+		try { const body = readJsonBody(req); const newPassword = String(body.password || ""); if (newPassword.length < 10 || newPassword.length > 256 || !accountService.store.getUserById(req.params.id)) { sendJson(res, 400, { error: "invalid_password" }); return; } await accountService.store.updatePassword(req.params.id, newPassword, body.mustChangePassword !== false); accountService.store.audit(actor(req), "admin.password-reset", req.params.id); sendJson(res, 200, { ok: true }); }
 		catch { sendJson(res, 400, { error: "password_update_failed" }); }
 	});
 

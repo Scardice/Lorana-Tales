@@ -2,16 +2,31 @@ import crypto from "node:crypto";
 import { spawn } from "node:child_process";
 import { lookup } from "node:dns/promises";
 import fs from "node:fs/promises";
+import http from "node:http";
+import https from "node:https";
 import { createRequire } from "node:module";
 import net from "node:net";
 import path from "node:path";
+import { promisify } from "node:util";
 import {
 	constants as zlibConstants,
-	brotliCompressSync,
-	brotliDecompressSync,
-	deflateSync,
-	inflateSync,
+	brotliCompress,
+	brotliDecompress,
+	deflate,
+	inflate,
 } from "node:zlib";
+
+const brotliCompressAsync = promisify(brotliCompress);
+const brotliDecompressAsync = promisify(brotliDecompress);
+const deflateAsync = promisify(deflate);
+const inflateAsync = promisify(inflate);
+
+class WorkQueue {
+	private active = 0;
+	private waiting: Array<() => void> = [];
+	constructor(private readonly limit: number) {}
+	async run<T>(task: () => Promise<T>) { if (this.active >= this.limit) await new Promise<void>((resolve) => this.waiting.push(resolve)); this.active += 1; try { return await task(); } finally { this.active -= 1; this.waiting.shift()?.(); } }
+}
 
 type ResourceKind = "image" | "audio" | "video" | "file";
 
@@ -27,6 +42,9 @@ export type CqResourceCacheOptions = {
 	allowed_hosts?: string[];
 	allow_public_hosts?: boolean;
 	download_timeout_seconds?: number;
+	max_concurrent_jobs?: number;
+	max_image_pixels?: number;
+	max_total_mb?: number;
 };
 
 type NormalizedOptions = {
@@ -41,6 +59,9 @@ type NormalizedOptions = {
 	allowedHosts: string[];
 	allowPublicHosts: boolean;
 	downloadTimeoutMs: number;
+	maxConcurrentJobs: number;
+	maxImagePixels: number;
+	maxTotalBytes: number;
 };
 
 type ResourceCandidate = {
@@ -64,6 +85,12 @@ type ImageDataLike = {
 
 const require = createRequire(import.meta.url);
 const RESOURCE_ID_RE = /^[a-f0-9]{64}\.(?:webp|png|jpg|jpeg|gif|avif|mp3|ogg|wav|aac|amr|silk|mp4|bin)$/;
+const RESOURCE_TEMP_RE = /^[a-f0-9]{64}\.(?:webp|png|jpg|jpeg|gif|avif|mp3|ogg|wav|aac|amr|silk|mp4|bin)\.[a-f0-9-]{36}\.tmp$/;
+
+function isStoredResourceEntry(entry: string) {
+	return RESOURCE_ID_RE.test(entry.replace(/\.br$/, "")) || RESOURCE_TEMP_RE.test(entry);
+}
+
 const MAX_DECODED_LOG_BYTES = 32 * 1024 * 1024;
 const cleanupIntervalMs = 60 * 60 * 1000;
 
@@ -168,6 +195,9 @@ function normalizeOptions(options: CqResourceCacheOptions = {}): NormalizedOptio
 		allowPublicHosts: parseBoolean(options.allow_public_hosts, false),
 		downloadTimeoutMs:
 			clampNumber(options.download_timeout_seconds, 15, 1, 60) * 1000,
+		maxConcurrentJobs: clampNumber(options.max_concurrent_jobs, 2, 1, 4),
+		maxImagePixels: clampNumber(options.max_image_pixels, 40_000_000, 1_000_000, 100_000_000),
+		maxTotalBytes: clampNumber(options.max_total_mb, 4096, 64, 1_048_576) * 1024 * 1024,
 	};
 }
 
@@ -235,6 +265,46 @@ function inferMime(bytes: Buffer, fallback = ""): string {
 	return fallback.split(";")[0].trim().toLowerCase();
 }
 
+function encodedImageDimensions(bytes: Buffer, mime: string): { width: number; height: number } | null {
+	if (mime === "image/png" && bytes.length >= 24) {
+		return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
+	}
+	if (mime === "image/gif" && bytes.length >= 10) {
+		return { width: bytes.readUInt16LE(6), height: bytes.readUInt16LE(8) };
+	}
+	if (mime === "image/jpeg") {
+		let offset = 2;
+		while (offset + 9 < bytes.length) {
+			if (bytes[offset] !== 0xff) { offset += 1; continue; }
+			const marker = bytes[offset + 1];
+			if (marker === 0xd8 || marker === 0xd9 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) { offset += 2; continue; }
+			const length = bytes.readUInt16BE(offset + 2);
+			if (length < 2 || offset + length + 2 > bytes.length) break;
+			if ([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf].includes(marker)) {
+				return { width: bytes.readUInt16BE(offset + 7), height: bytes.readUInt16BE(offset + 5) };
+			}
+			offset += length + 2;
+		}
+	}
+	if (mime === "image/webp" && bytes.length >= 30) {
+		const chunk = bytes.subarray(12, 16).toString("ascii");
+		if (chunk === "VP8X") {
+			return {
+				width: 1 + bytes.readUIntLE(24, 3),
+				height: 1 + bytes.readUIntLE(27, 3),
+			};
+		}
+		if (chunk === "VP8 " && bytes.length >= 30) {
+			return { width: bytes.readUInt16LE(26) & 0x3fff, height: bytes.readUInt16LE(28) & 0x3fff };
+		}
+		if (chunk === "VP8L" && bytes.length >= 25) {
+			const packed = bytes.readUInt32LE(21);
+			return { width: 1 + (packed & 0x3fff), height: 1 + ((packed >>> 14) & 0x3fff) };
+		}
+	}
+	return null;
+}
+
 function extensionForMime(mime: string, kind: ResourceKind): string {
 	const extensions: Record<string, string> = {
 		"image/webp": "webp", "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/avif": "avif",
@@ -285,45 +355,49 @@ async function assertSafeRemoteUrl(rawUrl: string, options: NormalizedOptions) {
 	if (!options.allowPublicHosts && !hostMatches(host, options.allowedHosts)) throw new Error(`resource host is not allowed: ${host}`);
 	if (net.isIP(host)) {
 		if (!isPublicIp(host)) throw new Error("resource host resolves to a private address");
-		return url;
+		return { url, address: host, family: net.isIP(host) };
 	}
 	const addresses = await lookup(host, { all: true, verbatim: true });
 	if (!addresses.length || addresses.some((record) => !isPublicIp(record.address))) throw new Error("resource host resolves to a private address");
-	return url;
+	return { url, address: addresses[0].address, family: addresses[0].family };
 }
 
 async function readRemoteResource(rawUrl: string, options: NormalizedOptions): Promise<{ bytes: Buffer; mime: string }> {
-	let url = await assertSafeRemoteUrl(rawUrl, options);
+	let target = await assertSafeRemoteUrl(rawUrl, options);
 	for (let redirectCount = 0; redirectCount <= 3; redirectCount += 1) {
-		const controller = new AbortController();
-		const timer = setTimeout(() => controller.abort(), options.downloadTimeoutMs);
-		try {
-			const response = await fetch(url, { redirect: "manual", signal: controller.signal, headers: { Accept: "image/*,audio/*,application/octet-stream;q=0.7" } });
-			if ([301, 302, 303, 307, 308].includes(response.status)) {
-				const location = response.headers.get("location");
-				if (!location) throw new Error("resource redirect has no location");
-				url = await assertSafeRemoteUrl(new URL(location, url).toString(), options);
-				continue;
-			}
-			if (!response.ok || !response.body) throw new Error(`resource download returned ${response.status}`);
-			const contentLength = Number(response.headers.get("content-length") || 0);
-			if (contentLength > options.maxFileBytes) throw new Error("resource exceeds configured size limit");
-			const chunks: Uint8Array[] = [];
-			let total = 0;
-			for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
-				total += chunk.byteLength;
-				if (total > options.maxFileBytes) throw new Error("resource exceeds configured size limit");
-				chunks.push(chunk);
-			}
-			return { bytes: Buffer.concat(chunks), mime: response.headers.get("content-type") || "" };
-		} finally {
-			clearTimeout(timer);
+		const response = await new Promise<{ status: number; headers: http.IncomingHttpHeaders; bytes: Buffer }>((resolve, reject) => {
+			const transport = target.url.protocol === "https:" ? https : http;
+			const request = transport.request(target.url, {
+				headers: { Accept: "image/*,audio/*,application/octet-stream;q=0.7", "User-Agent": "Lorana-Tales-resource-cache/1" },
+				lookup: (_hostname, _options, callback) => callback(null, target.address, target.family),
+			}, (incoming) => {
+				const contentLength = Number(incoming.headers["content-length"] || 0);
+				if (contentLength > options.maxFileBytes) { incoming.destroy(); reject(new Error("resource exceeds configured size limit")); return; }
+				const chunks: Buffer[] = []; let total = 0;
+				incoming.on("data", (chunk: Buffer) => { total += chunk.byteLength; if (total > options.maxFileBytes) incoming.destroy(new Error("resource exceeds configured size limit")); else chunks.push(chunk); });
+				incoming.on("end", () => resolve({ status: incoming.statusCode || 0, headers: incoming.headers, bytes: Buffer.concat(chunks) }));
+				incoming.on("error", reject);
+			});
+			request.setTimeout(options.downloadTimeoutMs, () => request.destroy(new Error("resource download timed out")));
+			request.once("error", reject); request.end();
+		});
+		if ([301, 302, 303, 307, 308].includes(response.status)) {
+			const location = String(response.headers.location || "");
+			if (!location) throw new Error("resource redirect has no location");
+			target = await assertSafeRemoteUrl(new URL(location, target.url).toString(), options);
+			continue;
 		}
+		if (response.status < 200 || response.status >= 300) throw new Error(`resource download returned ${response.status}`);
+		return { bytes: response.bytes, mime: String(response.headers["content-type"] || "") };
 	}
 	throw new Error("resource redirect limit exceeded");
 }
 
-async function optimizeImage(bytes: Buffer, mime: string, quality: number): Promise<{ bytes: Buffer; mime: string }> {
+async function optimizeImage(bytes: Buffer, mime: string, quality: number, maxPixels: number): Promise<{ bytes: Buffer; mime: string }> {
+	const dimensions = encodedImageDimensions(bytes, mime);
+	if (dimensions && (!dimensions.width || !dimensions.height || dimensions.width * dimensions.height > maxPixels)) {
+		throw new Error("image pixel count exceeds configured limit");
+	}
 	if (!["image/png", "image/jpeg", "image/webp"].includes(mime)) return { bytes, mime };
 	try {
 		const codecs = await loadImageCodecs();
@@ -333,6 +407,7 @@ async function optimizeImage(bytes: Buffer, mime: string, quality: number): Prom
 			: mime === "image/jpeg"
 				? await codecs.decodeJpeg(input)
 				: await codecs.decodeWebp(input);
+		if (!image.width || !image.height || image.width * image.height > maxPixels) throw new Error("image pixel count exceeds configured limit");
 		const encoded = Buffer.from(await codecs.encodeWebp(image, { quality, method: 6 }));
 		return encoded.byteLength < bytes.byteLength
 			? { bytes: encoded, mime: "image/webp" }
@@ -365,9 +440,13 @@ async function optimizeAudio(bytes: Buffer, mime: string, options: NormalizedOpt
 export class CqResourceCache {
 	readonly options: NormalizedOptions;
 	private lastCleanupAt = 0;
+	private readonly jobs: WorkQueue;
+	private readonly writes = new WorkQueue(1);
+	private knownStorageBytes: number | null = null;
 
 	constructor(options: CqResourceCacheOptions = {}) {
 		this.options = normalizeOptions(options);
+		this.jobs = new WorkQueue(this.options.maxConcurrentJobs);
 	}
 
 	get enabled() {
@@ -400,7 +479,7 @@ export class CqResourceCache {
 		if (typeof stored.data !== "string" || String(stored.client || "").toLowerCase() === "parquet") return { storedText, cachedCount: 0 };
 
 		let decoded: Buffer;
-		try { decoded = inflateSync(Buffer.from(stored.data, "base64"), { maxOutputLength: MAX_DECODED_LOG_BYTES }); } catch { return { storedText, cachedCount: 0 }; }
+		try { decoded = await inflateAsync(Buffer.from(stored.data, "base64"), { maxOutputLength: MAX_DECODED_LOG_BYTES }); } catch { return { storedText, cachedCount: 0 }; }
 		let payload: unknown;
 		try { payload = JSON.parse(decoded.toString("utf-8")); } catch { return { storedText, cachedCount: 0 }; }
 
@@ -460,7 +539,7 @@ export class CqResourceCache {
 			return value;
 		};
 		rewrite(payload);
-		stored.data = deflateSync(Buffer.from(JSON.stringify(payload)), { level: 9 }).toString("base64");
+		stored.data = (await deflateAsync(Buffer.from(JSON.stringify(payload)), { level: 9 })).toString("base64");
 		this.cleanupExpired().catch((error) => console.warn(`[resource-cache] Cleanup failed: ${error instanceof Error ? error.message : String(error)}`));
 		return { storedText: JSON.stringify(stored), cachedCount: replacements.size };
 	}
@@ -471,14 +550,17 @@ export class CqResourceCache {
 	}
 
 	private async cacheCandidate(candidate: ResourceCandidate, supplied?: { bytes: Buffer; mime: string }): Promise<{ resourceId: string; reused: boolean }> {
+		return this.jobs.run(async () => {
 		const downloaded = supplied || (candidate.base64
 			? { bytes: Buffer.from(candidate.base64.replaceAll(/\s+/g, ""), "base64"), mime: "" }
 			: await readRemoteResource(candidate.remoteUrl || "", this.options));
 		if (!downloaded.bytes.byteLength || downloaded.bytes.byteLength > this.options.maxFileBytes) throw new Error("resource exceeds configured size limit");
 		let mime = inferMime(downloaded.bytes, downloaded.mime);
-		if (mime === "text/html" || mime === "application/xhtml+xml") throw new Error("resource is not media");
+		const imageMimes = new Set(["image/png", "image/jpeg", "image/webp", "image/gif", "image/avif"]);
+		const audioMimes = new Set(["audio/mpeg", "audio/ogg", "audio/wav", "audio/aac", "audio/amr", "audio/silk", "application/octet-stream"]);
+		if ((candidate.kind === "image" && !imageMimes.has(mime)) || (candidate.kind === "audio" && !audioMimes.has(mime))) throw new Error("resource MIME type does not match requested media kind");
 		let normalized = candidate.kind === "image"
-			? await optimizeImage(downloaded.bytes, mime, this.options.imageQuality)
+			? await optimizeImage(downloaded.bytes, mime, this.options.imageQuality, this.options.maxImagePixels)
 			: candidate.kind === "audio"
 				? await optimizeAudio(downloaded.bytes, mime, this.options)
 				: { bytes: downloaded.bytes, mime };
@@ -487,20 +569,38 @@ export class CqResourceCache {
 		const resourceId = `${crypto.createHash("sha256").update(normalized.bytes).digest("hex")}.${extension}`;
 		const reused = await this.writeResource(resourceId, normalized.bytes);
 		return { resourceId, reused };
+		});
 	}
 
 	private async writeResource(resourceId: string, bytes: Buffer): Promise<boolean> {
+		return this.writes.run(async () => {
 		await fs.mkdir(this.options.storagePath, { recursive: true });
 		const rawPath = path.join(this.options.storagePath, resourceId);
 		const brPath = `${rawPath}.br`;
 		try { await fs.access(rawPath); await fs.utimes(rawPath, new Date(), new Date()); return true; } catch { /* try Brotli path */ }
 		try { await fs.access(brPath); await fs.utimes(brPath, new Date(), new Date()); return true; } catch { /* write below */ }
-		const compressed = brotliCompressSync(bytes, { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 11 } });
+		const compressed = await brotliCompressAsync(bytes, { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 11 } });
 		const target = compressed.byteLength < bytes.byteLength ? brPath : rawPath;
 		const body = compressed.byteLength < bytes.byteLength ? compressed : bytes;
+		const storedBytes = await this.storageBytes();
+		if (storedBytes + body.byteLength > this.options.maxTotalBytes) throw new Error("resource cache storage quota exceeded");
 		const temporary = `${target}.${crypto.randomUUID()}.tmp`;
 		await fs.writeFile(temporary, body, { flag: "wx" });
-		try { await fs.rename(temporary, target); return false; } catch (error) { await fs.unlink(temporary).catch(() => undefined); if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; return true; }
+		try { await fs.rename(temporary, target); this.knownStorageBytes = storedBytes + body.byteLength; return false; } catch (error) { await fs.unlink(temporary).catch(() => undefined); if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; return true; }
+		});
+	}
+
+	private async storageBytes(): Promise<number> {
+		if (this.knownStorageBytes !== null) return this.knownStorageBytes;
+		let entries: string[];
+		try { entries = await fs.readdir(this.options.storagePath); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0; throw error; }
+		let total = 0;
+		for (const entry of entries) {
+			if (!isStoredResourceEntry(entry)) continue;
+			try { const stat = await fs.stat(path.join(this.options.storagePath, entry)); if (stat.isFile()) total += stat.size; } catch { /* file changed during scan */ }
+		}
+		this.knownStorageBytes = total;
+		return total;
 	}
 
 	async readResource(resourceId: string, acceptsBrotli: boolean): Promise<ResourceResponse | null> {
@@ -509,7 +609,7 @@ export class CqResourceCache {
 		const extension = resourceId.slice(resourceId.lastIndexOf(".") + 1);
 		try {
 			const compressed = await fs.readFile(`${rawPath}.br`);
-			return { body: acceptsBrotli ? compressed : brotliDecompressSync(compressed), contentType: mimeForExtension(extension), contentEncoding: acceptsBrotli ? "br" : undefined };
+			return { body: acceptsBrotli ? compressed : await brotliDecompressAsync(compressed), contentType: mimeForExtension(extension), contentEncoding: acceptsBrotli ? "br" : undefined };
 		} catch { /* try raw file */ }
 		try { return { body: await fs.readFile(rawPath), contentType: mimeForExtension(extension) }; } catch { return null; }
 	}
@@ -522,10 +622,11 @@ export class CqResourceCache {
 		const cutoff = Date.now() - this.options.retentionDays * 24 * 60 * 60 * 1000;
 		let deleted = 0;
 		for (const entry of entries) {
-			if (!RESOURCE_ID_RE.test(entry.replace(/\.br$/, "")) && !/^[a-f0-9-]+\.tmp$/.test(entry)) continue;
+			if (!isStoredResourceEntry(entry)) continue;
 			const target = path.join(this.options.storagePath, entry);
 			try { const stat = await fs.stat(target); if (stat.isFile() && stat.mtimeMs < cutoff) { await fs.unlink(target); deleted += 1; } } catch { /* another request may have removed it */ }
 		}
+		if (deleted) this.knownStorageBytes = null;
 		return deleted;
 	}
 }

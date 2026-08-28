@@ -1,5 +1,5 @@
 import type { IncomingHttpHeaders, IncomingMessage } from "node:http";
-import { isIP } from "node:net";
+import { BlockList, isIP } from "node:net";
 
 type RequestLike = Pick<IncomingMessage, "headers" | "socket"> & {
 	ip?: string;
@@ -57,8 +57,26 @@ function socketAddress(req: RequestLike): string {
  * Resolve the client address only when the request came through a trusted
  * proxy. This keeps direct deployments safe from forged forwarding headers.
  */
-export function getClientIp(req: RequestLike, trustProxy: boolean): string {
-	if (!trustProxy) return socketAddress(req);
+export type TrustedProxyPolicy = boolean | string[];
+
+export function isTrustedProxyRequest(req: RequestLike, policy: TrustedProxyPolicy): boolean {
+	if (!policy) return false;
+	const socket = normalizeCandidate(socketAddress(req).replace(/^::ffff:/, ""));
+	if (!socket) return false;
+	const entries = Array.isArray(policy) ? policy : ["127.0.0.1/32", "::1/128"];
+	const list = new BlockList();
+	for (const entry of entries) {
+		const [address, prefixText] = String(entry).trim().split("/");
+		const family = isIP(address);
+		const prefix = Number(prefixText);
+		if (!family || !Number.isInteger(prefix) || prefix < 0 || prefix > (family === 4 ? 32 : 128)) continue;
+		list.addSubnet(address, prefix, family === 4 ? "ipv4" : "ipv6");
+	}
+	return list.check(socket, isIP(socket) === 4 ? "ipv4" : "ipv6");
+}
+
+export function getClientIp(req: RequestLike, trustProxy: TrustedProxyPolicy): string {
+	if (!isTrustedProxyRequest(req, trustProxy)) return socketAddress(req);
 
 	for (const header of DIRECT_CLIENT_IP_HEADERS) {
 		const candidate = normalizeCandidate(firstHeaderValue(req.headers[header]));

@@ -9,10 +9,26 @@ import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
 
 import { AccountStore } from "../src/accounts/account-store";
 import { AccountService } from "../src/accounts/router";
+import { getClientIp } from "../src/server/client-ip";
 import { storyFromLogItems, storyStreamingText } from "../web/src/story/model";
 import { createStoryPackage, readStoryPackage } from "../web/src/story/package";
 import { createPerformanceHtml } from "../web/src/story/standalone-performance";
 import type { StoryArchive, StoryCharacter } from "../web/src/story/types";
+
+const forwardedRequest = (remoteAddress: string, forwardedFor: string) => ({
+	headers: { "x-forwarded-for": forwardedFor },
+	socket: { remoteAddress },
+});
+assert.equal(
+	getClientIp(forwardedRequest("203.0.113.10", "198.51.100.20") as never, ["127.0.0.1/32"]),
+	"203.0.113.10",
+	"不可信直连请求不能伪造 X-Forwarded-For",
+);
+assert.equal(
+	getClientIp(forwardedRequest("127.0.0.1", "198.51.100.20") as never, ["127.0.0.1/32"]),
+	"198.51.100.20",
+	"可信反代应传递客户端 IP",
+);
 
 async function rejects(action: () => Promise<unknown>, pattern: RegExp) {
 	await assert.rejects(action, pattern);
@@ -152,6 +168,25 @@ try {
 	const address = accountServer.address();
 	assert.ok(address && typeof address === "object");
 	const accountBase = `http://127.0.0.1:${address.port}`;
+	const authCookie = `scardice_account_session=${trustedSession.token}; scardice_account_device=${trustedDevice}; scardice_account_csrf=${trustedSession.csrfToken}`;
+	const shareResponse = await fetch(`${accountBase}/api/account/projects/${binaryProject!.id}/share`, {
+		method: "POST",
+		headers: {
+			"content-type": "application/json",
+			"user-agent": trustedDeviceAgent,
+			"x-csrf-token": trustedSession.csrfToken,
+			cookie: authCookie,
+		},
+		body: JSON.stringify({ expiryMode: "fixed", durationDays: 1 }),
+	});
+	assert.equal(shareResponse.status, 200);
+	const share = await shareResponse.json() as { token: string };
+	const publicShareResponse = await fetch(`${accountBase}/api/shared-projects/${share.token}`);
+	assert.equal(publicShareResponse.status, 200, "有效分享链接应直接返回播放器工程");
+	database.prepare("UPDATE editor_project_shares SET expires_at = ? WHERE project_id = ?").run("2020-01-01T00:00:00.000Z", binaryProject!.id);
+	const expiredShareResponse = await fetch(`${accountBase}/api/shared-projects/${share.token}`);
+	assert.equal(expiredShareResponse.status, 410, "过期分享链接应明确返回 410");
+
 	const logoutResponse = await fetch(`${accountBase}/api/account/logout`, {
 		method: "POST",
 		headers: {
@@ -187,6 +222,8 @@ database.close();
 const withUnknownFile = { ...entries, "unlisted.bin": new Uint8Array([1]) };
 await rejects(() => readStoryPackage(zipSync(withUnknownFile)), /清单外文件/);
 await rejects(() => readStoryPackage(zipSync({ ...entries, "../escape.bin": new Uint8Array([1]) })), /不安全路径/);
+const compressedBomb = zipSync({ "story.lorana": new Uint8Array(2 * 1024 * 1024) }, { level: 9 });
+await rejects(() => readStoryPackage(compressedBomb), /压缩率异常/);
 
 const executableStoryEntries = { ...entries };
 executableStoryEntries["story.lorana"] = strToU8(`${strFromU8(entries["story.lorana"])}\n<script src="https://example.invalid/evil.js">\n`);

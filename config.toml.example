@@ -19,10 +19,17 @@ port = 3000
 # false 时完全忽略外部转发头，适合直连部署，也能避免客户端伪造 IP。
 trust_proxy = false
 
+# 只有请求的 TCP 对端地址命中这里时，才会读取转发头。不要填 0.0.0.0/0 或 ::/0。
+# 单层本机 Nginx/Caddy 通常保留默认值；CDN 后还有独立反代时，填写该反代到本服务所用的真实出口网段。
+trusted_proxy_cidrs = ["127.0.0.1/32", "::1/128"]
+
 # 允许访问后端的 Host 头白名单。
 # 列表外 Host 会返回 400，可防止 Host header poisoning 影响 CORS 和分享链接生成。
 # 反代/CDN 部署时填写用户实际访问的域名，以及代理转发到源站时使用的 Host（如有不同）。
 allowed_hosts = ["localhost", "127.0.0.1", "::1"]
+
+# HTTPS 公网部署建议设为 31536000；本地 HTTP 或尚未确认 HTTPS 全站可用时保持 0。
+hsts_max_age_seconds = 0
 
 [storage]
 # SQLite 数据库路径。
@@ -93,6 +100,13 @@ allow_public_hosts = false
 # 下载单个资源的超时时间，单位秒。超时资源会保留原上游链接，不影响本次日志上传。
 download_timeout_seconds = 15
 
+# 图片解码/FFmpeg/最高质量 Brotli 的并发上限。CPU 可以慢，但不要用高并发换速度。
+max_concurrent_jobs = 2
+# 图片解码前后的像素总数硬限制，防止体积很小但尺寸巨大的图片耗尽内存。
+max_image_pixels = 40000000
+# 整个 CQ 资源目录的硬盘配额，单位 MB；达到后拒绝新增但仍可读取和清理旧资源。
+max_total_mb = 4096
+
 [accounts]
 # 可选账号与云端编辑功能总开关。关闭时不注册账号 API，也不会显示登录入口。
 enabled = false
@@ -127,6 +141,8 @@ email_code_ttl_minutes = 10
 email_code_resend_seconds = 60
 email_code_per_hour = 5
 ip_email_code_per_hour = 10
+# 单个来源网段每分钟最多发起多少次密码校验，防止昂贵 KDF 被用于耗尽内存。
+password_attempts_per_minute = 20
 
 # 账号组配额按工程压缩后的实际数据库占用计算；可继续添加自定义组。
 # retention_days 按云端工程最后修改时间计算；0 表示永久保留。管理员可为单个用户覆盖。
@@ -215,7 +231,7 @@ password = ""
 enabled = false
 
 # /metrics Bearer token。
-# 留空且 enabled=true 时 metrics 公开可读；设置后必须带 Authorization: Bearer <token> 才能读取。
+# enabled=true 时必须设置；缺失会拒绝启动，读取时必须带 Authorization: Bearer <token>。
 token = ""
 
 [security]

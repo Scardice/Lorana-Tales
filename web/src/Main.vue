@@ -1269,20 +1269,6 @@ const nameChanged = (i: CharItem) => {
   const oldName = lastPCName; // 这样做的原因是，如果按回车确认，那么 nameFocus 会在promise触发前触发一遍导致无效
   const newName = i.name;
   if (oldName && newName) {
-    const el = document.createElement("span");
-
-    render(h("span", `${oldName}`), el);
-    const name1 = el.innerHTML;
-
-    render(h("span", `${newName}`), el);
-    const name2 = el.innerHTML;
-
-    render(h("span", `<${oldName}>`), el);
-    const name1w = el.innerHTML;
-
-    render(h("span", `<${newName}>`), el);
-    const name2w = el.innerHTML;
-
     const m = modal.create({
       title: "名字变更",
       preset: "card",
@@ -1290,8 +1276,13 @@ const nameChanged = (i: CharItem) => {
         width: "30rem",
       },
       content: () => [
-        h(NText, {
-          innerHTML: `即将进行名字变更 <b>${name1} -> ${name2}</b><br />将修改信息行，并在文本中进行批量替换（${name1w} 替换为 ${name2w}），确定吗？`,
+        h(NText, null, {
+          default: () => [
+            "即将进行名字变更 ",
+            h("b", null, `${oldName} -> ${newName}`),
+            h("br"),
+            `将修改信息行，并在文本中进行批量替换（<${oldName}> 替换为 <${newName}>），确定吗？`,
+          ],
         }),
       ],
       footer: () => [

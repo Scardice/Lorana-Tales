@@ -672,11 +672,12 @@ export async function handleDiceApiRequest({ request, env }) {
 		return jsonResponse({ error: "Not Found" }, 404, corsHeaders);
 	}
 
-	if (matchesApiPath(pathname, "/load_data") && request.method === "GET") {
-		const corsHeaders = getCorsHeaders(frontendUrl, "GET, OPTIONS");
+	if (matchesApiPath(pathname, "/load_data") && (request.method === "GET" || request.method === "POST")) {
+		const corsHeaders = getCorsHeaders(frontendUrl, "GET, POST, OPTIONS");
 		try {
-			const key = searchParams.get("key");
-			const password = searchParams.get("password");
+			const body = request.method === "POST" ? await request.json().catch(() => ({})) as Record<string, unknown> : {};
+			const key = request.method === "POST" ? String(body.key || "") : searchParams.get("key");
+			const password = request.method === "POST" ? String(body.password || "") : searchParams.get("password");
 
 			if (!key || !password) {
 				return jsonResponse(

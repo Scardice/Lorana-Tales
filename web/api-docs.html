@@ -557,12 +557,12 @@
             <button type="button" class="copy" data-copy="/api/dice/w4123">复制路径</button>
           </div>
           <div class="endpoint">
-            <span class="method get">GET</span>
+            <span class="method post">POST</span>
             <div>
-              <div class="path">/api/dice/load_data?key=AbCd&amp;password=123456</div>
-              <div class="desc">根据上传返回的 key 和 password 读取日志数据。</div>
+              <div class="path">/api/dice/load_data</div>
+              <div class="desc">JSON 提交 key 和 password 读取日志；避免把密码写入 URL、历史与代理日志。</div>
             </div>
-            <button type="button" class="copy" data-copy="/api/dice/load_data?key=AbCd&password=123456">复制路径</button>
+            <button type="button" class="copy" data-copy="/api/dice/load_data">复制路径</button>
           </div>
           <div class="endpoint">
             <span class="method put">PUT</span>
@@ -710,9 +710,11 @@
           <div>
             <div class="sample-head">
               <strong>读取日志</strong>
-              <button type="button" class="copy" data-copy="curl 'http://localhost:3000/dice/api/load_data?key=AbCd&password=123456'">复制</button>
+              <button type="button" class="copy" data-copy="curl -X POST http://localhost:3000/dice/api/load_data -H 'Content-Type: application/json' -d '{&quot;key&quot;:&quot;AbCd&quot;,&quot;password&quot;:&quot;123456&quot;}'">复制</button>
             </div>
-            <pre><code>curl 'http://localhost:3000/dice/api/load_data?key=AbCd&password=123456'</code></pre>
+            <pre><code>curl -X POST http://localhost:3000/dice/api/load_data \
+  -H 'Content-Type: application/json' \
+  -d '{"key":"AbCd","password":"123456"}'</code></pre>
           </div>
         </div>
       </section>

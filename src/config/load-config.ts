@@ -25,7 +25,9 @@ const DEFAULT_CONFIG = {
 		host: "0.0.0.0",
 		port: 3000,
 		trust_proxy: false,
+		trusted_proxy_cidrs: ["127.0.0.1/32", "::1/128"],
 		allowed_hosts: ["localhost", "127.0.0.1", "::1"],
+		hsts_max_age_seconds: 0,
 	},
 	storage: {
 		sqlite_path: "./data/scardice.db",
@@ -60,6 +62,9 @@ const DEFAULT_CONFIG = {
 		allowed_hosts: ["*.qq.com", "*.qlogo.cn", "*.qpic.cn", "*.gtimg.cn", "*.discordapp.com", "*.kookapp.cn", "*.kookcdn.com", "*.kaiheila.cn"],
 		allow_public_hosts: false,
 		download_timeout_seconds: 15,
+		max_concurrent_jobs: 2,
+		max_image_pixels: 40000000,
+		max_total_mb: 4096,
 	},
 	accounts: {
 		enabled: false,
@@ -90,6 +95,7 @@ const DEFAULT_CONFIG = {
 		email_code_resend_seconds: 60,
 		email_code_per_hour: 5,
 		ip_email_code_per_hour: 10,
+		password_attempts_per_minute: 20,
 			smtp: {
 			host: "",
 			port: 587,
@@ -264,6 +270,10 @@ export function loadConfig() {
 		);
 	if (process.env.ALLOWED_HOSTS)
 		config.server.allowed_hosts = parseList(process.env.ALLOWED_HOSTS);
+	if (process.env.HSTS_MAX_AGE_SECONDS) {
+		const value = parseInt(process.env.HSTS_MAX_AGE_SECONDS, 10);
+		if (!Number.isNaN(value)) config.server.hsts_max_age_seconds = value;
+	}
 	if (process.env.SQLITE_PATH)
 		config.storage.sqlite_path = process.env.SQLITE_PATH;
 	if (process.env.DATABASE_PATH)
@@ -275,6 +285,8 @@ export function loadConfig() {
 			process.env.EDITOR_ENABLE_STORY_MODE,
 			config.editor.enable_story_mode,
 		);
+	if (process.env.TRUSTED_PROXY_CIDRS)
+		config.server.trusted_proxy_cidrs = parseList(process.env.TRUSTED_PROXY_CIDRS);
 	if (process.env.SITE_TITLE)
 		config.branding.site_title = process.env.SITE_TITLE;
 	if (process.env.SITE_SHOW_TITLE !== undefined)
@@ -325,6 +337,18 @@ export function loadConfig() {
 	}
 	if (process.env.CQ_RESOURCE_CACHE_FFMPEG_PATH)
 		config.resource_cache.ffmpeg_path = process.env.CQ_RESOURCE_CACHE_FFMPEG_PATH;
+	if (process.env.CQ_RESOURCE_CACHE_MAX_CONCURRENT_JOBS) {
+		const value = parseInt(process.env.CQ_RESOURCE_CACHE_MAX_CONCURRENT_JOBS, 10);
+		if (!Number.isNaN(value)) config.resource_cache.max_concurrent_jobs = value;
+	}
+	if (process.env.CQ_RESOURCE_CACHE_MAX_IMAGE_PIXELS) {
+		const value = parseInt(process.env.CQ_RESOURCE_CACHE_MAX_IMAGE_PIXELS, 10);
+		if (!Number.isNaN(value)) config.resource_cache.max_image_pixels = value;
+	}
+	if (process.env.CQ_RESOURCE_CACHE_MAX_TOTAL_MB) {
+		const value = parseInt(process.env.CQ_RESOURCE_CACHE_MAX_TOTAL_MB, 10);
+		if (!Number.isNaN(value)) config.resource_cache.max_total_mb = value;
+	}
 	if (process.env.CQ_RESOURCE_CACHE_ALLOWED_HOSTS)
 		config.resource_cache.allowed_hosts = parseList(
 			process.env.CQ_RESOURCE_CACHE_ALLOWED_HOSTS,
@@ -364,6 +388,8 @@ export function loadConfig() {
 		config.accounts.allowed_email_domains = parseList(process.env.ACCOUNTS_ALLOWED_EMAIL_DOMAINS);
 	if (process.env.ACCOUNTS_CAPTCHA_PROVIDER)
 		config.accounts.captcha_provider = process.env.ACCOUNTS_CAPTCHA_PROVIDER;
+	if (process.env.ACCOUNTS_PASSWORD_ATTEMPTS_PER_MINUTE)
+		config.accounts.password_attempts_per_minute = Math.max(5, parseInt(process.env.ACCOUNTS_PASSWORD_ATTEMPTS_PER_MINUTE, 10) || config.accounts.password_attempts_per_minute);
 	if (process.env.SMTP_HOST) config.accounts.smtp.host = process.env.SMTP_HOST;
 	if (process.env.SMTP_PORT) config.accounts.smtp.port = parseInt(process.env.SMTP_PORT, 10) || config.accounts.smtp.port;
 	if (process.env.SMTP_SECURE !== undefined)

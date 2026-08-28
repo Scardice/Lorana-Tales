@@ -15,13 +15,15 @@ export interface StoryPackageLimits {
   maxCompressedBytes: number;
   maxUncompressedBytes: number;
   maxAssetBytes: number;
+  maxCompressionRatio: number;
 }
 
 export const DEFAULT_STORY_PACKAGE_LIMITS: StoryPackageLimits = {
-  maxFiles: 4096,
-  maxCompressedBytes: 256 * 1024 * 1024,
-  maxUncompressedBytes: 512 * 1024 * 1024,
-  maxAssetBytes: 64 * 1024 * 1024,
+  maxFiles: 1024,
+  maxCompressedBytes: 128 * 1024 * 1024,
+  maxUncompressedBytes: 256 * 1024 * 1024,
+  maxAssetBytes: 32 * 1024 * 1024,
+  maxCompressionRatio: 100,
 };
 
 interface ManifestAsset { id:string; path:string; hash:string; size:number; mime:string; name?:string; width?:number; height?:number }
@@ -42,7 +44,7 @@ function attributes(line:string){const result=new Map<string,string>();for(const
 function mimeExtension(mime:string){const known:Record<string,string>={"image/jpeg":"jpg","image/png":"png","image/webp":"webp","image/gif":"gif","image/avif":"avif","image/svg+xml":"svg","audio/ogg":"ogg","audio/opus":"opus","audio/mpeg":"mp3","audio/mp4":"m4a","audio/webm":"webm","audio/wav":"wav","audio/flac":"flac","audio/aac":"aac"};return known[mime.toLowerCase().split(";")[0]]||"bin"}
 async function sha256(bytes:Uint8Array){return bytesToHex(nobleSha256(bytes))}
 function zipAsync(files:Record<string,Uint8Array>){return new Promise<Uint8Array>((resolve,reject)=>zip(files,{level:9,mtime:PACKAGE_MTIME},(error,data)=>error?reject(error):resolve(data)))}
-function unzipAsync(bytes:Uint8Array,limits:StoryPackageLimits){let files=0,total=0;return new Promise<Record<string,Uint8Array>>((resolve,reject)=>unzip(bytes,{filter(file){if(!safeArchivePath(file.name))throw new Error("压缩包包含不安全路径");files+=1;total+=Number(file.originalSize||0);if(files>limits.maxFiles)throw new Error("压缩包文件数量过多");if(total>limits.maxUncompressedBytes)throw new Error("压缩包声明的解压大小过大");if(file.name.startsWith("assets/")&&Number(file.originalSize||0)>limits.maxAssetBytes)throw new Error("压缩包包含过大的单个资源");return true}},(error,data)=>error?reject(error):resolve(data)))}
+function unzipAsync(bytes:Uint8Array,limits:StoryPackageLimits){let files=0,total=0;return new Promise<Record<string,Uint8Array>>((resolve,reject)=>unzip(bytes,{filter(file){if(!safeArchivePath(file.name))throw new Error("压缩包包含不安全路径");files+=1;const original=Number(file.originalSize||0),compressed=Number(file.size||0);total+=original;if(files>limits.maxFiles)throw new Error("压缩包文件数量过多");if(total>limits.maxUncompressedBytes)throw new Error("压缩包声明的解压大小过大");if(original>0&&original/Math.max(1,compressed)>limits.maxCompressionRatio)throw new Error("压缩包压缩率异常，已拒绝解压");if(file.name.startsWith("assets/")&&original>limits.maxAssetBytes)throw new Error("压缩包包含过大的单个资源");return true}},(error,data)=>error?reject(error):resolve(data)))}
 function assetReferences(archive:StoryArchive){const refs=new Map<string,StoryAssetRef>();for(const character of archive.document.characters)if(character.avatar)refs.set(character.avatar.id,character.avatar);for(const message of archive.document.messages)if(message.kind!=="text")refs.set(message.asset.id,message.asset);return refs}
 function serializeManifest(assets:ManifestAsset[]){const lines=["<!-- Lorana Tales Package Manifest 2 -->",`<package version="${PACKAGE_VERSION}" story="${STORY_PATH}">`,""];for(const asset of assets){const fields=[`id="${quote(asset.id)}"`,`path="${asset.path}"`,`hash="sha256:${asset.hash}"`,`size="${asset.size}"`,`mime="${quote(asset.mime)}"`];if(asset.name)fields.push(`name="${quote(asset.name)}"`);if(asset.width!=null)fields.push(`width="${asset.width}"`);if(asset.height!=null)fields.push(`height="${asset.height}"`);lines.push(`<asset ${fields.join(" ")}>`)}return`${lines.join("\n").trimEnd()}\n`}
 function parseManifest(text:string){let packageSeen=false;const assets:ManifestAsset[]=[];const ids=new Set<string>();for(const [index,raw] of text.replace(/\r\n?/g,"\n").split("\n").entries()){const line=raw.trim();if(!line||line.startsWith("<!--"))continue;if(line.startsWith("<package ")){if(packageSeen)throw new Error("SSP 清单重复声明 package");const values=attributes(line);if(values.get("version")!==String(PACKAGE_VERSION)||values.get("story")!==STORY_PATH)throw new Error("不支持的 SSP 清单版本");packageSeen=true;continue}if(line.startsWith("<asset ")){const values=attributes(line),id=values.get("id")||"",path=values.get("path")||"",hash=values.get("hash")?.match(/^sha256:([a-f0-9]{64})$/)?.[1]||"",size=Number(values.get("size")),mime=values.get("mime")||"application/octet-stream";if(!packageSeen||!id||id.length>240||ids.has(id)||!safeArchivePath(path)||!path.startsWith("assets/")||!hash||!Number.isSafeInteger(size)||size<0)throw new Error(`SSP 清单第 ${index+1} 行无效`);ids.add(id);const width=Number(values.get("width")),height=Number(values.get("height"));assets.push({id,path,hash,size,mime,name:values.get("name")||undefined,width:Number.isFinite(width)&&width>0?width:undefined,height:Number.isFinite(height)&&height>0?height:undefined});continue}throw new Error(`SSP 清单第 ${index+1} 行包含未知指令`)}if(!packageSeen)throw new Error("SSP 缺少 package 声明");return assets}

@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import net from "node:net";
 import type { Express, Request, Response } from "express";
-import { getClientIp } from "../server/client-ip.js";
+import { getClientIp, isTrustedProxyRequest, type TrustedProxyPolicy } from "../server/client-ip.js";
 import { AccountStore, type AccountUser, isValidUsername, normalizeEmail } from "./account-store.js";
 import { CaptchaService } from "./captcha.js";
 import { AccountMailer } from "./mailer.js";
@@ -94,8 +94,36 @@ function sanitizeEffectPreset(value: JsonObject) {
 	return { name, kind: "screen", folderId: String(value.folderId || "").slice(0, 80), config: { screenEffect, color, durationMs: Math.min(10000, Math.max(120, Math.round(Number(source.durationMs) || 900))), speedPercent: Math.min(400, Math.max(25, Math.round(Number(source.speedPercent) || 100))), repeat: Math.min(12, Math.max(1, Math.round(Number(source.repeat) || 1))) } };
 }
 
-function validateProjectDocument(value: unknown, config): "project_too_large" | "asset_too_large" | "" {
-	if (Buffer.isBuffer(value)) return value.length > Number(config.max_project_mb || 25) * 1024 * 1024 ? "project_too_large" : "";
+function validateSspZip(value: Buffer, config): "project_invalid" | "project_too_large" | "asset_too_large" | "" {
+	const maxProject = Number(config.max_project_mb || 25) * 1024 * 1024;
+	const maxAsset = Number(config.max_asset_mb || 12) * 1024 * 1024;
+	if (value.length > maxProject || value.length < 22) return value.length > maxProject ? "project_too_large" : "project_invalid";
+	let eocd = -1;
+	for (let index = value.length - 22, minimum = Math.max(0, value.length - 65557); index >= minimum; index -= 1) if (value.readUInt32LE(index) === 0x06054b50) { eocd = index; break; }
+	if (eocd < 0) return "project_invalid";
+	const entries = value.readUInt16LE(eocd + 10), centralSize = value.readUInt32LE(eocd + 12), centralOffset = value.readUInt32LE(eocd + 16);
+	if (!entries || entries > 1024 || centralOffset + centralSize > value.length) return "project_invalid";
+	let cursor = centralOffset, totalUncompressed = 0;
+	for (let count = 0; count < entries; count += 1) {
+		if (cursor + 46 > value.length || value.readUInt32LE(cursor) !== 0x02014b50) return "project_invalid";
+		const flags = value.readUInt16LE(cursor + 8), compression = value.readUInt16LE(cursor + 10), compressed = value.readUInt32LE(cursor + 20), uncompressed = value.readUInt32LE(cursor + 24);
+		const nameLength = value.readUInt16LE(cursor + 28), extraLength = value.readUInt16LE(cursor + 30), commentLength = value.readUInt16LE(cursor + 32);
+		const nextCursor = cursor + 46 + nameLength + extraLength + commentLength;
+		if (!nameLength || nameLength > 240 || nextCursor > value.length || nextCursor > centralOffset + centralSize) return "project_invalid";
+		const name = value.subarray(cursor + 46, cursor + 46 + nameLength).toString("utf-8");
+		if (!name || name.startsWith("/") || name.includes("\\") || name.split("/").includes("..")) return "project_invalid";
+		if (flags & 1 || ![0, 8].includes(compression) || (uncompressed > 0 && uncompressed / Math.max(1, compressed) > 100)) return "project_invalid";
+		if (name.startsWith("assets/") && uncompressed > maxAsset) return "asset_too_large";
+		totalUncompressed += uncompressed;
+		if (totalUncompressed > Math.max(maxProject * 2, 64 * 1024 * 1024)) return "project_too_large";
+		cursor = nextCursor;
+	}
+	if (cursor !== centralOffset + centralSize) return "project_invalid";
+	return "";
+}
+
+function validateProjectDocument(value: unknown, config): "project_invalid" | "project_too_large" | "asset_too_large" | "" {
+	if (Buffer.isBuffer(value)) return validateSspZip(value, config);
 	const encoded = Buffer.byteLength(JSON.stringify(value ?? null));
 	if (encoded > Number(config.max_project_mb || 25) * 1024 * 1024) return "project_too_large";
 	const assets = value && typeof value === "object" && Array.isArray((value as JsonObject).assets) ? (value as JsonObject).assets as unknown[] : [];
@@ -125,7 +153,7 @@ function projectRequest(req: Request): { document: unknown; meta: JsonObject } {
 
 function projectSummary(project: Record<string, unknown> | null) {
 	if (!project) return null;
-	const { document: _document, ...summary } = project;
+	const { document: _document, owner: _owner, shareExpiryMode: _shareExpiryMode, shareExpiresAt: _shareExpiresAt, lastActivityAt: _lastActivityAt, ...summary } = project;
 	return summary;
 }
 
@@ -146,12 +174,13 @@ export class AccountService {
 	readonly config;
 	readonly captcha: CaptchaService;
 	readonly mailer: AccountMailer | null;
-	readonly trustProxy: boolean;
+	readonly trustProxy: TrustedProxyPolicy;
 	readonly logStore: LogStore | null;
 	readonly branding: { siteTitle: string; logoUrl: string };
 	private captchaChallengeTimes = new Map<string, number[]>();
+	private passwordAttemptTimes = new Map<string, number[]>();
 
-	constructor(store: AccountStore, config, trustProxy = false, logStore: LogStore | null = null, branding = { siteTitle: "Lorana Tales", logoUrl: "" }) {
+	constructor(store: AccountStore, config, trustProxy: TrustedProxyPolicy = false, logStore: LogStore | null = null, branding = { siteTitle: "Lorana Tales", logoUrl: "" }) {
 		this.store = store;
 		this.config = config;
 		this.captcha = new CaptchaService(config);
@@ -185,7 +214,7 @@ export class AccountService {
 
 	private secure(req: Request) {
 		const forwarded = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim();
-		return req.secure || (this.trustProxy && forwarded === "https");
+		return req.secure || (isTrustedProxyRequest(req, this.trustProxy) && forwarded === "https");
 	}
 
 	private sameSite(): "Strict" | "Lax" | "None" {
@@ -276,6 +305,21 @@ export class AccountService {
 		};
 	}
 
+	private sharedProjectIsActive(project: Record<string, unknown>) {
+		const mode = String(project.shareExpiryMode || "project");
+		if (mode === "never") return true;
+		if (mode === "fixed") {
+			const expires = Date.parse(String(project.shareExpiresAt || ""));
+			return Number.isFinite(expires) && expires > Date.now();
+		}
+		const owner = project.owner as AccountUser | undefined;
+		if (!owner) return false;
+		const days = this.storagePolicy(owner).retentionDays;
+		if (days === 0) return true;
+		const lastActivity = Date.parse(String(project.lastActivityAt || project.updatedAt || ""));
+		return Number.isFinite(lastActivity) && lastActivity + days * 86400000 > Date.now();
+	}
+
 	cleanupInactiveProjects() {
 		return this.store.cleanupInactiveProjects((user) => this.storagePolicy(user).retentionDays);
 	}
@@ -313,6 +357,18 @@ export class AccountService {
 		return true;
 	}
 
+	private allowPasswordAttempt(req: Request) {
+		const key = this.prefix(req);
+		const cutoff = Date.now() - 60000;
+		const recent = (this.passwordAttemptTimes.get(key) || []).filter((value) => value >= cutoff);
+		const limit = Math.max(5, Math.min(120, Number(this.config.password_attempts_per_minute || 20)));
+		if (recent.length >= limit) return false;
+		recent.push(Date.now());
+		this.passwordAttemptTimes.set(key, recent);
+		if (this.passwordAttemptTimes.size > 5000) this.passwordAttemptTimes.delete(this.passwordAttemptTimes.keys().next().value as string);
+		return true;
+	}
+
 	register(app: Express) {
 		app.get("/api/account/config", (_req, res) => json(res, 200, {
 			enabled: true,
@@ -339,7 +395,10 @@ export class AccountService {
 				const valid = await this.captcha.verify({ id: String(body.id || ""), answer: String(body.answer || ""), payload: body.payload, token: String(body.token || ""), remoteIp: this.ip(req) });
 				if (!valid) { json(res, 400, { error: "captcha_invalid" }); return; }
 				json(res, 200, { clearance: this.captcha.issueClearance(subject, scope) });
-			} catch { json(res, 400, { error: "invalid_request" }); }
+			} catch (error) {
+				if (error instanceof Error && error.message === "password_work_queue_busy") { json(res, 503, { error: "authentication_busy" }); return; }
+				json(res, 400, { error: "invalid_request" });
+			}
 		});
 
 		app.post("/api/account/verification/send", async (req, res) => {
@@ -348,10 +407,16 @@ export class AccountService {
 				const email = normalizeEmail(body.email);
 				const purpose = ["register", "login", "reset-password", "change-email"].includes(String(body.purpose)) ? String(body.purpose) : "login";
 				if (!validEmail(email) || !this.emailAllowed(email)) { json(res, 400, { error: "email_not_allowed" }); return; }
-				if (purpose === "register" && (this.config.registration_enabled === false || this.store.getUserByEmail(email))) { json(res, 409, { error: "registration_unavailable" }); return; }
+				if (purpose === "register" && this.config.registration_enabled === false) { json(res, 403, { error: "registration_disabled" }); return; }
 				const currentSession = this.getSession(req);
 				const subject = currentSession ? `${currentSession.user.id}:${this.prefix(req)}` : `${email}:${this.prefix(req)}`;
 				if (!this.captcha.consumeClearance(String(body.captchaClearance || ""), subject, "verification-send")) { json(res, 428, { error: "captcha_required", scope: "verification-send" }); return; }
+				// Do not disclose whether a registration email already exists. Return the
+				// same shaped success response after CAPTCHA without sending another mail.
+				if (purpose === "register" && this.store.getUserByEmail(email)) {
+					json(res, 200, { id: crypto.randomUUID(), resendAfterSeconds: Number(this.config.email_code_resend_seconds || 60) });
+					return;
+				}
 				const counts = this.store.verificationSendCounts(email, this.prefix(req), Date.now() - 3600000);
 				const resendMs = Math.max(1, Number(this.config.email_code_resend_seconds || 60)) * 1000;
 				if (this.store.lastVerificationAt(email, purpose) > Date.now() - resendMs) { json(res, 429, { error: "verification_resend_wait", retryAfterSeconds: Math.ceil(resendMs / 1000) }); return; }
@@ -390,9 +455,12 @@ export class AccountService {
 
 		app.post("/api/account/login", async (req, res) => {
 			try {
-				const body = readJson(req); const identity = String(body.email || body.username || "").trim(); const known = this.store.getUserByIdentity(identity);
+				if (!this.allowPasswordAttempt(req)) { json(res, 429, { error: "login_rate_limited" }); return; }
+				const body = readJson(req); const identity = String(body.email || body.username || "").trim(); const password = String(body.password || "");
+				if (identity.length > 254 || password.length > 256) { json(res, 401, { error: "invalid_credentials" }); return; }
+				const known = this.store.getUserByIdentity(identity);
 				if (known && !this.requireRiskClearance(known.id, "login", req, res)) return;
-				const user = await this.store.verifyPasswordIdentity(identity, String(body.password || ""));
+				const user = await this.store.verifyPasswordIdentity(identity, password);
 				if (!user) { this.store.recordRisk(known?.id || "", this.prefix(req), "login-failed", identity); json(res, 401, { error: "invalid_credentials" }); return; }
 				const current = this.store.refreshExpiredBan(user);
 				if (current.status === "banned") { json(res, 403, { error: "account_banned", reason: current.banReason, until: current.banUntil }); return; }
@@ -496,7 +564,10 @@ export class AccountService {
 		app.get("/api/shared-projects/:token", (req, res) => {
 			const token = String(req.params.token || "");
 			if (!/^[A-Za-z0-9_-]{20,40}$/.test(token)) { json(res, 404, { error: "share_not_found" }); return; }
-			sendProject(res, this.store.getSharedProject(token) as unknown as Record<string, unknown> | null);
+			const shared = this.store.getSharedProject(token) as unknown as Record<string, unknown> | null;
+			if (!shared) { json(res, 404, { error: "share_not_found" }); return; }
+			if (!this.sharedProjectIsActive(shared)) { json(res, 410, { error: "share_expired" }); return; }
+			sendProject(res, shared);
 		});
 		app.get("/api/account/effect-presets", (req, res) => { const session = this.requireSession(req, res); if (session) json(res, 200, { items: this.store.listEffectPresets(session.user.id), folders: this.store.listEffectFolders(session.user.id), limit: Number(this.config.max_effect_presets || 100) }); });
 		app.post("/api/account/effect-presets", (req, res) => { const session = this.requireSession(req, res, true); if (!session) return; if(this.store.effectPresetCount(session.user.id)>=Number(this.config.max_effect_presets||100)){json(res,413,{error:"effect_preset_limit"});return;} const body = readJson(req); const preset = sanitizeEffectPreset(body); if (!preset) { json(res, 400, { error: "effect_preset_invalid" }); return; } const folders=new Set(this.store.listEffectFolders(session.user.id).map((item)=>item.id));const folderId=folders.has(preset.folderId)?preset.folderId:"";json(res, 201, this.store.createEffectPreset(session.user.id, preset.name, preset.config,folderId,preset.kind)); });
@@ -522,7 +593,16 @@ export class AccountService {
 		app.get("/api/account/projects/:id", (req, res) => { const session = this.requireSession(req, res); if (!session) return; sendProject(res, this.store.getProject(session.user.id, req.params.id) as unknown as Record<string, unknown> | null); });
 		app.post("/api/account/projects/:id/share", (req, res) => {
 			const session = this.requireSession(req, res, true); if (!session) return;
-			const share = this.store.shareProject(session.user.id, req.params.id);
+			const body = readJson(req);
+			const requestedMode = String(body.expiryMode || "project");
+			const expiryMode: "project" | "fixed" | "never" = requestedMode === "fixed" ? "fixed" : requestedMode === "never" ? "never" : "project";
+			let expiresAt = "";
+			if (expiryMode === "fixed") {
+				const durationDays = Math.floor(Number(body.durationDays));
+				if (![1, 3, 7, 14, 30, 90, 180, 365].includes(durationDays)) { json(res, 400, { error: "share_expiry_invalid" }); return; }
+				expiresAt = new Date(Date.now() + durationDays * 86400000).toISOString();
+			}
+			const share = this.store.shareProject(session.user.id, req.params.id, expiryMode, expiresAt);
 			json(res, share ? 200 : 404, share || { error: "project_not_found" });
 		});
 		app.get("/api/account/projects/:id/source", async (req, res) => {

@@ -222,9 +222,8 @@ export const useStore = defineStore("main", {
     },
 
     async tryFetchLog(key: string, password: string) {
-      const resp = await axios.get(`${diceAPIBase}/load_data`, {
-        params: { key, password },
-      });
+      // Keep the decryption secret out of URLs, browser history and proxy logs.
+      const resp = await axios.post(`${diceAPIBase}/load_data`, { key, password });
       return resp.data;
     },
 
