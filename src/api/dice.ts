@@ -413,9 +413,9 @@ async function archiveCqResources(
 			logContent,
 			new URL(request.url).origin,
 		);
-		if (result.cachedCount > 0) {
+		if (result.cachedCount > 0 || result.avatarCount > 0) {
 			console.log(
-				`[resource-cache] Archived ${result.cachedCount} CQ resources for uploaded log`,
+				`[resource-cache] Prepared ${result.cachedCount} CQ resources and ${result.avatarCount} QQ avatars`,
 			);
 		}
 		return result.storedText;
@@ -777,8 +777,9 @@ export async function handleDiceApiRequest({ request, env }) {
 				return jsonResponse({ error: "Data not found" }, 404, corsHeaders);
 			}
 			clearRateLimit(loadDataFailures, loadFailureKey);
+			const hydratedData = await archiveCqResources(env, storedData, request);
 
-			return new Response(storedData, {
+			return new Response(hydratedData, {
 				status: 200,
 				headers: {
 					...corsHeaders,

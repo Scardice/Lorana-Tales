@@ -251,6 +251,28 @@ function resourceCandidates(message: string): ResourceCandidate[] {
 	return candidates;
 }
 
+const QQ_IDENTITY_KEYS = new Set(["imuserid", "im_user_id", "qq", "qqid", "qq_id", "uin"]);
+
+export function qqAvatarIds(value: unknown): string[] {
+	const result = new Set<string>();
+	const visit = (current: unknown) => {
+		if (Array.isArray(current)) {
+			current.forEach(visit);
+			return;
+		}
+		if (!current || typeof current !== "object") return;
+		for (const [key, child] of Object.entries(current as Record<string, unknown>)) {
+			if (QQ_IDENTITY_KEYS.has(key.toLowerCase())) {
+				const id = String(child ?? "").trim();
+				if (/^\d{5,12}$/.test(id)) result.add(id);
+			}
+			if (child && typeof child === "object") visit(child);
+		}
+	};
+	visit(value);
+	return [...result];
+}
+
 function inferMime(bytes: Buffer, fallback = ""): string {
 	if (bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return "image/png";
 	if (bytes.subarray(0, 3).equals(Buffer.from([255, 216, 255]))) return "image/jpeg";
@@ -497,16 +519,26 @@ export class CqResourceCache {
 	async archiveStoredLog(
 		storedText: string,
 		resourceBaseUrl = "",
-	): Promise<{ storedText: string; cachedCount: number }> {
-		if (!this.enabled) return { storedText, cachedCount: 0 };
+	): Promise<{ storedText: string; cachedCount: number; avatarCount: number }> {
+		if (!this.enabled) return { storedText, cachedCount: 0, avatarCount: 0 };
 		let stored: Record<string, unknown>;
-		try { stored = JSON.parse(storedText); } catch { return { storedText, cachedCount: 0 }; }
-		if (typeof stored.data !== "string" || String(stored.client || "").toLowerCase() === "parquet") return { storedText, cachedCount: 0 };
+		try { stored = JSON.parse(storedText); } catch { return { storedText, cachedCount: 0, avatarCount: 0 }; }
+		if (typeof stored.data !== "string" || String(stored.client || "").toLowerCase() === "parquet") return { storedText, cachedCount: 0, avatarCount: 0 };
 
 		let decoded: Buffer;
-		try { decoded = await inflateAsync(Buffer.from(stored.data, "base64"), { maxOutputLength: MAX_DECODED_LOG_BYTES }); } catch { return { storedText, cachedCount: 0 }; }
+		try { decoded = await inflateAsync(Buffer.from(stored.data, "base64"), { maxOutputLength: MAX_DECODED_LOG_BYTES }); } catch { return { storedText, cachedCount: 0, avatarCount: 0 }; }
 		let payload: unknown;
-		try { payload = JSON.parse(decoded.toString("utf-8")); } catch { return { storedText, cachedCount: 0 }; }
+		try { payload = JSON.parse(decoded.toString("utf-8")); } catch { return { storedText, cachedCount: 0, avatarCount: 0 }; }
+
+		let avatarCount = 0;
+		const avatarResults = await Promise.allSettled(qqAvatarIds(payload).slice(0, this.options.maxResourcesPerLog).map((id) => {
+			const remoteUrl = `https://q1.qlogo.cn/g?b=qq&nk=${id}&s=100`;
+			return this.cacheCandidate({ source: remoteUrl, remoteUrl, kind: "image" });
+		}));
+		for (const result of avatarResults) {
+			if (result.status === "fulfilled") avatarCount += 1;
+			else console.warn(`[resource-cache] QQ avatar skipped: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`);
+		}
 
 		let videoCount = 0;
 		const replaceVideos = (value: unknown): unknown => {
@@ -549,7 +581,7 @@ export class CqResourceCache {
 				console.warn(`[resource-cache] Resource skipped: ${error instanceof Error ? error.message : String(error)}`);
 			}
 		}
-		if (!replacements.size && !videoCount) return { storedText, cachedCount: 0 };
+		if (!replacements.size && !videoCount) return { storedText, cachedCount: 0, avatarCount };
 
 		const rewrite = (value: unknown): unknown => {
 			if (typeof value === "string") {
@@ -570,7 +602,7 @@ export class CqResourceCache {
 		rewrite(payload);
 		stored.data = (await deflateAsync(Buffer.from(JSON.stringify(payload)), { level: 9 })).toString("base64");
 		this.cleanupExpired().catch((error) => console.warn(`[resource-cache] Cleanup failed: ${error instanceof Error ? error.message : String(error)}`));
-		return { storedText: JSON.stringify(stored), cachedCount: replacements.size };
+		return { storedText: JSON.stringify(stored), cachedCount: replacements.size, avatarCount };
 	}
 
 	private publicResourceUrl(resourceId: string, resourceBaseUrl: string): string {

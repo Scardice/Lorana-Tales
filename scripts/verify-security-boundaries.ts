@@ -4,9 +4,9 @@ import Database from "better-sqlite3";
 import { AccountStore } from "../src/accounts/account-store.js";
 import { publicProjectPayload } from "../src/accounts/router.js";
 import { getClientIp } from "../src/server/client-ip.js";
-import { isPublicIp } from "../src/storage/cq-resource-cache.js";
+import { isPublicIp, qqAvatarIds } from "../src/storage/cq-resource-cache.js";
 import { inflateTextBounded, InflateLimitError } from "../src/security/bounded-inflate.js";
-import { decodeBase64UploadLimited } from "../src/api/dice.js";
+import { decodeBase64UploadLimited, handleDiceApiRequest } from "../src/api/dice.js";
 import { SqliteLogStore } from "../src/storage/sqlite-log-store.js";
 
 const compressed = deflateSync(Buffer.alloc(8 * 1024, 65));
@@ -22,6 +22,40 @@ assert.equal(decodeBase64UploadLimited("not base64!", 1024), null);
 assert.equal(decodeBase64UploadLimited("=", 1024), null);
 assert.equal(decodeBase64UploadLimited("YQ=", 1024), null);
 assert.equal(Buffer.from(decodeBase64UploadLimited("YQ==", 1024) || []).toString(), "a");
+assert.deepEqual(qqAvatarIds({ items: [{ IMUserId: "732899935" }, { imUserId: 3482215720 }, { message: "不要把正文 123456789 当作 QQ" }], nested: { qq: "10001", userId: "999999999" } }), ["732899935", "3482215720", "10001"]);
+assert.deepEqual(qqAvatarIds({ IMUserId: "1234", qq: "1234567890123", uin: "not-a-number" }), []);
+
+const oldStoredLog = JSON.stringify({ data: "old-log" });
+const hydratedStoredLog = JSON.stringify({ data: "hydrated-old-log" });
+let oldLogHydrated = 0;
+const oldLogResponse = await handleDiceApiRequest({
+	request: new Request("http://localhost/api/dice/load_data?key=old-link&password=secret"),
+	env: {
+		LOG_STORE: { readPublicLog: async () => oldStoredLog },
+		CQ_RESOURCE_CACHE: { enabled: true, archiveStoredLog: async (text: string) => { oldLogHydrated += 1; assert.equal(text, oldStoredLog); return { storedText: hydratedStoredLog, cachedCount: 1, avatarCount: 1 }; } },
+	},
+});
+assert.equal(oldLogResponse.status, 200);
+assert.equal(await oldLogResponse.text(), hydratedStoredLog);
+assert.equal(oldLogHydrated, 1, "opening an old API link must retry CQ and QQ avatar hydration");
+
+const uploadOrder: string[] = [];
+const uploadBody = new FormData();
+uploadBody.set("name", "resource hydration upload");
+uploadBody.set("uniform_id", "security:resource-hydration");
+uploadBody.set("client", "Scardice");
+uploadBody.set("file", new Blob([deflateSync(Buffer.from(JSON.stringify({ version: 105, items: [{ IMUserId: "732899935", message: "hello" }] })))], { type: "application/octet-stream" }), "log.dat");
+const uploadResponse = await handleDiceApiRequest({
+	request: new Request("http://localhost/api/dice/log", { method: "PUT", body: uploadBody }),
+	env: {
+		CLEANUP_AFTER_UPLOAD: "false",
+		INJECTION_GUARD_ENABLED: "false",
+		LOG_STORE: { addLogRecord: async () => { uploadOrder.push("store"); } },
+		CQ_RESOURCE_CACHE: { enabled: true, archiveStoredLog: async (text: string) => { uploadOrder.push("resources"); return { storedText: text, cachedCount: 1, avatarCount: 1 }; } },
+	},
+});
+assert.equal(uploadResponse.status, 200);
+assert.deepEqual(uploadOrder, ["resources", "store"], "API upload must prepare CQ resources and QQ avatars before persisting the link");
 
 const quotaStore = new SqliteLogStore(":memory:", { maxTotalBytes: 32 });
 await assert.rejects(
