@@ -96,6 +96,10 @@ const accountStore = new AccountStore(database);
 const verificationId = accountStore.createVerificationCode("code@example.test", "login", "123456", "203.0.113.0/24", 10);
 assert.equal(accountStore.verifyCode(verificationId, "code@example.test", "login", "123456", false), true);
 assert.equal(accountStore.verifyCode(verificationId, "code@example.test", "login", "123456"), true, "risk checks must not consume the email code before CAPTCHA succeeds");
+const failedDeliveryId = accountStore.createVerificationCode("retry@example.test", "login", "654321", "203.0.113.0/24", 10);
+accountStore.deleteVerificationCode(failedDeliveryId);
+assert.equal(accountStore.verifyCode(failedDeliveryId, "retry@example.test", "login", "654321"), false, "failed SMTP delivery must not leave an unusable verification code behind");
+assert.equal(accountStore.lastVerificationAt("retry@example.test", "login"), 0, "failed SMTP delivery must not trigger the resend cooldown");
 const account = await accountStore.createUser({
 	email: "owner@example.test",
 	password: "test-password-not-for-production",
@@ -103,6 +107,9 @@ const account = await accountStore.createUser({
 	nickname: "Security Owner",
 	group: "default",
 });
+assert.equal(accountStore.getUserByEmail("  OWNER@EXAMPLE.TEST ")?.id, account.id, "email lookup must be case-insensitive and trim surrounding whitespace");
+assert.equal(accountStore.getUserByIdentity("OWNER@EXAMPLE.TEST")?.id, account.id, "email login identity must be case-insensitive");
+assert.equal((await accountStore.verifyPasswordIdentity("OWNER@EXAMPLE.TEST", "test-password-not-for-production"))?.id, account.id, "password login by email must be case-insensitive");
 const project = accountStore.createProject(account.id, "shared", { story: true });
 const share = accountStore.shareProject(account.id, project.id);
 assert.ok(share);

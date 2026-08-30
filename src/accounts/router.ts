@@ -439,15 +439,24 @@ export class AccountService {
 				const code = crypto.randomInt(100000, 1000000).toString();
 				const id = this.store.createVerificationCode(email, purpose, code, this.prefix(req), Number(this.config.email_code_ttl_minutes || 10));
 				const account = targetAccount || currentSession?.user;
-				await this.mailer.sendCode(email, code, purpose, {
-					username: account?.username || String(body.username || ""),
-					nickname: account?.nickname || String(body.nickname || ""),
-					site_title: this.branding.siteTitle,
-					logo_url: this.branding.logoUrl,
-					expires_minutes: String(this.config.email_code_ttl_minutes || 10),
-				});
+				try {
+					await this.mailer.sendCode(email, code, purpose, {
+						username: account?.username || String(body.username || ""),
+						nickname: account?.nickname || String(body.nickname || ""),
+						site_title: this.branding.siteTitle,
+						logo_url: this.branding.logoUrl,
+						expires_minutes: String(this.config.email_code_ttl_minutes || 10),
+					});
+				} catch (error) {
+					this.store.deleteVerificationCode(id);
+					throw new Error("smtp_delivery_failed", { cause: error });
+				}
 				json(res, 200, { id, resendAfterSeconds: Number(this.config.email_code_resend_seconds || 60) });
-			} catch (error) { console.error("[accounts] verification send failed", error); json(res, 400, { error: "verification_send_failed" }); }
+			} catch (error) {
+				console.error("[accounts] verification send failed", error);
+				const smtpFailure = error instanceof Error && error.message === "smtp_delivery_failed";
+				json(res, smtpFailure ? 502 : 400, { error: smtpFailure ? "smtp_delivery_failed" : "verification_send_failed" });
+			}
 		});
 
 		app.post("/api/account/register", async (req, res) => {

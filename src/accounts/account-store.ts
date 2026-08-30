@@ -651,6 +651,10 @@ export class AccountStore {
 		return id;
 	}
 
+	deleteVerificationCode(id: string) {
+		this.db.prepare("DELETE FROM account_verification_codes WHERE id = ?").run(id);
+	}
+
 	verifyCode(id: string, email: string, purpose: string, code: string, consume = true): boolean {
 		const row = this.db.prepare(`SELECT * FROM account_verification_codes
 			WHERE id = ? AND email = ? COLLATE NOCASE AND purpose = ? AND consumed_at_ms IS NULL AND expires_at_ms > ?`)
