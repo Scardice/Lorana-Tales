@@ -56,7 +56,7 @@ const runtimePackage = {
 	version: releaseVersion,
 	private: true,
 	type: sourcePackage.type,
-	engines: sourcePackage.engines || { node: ">=24.20.0 <25" },
+	engines: sourcePackage.engines || { node: ">=24.20.0" },
 	bin: sourcePackage.bin,
 	scripts: { start: sourcePackage.scripts.start },
 	dependencies: sourcePackage.dependencies,

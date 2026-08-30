@@ -40,7 +40,7 @@
 
 ### 前置要求
 
-- Node.js >= 24.20.0 且 < 25（仅支持仍在安全维护期内的 Node 24 LTS）
+- Node.js >= 24.20.0（生产环境仍推荐使用当前安全维护中的 Node 24 LTS）
 - pnpm
 
 ### 安装与启动
@@ -94,7 +94,7 @@ pnpm dev
 
 每次 `main` 分支有新提交时，GitHub Actions 会删除旧的 [Nightly Release](https://github.com/Scardice/Lorana-Tales/releases/tag/nightly) 与标签，再以当前提交重新创建。这样发布时间、源码归档与二进制包都严格对应同一基线，同时仍只保留一个滚动 Nightly。
 
-Nightly 包面向 Linux x64，使用 Node.js `>=24.20.0 <25`，已经包含服务端 `dist/`、前端 `out/`、生产依赖和 `better-sqlite3` 原生模块，不需要再编译源码。下载 `.tar.gz` 或 `.zip` 后：
+Nightly 包面向 Linux x64，使用 Node.js `>=24.20.0`，已经包含服务端 `dist/`、前端 `out/`、生产依赖和 `better-sqlite3` 原生模块，不需要再编译源码。生产环境仍推荐使用当前安全维护中的 Node 24 LTS。下载 `.tar.gz` 或 `.zip` 后：
 
 需要长期保留的测试版或正式版由仓库的 `Release` Action 手动创建：输入 `VERSION` 同格式的版本号，并选择 `test` 或 `stable`。测试版会标记为 prerelease，正式版会成为 latest；两者都使用独立版本标签，不会被 Nightly 覆盖。新版沉浸式染色器显示的完整构建版本为 `VERSION+Git短提交码`，例如 `0.1.0-testify.1+8280e02`。
 

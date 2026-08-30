@@ -10,7 +10,7 @@ const workspace = read("pnpm-workspace.yaml");
 const lockfile = read("pnpm-lock.yaml");
 
 assert.match(manifest.packageManager, /^pnpm@11\.24\.0\+sha512\.[a-f0-9]{128}$/);
-assert.equal(manifest.engines?.node, ">=24.20.0 <25");
+assert.equal(manifest.engines?.node, ">=24.20.0");
 assert.match(workspace, /minimumReleaseAge:\s*1440/);
 assert.match(workspace, /minimumReleaseAgeStrict:\s*true/);
 assert.match(workspace, /minimumReleaseAgeIgnoreMissingTime:\s*false/);

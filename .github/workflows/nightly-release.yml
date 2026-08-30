@@ -113,7 +113,7 @@ jobs:
           body: |
             Rolling nightly build for commit `${{ github.sha }}`.
 
-            Target: Linux x64, Node.js >= 24.20.0 and < 25.
+            Target: Linux x64, Node.js >= 24.20.0.
             The package contains compiled `dist/`, `out/`, production dependencies, and an editable `config.toml`.
           files: |
             release/lorana-tales-nightly-linux-x64.tar.gz

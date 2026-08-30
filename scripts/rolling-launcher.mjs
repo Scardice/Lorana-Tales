@@ -245,7 +245,7 @@ async function validatePackageRoot(extracted, release, version) {
 	const nextMarker=JSON.parse(await fsp.readFile(path.join(nextRoot,"OFFICIAL_BUILD.json"),"utf8"));
 	if(nextMarker.repository!==OFFICIAL_REPOSITORY||String(nextMarker.version)!==version||!/^[a-f0-9]{40}$/i.test(String(nextMarker.commit||""))||String(nextMarker.commit)!==String(release.target_commitish)||String(nextMarker.channel)!==(release.prerelease?"Test Release":"Release"))throw new Error("Release 官方构建标记与标签提交不一致");
 	const manifest=JSON.parse(await fsp.readFile(path.join(nextRoot,"package.json"),"utf8"));
-	if(manifest.name!=="lorana-tales"||String(manifest.version)!==version||String(manifest.engines?.node)!==">=24.20.0 <25")throw new Error("Release 运行清单无效或与当前 Node 基线不兼容");
+	if(manifest.name!=="lorana-tales"||String(manifest.version)!==version||String(manifest.engines?.node)!==">=24.20.0")throw new Error("Release 运行清单无效或与当前 Node 基线不兼容");
 	return {nextRoot,nextMarker};
 }
 
