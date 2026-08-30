@@ -495,6 +495,19 @@ test.describe("Lorana Tales story editor", () => {
 			document.cookie = "lorana_legacy_link_hint_seen=; Path=/; Max-Age=0; SameSite=Lax";
 			document.cookie = "lorana_tutorial_prompt_seen=; Path=/; Max-Age=0; SameSite=Lax";
 		});
+		const accountMe = { authenticated: true, user: { id: "claim-user", username: "claim_user", nickname: "认领验收", email: "claim@example.test", avatarUrl: "", mustChangePassword: false, group: "default", role: "user" }, storage: { group: "default", usedBytes: 0, quotaBytes: 268435456, remainingBytes: 268435456, projectCount: 0, maxProjects: 100, retentionDays: 180, retentionSource: "group" } };
+		let claimRequests = 0;
+		let claimedMetaHeader = "";
+		await page.route("**/api/account/config", route => route.fulfill({ json: { enabled: true, registrationEnabled: true, captchaProvider: "image", turnstileSiteKey: "", hcaptchaSiteKey: "" } }));
+		await page.route("**/api/account/me", route => route.fulfill({ json: accountMe }));
+		await page.route("**/api/account/projects", async route => {
+			if (route.request().method() === "POST") {
+				claimRequests += 1;
+				claimedMetaHeader = route.request().headers()["x-lorana-project-meta"] || "";
+				return route.fulfill({ status: 201, json: { id: "claimed-copy", revision: 1 } });
+			}
+			return route.fulfill({ json: [] });
+		});
 		const packed = deflateSync(Buffer.from(JSON.stringify({ version: 105, items: [{ id: 1, nickname: "雪桃", IMUserId: "732899935", time: 1, message: "头像重试验收", isDice: false, commandId: 0 }] }))).toString("base64");
 		let avatarRequests = 0;
 		await page.route("**/api/editor/avatar/qq/732899935*", route => {
@@ -523,6 +536,15 @@ test.describe("Lorana Tales story editor", () => {
 		expect(tutorialBounds!.x).toBeGreaterThanOrEqual(0);
 		expect(tutorialBounds!.x + tutorialBounds!.width).toBeLessThanOrEqual(1280);
 		expect(await tutorialHint.evaluate(element => getComputedStyle(element, "::after").content)).not.toBe("none");
+		await tutorialHint.getByRole("button", { name: "暂时不用" }).click();
+
+		const claimButton = page.getByRole("button", { name: "认领到账号" });
+		await expect(claimButton).toBeVisible();
+		await claimButton.click();
+		await expect.poll(() => claimRequests).toBe(1);
+		await expect(page.getByRole("dialog", { name: "个人中心" })).toContainText("已认领为账号副本；原日志和原链接没有改动。");
+		expect(JSON.parse(Buffer.from(claimedMetaHeader, "base64url").toString("utf8"))).toMatchObject({ title: "提示定位验收", sourceKey: "hint-position-qa", revision: 0 });
+		await expect(claimButton).toBeHidden();
 	});
 
 	test("account tutorial cards open above the account workspace", async ({ page }) => {
