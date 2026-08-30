@@ -3,6 +3,7 @@ import {
 	checksumForAsset,
 	compareSemver,
 	healthCheckHost,
+	isLauncherEntry,
 	isAllowedHostHeader,
 	isTrustedProxyAddress,
 	normalizedHostHeader,
@@ -17,6 +18,10 @@ import {
 assert.equal(healthCheckHost(["story-painter.example"]), "story-painter.example");
 assert.equal(healthCheckHost([]), "127.0.0.1");
 assert.equal(isAllowedHostHeader(healthCheckHost(["story-painter.example"]), ["story-painter.example"]), true);
+const launcherPath = new URL("./rolling-launcher.mjs", import.meta.url).pathname;
+assert.equal(isLauncherEntry(launcherPath, "", launcherPath), true);
+assert.equal(isLauncherEntry("/pm2/ProcessContainerFork.js", launcherPath, launcherPath), true);
+assert.equal(isLauncherEntry("/pm2/ProcessContainerFork.js", "", launcherPath), false);
 
 const config = {
 	trustProxy: true,

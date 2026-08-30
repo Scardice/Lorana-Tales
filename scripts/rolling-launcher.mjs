@@ -319,5 +319,9 @@ async function main(){
 	const timer=setInterval(check,config.intervalSeconds*1000);timer.unref();setTimeout(check,10_000).unref();
 	const stop=signal=>{if(stopping)return;stopping=true;clearInterval(timer);proxy.close(()=>worker.kill(signal));setTimeout(()=>worker.kill(signal),5000).unref()};process.on("SIGTERM",()=>stop("SIGTERM"));process.on("SIGINT",()=>stop("SIGINT"));
 }
-const directEntry = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+export function isLauncherEntry(argvEntry, pmExecPath, modulePath = fileURLToPath(import.meta.url)) {
+	const candidate = String(pmExecPath || argvEntry || "").trim();
+	return Boolean(candidate && path.resolve(candidate) === path.resolve(modulePath));
+}
+const directEntry = isLauncherEntry(process.argv[1], process.env.pm_exec_path);
 if (directEntry) main().catch(error=>{console.error(error);process.exitCode=1});
