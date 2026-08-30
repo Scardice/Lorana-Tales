@@ -151,7 +151,7 @@ const avatarCandidatesLoading=ref(false);
 const selectedAvatarCandidate=ref<AvatarCandidate|null>(null);
 const characterStoredPreviewUrl=ref('');
 let pendingAvatarAsset:{asset:StoryAssetRef;bytes:Uint8Array}|null=null;
-const invalidAvatars=reactive(new Set<string>());
+const invalidAvatars=reactive(new Set<string>());const retriedAvatarImages=new WeakSet<HTMLImageElement>();
 const stickyCharacterId=ref('');const stickyMessageId=ref('');const stickyAvatarStyle=ref<Record<string,string>>({});const stickyCharacter=computed(()=>character(stickyCharacterId.value));
 const invalidResources=reactive(new Set<string>());const mediaUrlOpen=ref(false);const mediaKind=ref<'image'|'audio'>('image');const mediaUrl=ref('');const mediaError=ref('');const mediaSaving=ref(false);
 const canvasWidthMax=ref(Math.max(240,Math.floor(globalThis.innerWidth||1280)));const canvasWidthMin=computed(()=>Math.min(360,canvasWidthMax.value));const effectiveCanvasWidth=computed(()=>Math.min(document.value.settings.canvasWidth,canvasWidthMax.value));let canvasResizeObserver:ResizeObserver|null=null;
@@ -194,7 +194,7 @@ function measureCanvasWidth(){const target=messageList.value;if(!target)return;c
 function commitDisplaySetting(key:DisplaySettingKey,value:number){previewDisplaySetting(key,value);if(document.value.settings[key]!==value)setSetting(key,value);nextTick(scheduleStickyAvatar)}
 function syncDisplayPreview(){for(const key of Object.keys(displayPreview) as DisplaySettingKey[])displayPreview[key]=document.value.settings[key]}
 function character(id:string){return document.value.characters.find(c=>c.id===id)}function asset(value?:{id:string;sourceUrl?:string}){return value?(props.archive.assets.has(value.id)?props.assetUrl(value.id):value.sourceUrl||value.id):''}function avatar(c?:StoryCharacter){return asset(c?.avatar)||(!invalidAvatars.has(c?.imUserId||'')?storyAvatarUrl(c?.imUserId||'',c?.name||''):'')}function positionText(c:StoryCharacter){return c.position==='right'?'右':c.position==='narrator'?(c.narratorAvatar?'旁白头像':'旁白'):'左'}
-function handleAvatarError(event:Event){const image=event.target;if(!(image instanceof HTMLImageElement))return;const match=image.src.match(/\/api\/editor\/avatar\/(?:user|qq)\/([^?]+)/);if(match)invalidAvatars.add(decodeURIComponent(match[1]))}
+function handleAvatarError(event:Event){const image=event.target;if(!(image instanceof HTMLImageElement))return;const match=image.src.match(/\/api\/editor\/avatar\/(?:user|qq)\/([^?]+)/);if(!match)return;const id=decodeURIComponent(match[1]);if(!retriedAvatarImages.has(image)){retriedAvatarImages.add(image);const role=document.value.characters.find(item=>item.imUserId===id);image.src=storyAvatarUrl(id,role?.name||'',true);return}invalidAvatars.add(id)}
 onMounted(()=>globalThis.document.addEventListener('error',handleAvatarError,true));
 onBeforeUnmount(()=>globalThis.document.removeEventListener('error',handleAvatarError,true));
 function resourceAvailable(value:StoryAssetRef){if(invalidResources.has(value.id))return false;if(props.archive.assets.has(value.id)||value.external)return true;try{const url=new URL(value.sourceUrl||value.id,location.href);return url.origin===location.origin&&(url.pathname.startsWith('/cq-resources/')||url.pathname.startsWith('/api/editor/cq-face/'))}catch{return false}}

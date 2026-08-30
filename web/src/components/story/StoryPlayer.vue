@@ -360,8 +360,9 @@ function assetUrl(asset?: StoryAssetRef) { return asset ? (props.archive.assets.
 function resourceAvailable(asset: StoryAssetRef) { if (invalidResources.has(asset.id)) return false; if (props.archive.assets.has(asset.id) || asset.external) return true; try { const url = new URL(asset.sourceUrl || asset.id, location.href); return url.origin === location.origin && (url.pathname.startsWith("/cq-resources/") || url.pathname.startsWith("/api/editor/cq-face/")); } catch { return false; } }
 function markResourceInvalid(asset: StoryAssetRef) { if (invalidResources.has(asset.id)) return; invalidResources.add(asset.id); alert(`${asset.mime.startsWith("audio/") ? "语音" : "图片"}链接已经失效，已改为占位显示。`); }
 const invalidAvatars = reactive(new Set<string>());
+const retriedAvatarImages = new WeakSet<HTMLImageElement>();
 function avatar(value?: StoryCharacter) { return assetUrl(value?.avatar) || (!invalidAvatars.has(value?.imUserId || "") ? storyAvatarUrl(value?.imUserId || "", value?.name || "") : ""); }
-function handleAvatarError(event: Event) { const image = event.target; if (!(image instanceof HTMLImageElement)) return; const match = image.src.match(/\/api\/editor\/avatar\/(?:user|qq)\/([^?]+)/); if (match) invalidAvatars.add(decodeURIComponent(match[1])); }
+function handleAvatarError(event: Event) { const image = event.target; if (!(image instanceof HTMLImageElement)) return; const match = image.src.match(/\/api\/editor\/avatar\/(?:user|qq)\/([^?]+)/); if (!match) return; const id = decodeURIComponent(match[1]); if (!retriedAvatarImages.has(image)) { retriedAvatarImages.add(image); const role = storyDocument.value.characters.find((item) => item.imUserId === id); image.src = storyAvatarUrl(id, role?.name || "", true); return; } invalidAvatars.add(id); }
 onMounted(() => { globalThis.document.addEventListener("error", handleAvatarError, true); globalThis.addEventListener("resize", syncPerformanceToolsBoundary); });
 onBeforeUnmount(() => { globalThis.document.removeEventListener("error", handleAvatarError, true); globalThis.removeEventListener("resize", syncPerformanceToolsBoundary); });
 function imageUrl(asset: StoryAssetRef) { return assetUrl(asset); }

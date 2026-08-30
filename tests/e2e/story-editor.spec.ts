@@ -2,6 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { deflateSync } from "node:zlib";
 
 const errors: string[] = [];
 
@@ -485,6 +486,43 @@ test.describe("Lorana Tales story editor", () => {
 		await expect(page.getByRole("dialog", { name: "教程中心" })).toBeVisible();
 		await assertViewportIntegrity(page);
 		expect(errors).toEqual([]);
+	});
+
+	test("linked-story and tutorial hints stay in the viewport and point to their controls", async ({ page }) => {
+		await page.setViewportSize({ width: 1280, height: 800 });
+		await page.addInitScript(() => {
+			localStorage.clear();
+			document.cookie = "lorana_legacy_link_hint_seen=; Path=/; Max-Age=0; SameSite=Lax";
+			document.cookie = "lorana_tutorial_prompt_seen=; Path=/; Max-Age=0; SameSite=Lax";
+		});
+		const packed = deflateSync(Buffer.from(JSON.stringify({ version: 105, items: [{ id: 1, nickname: "雪桃", IMUserId: "732899935", time: 1, message: "头像重试验收", isDice: false, commandId: 0 }] }))).toString("base64");
+		let avatarRequests = 0;
+		await page.route("**/api/editor/avatar/qq/732899935*", route => {
+			avatarRequests += 1;
+			if (avatarRequests === 1) return route.fulfill({ status: 503, body: "temporary avatar failure" });
+			return route.fulfill({ status: 200, contentType: "image/svg+xml", body: '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><circle cx="32" cy="32" r="30" fill="#14b8a6"/></svg>' });
+		});
+		await page.route("**/api/dice/load_data", route => route.fulfill({ json: { client: "Lagrange", data: packed, name: "提示定位验收" } }));
+		await page.goto("/story?key=hint-position-qa#test-password", { waitUntil: "networkidle" });
+		await expect(page.locator(".story-editor .avatar img").first()).toBeVisible();
+		expect(avatarRequests).toBeGreaterThanOrEqual(2);
+
+		const legacyHint = page.getByRole("dialog", { name: "经典染色器提示" });
+		await expect(legacyHint).toBeVisible();
+		const legacyBounds = await legacyHint.boundingBox();
+		expect(legacyBounds).not.toBeNull();
+		expect(legacyBounds!.x).toBeGreaterThanOrEqual(0);
+		expect(legacyBounds!.x + legacyBounds!.width).toBeLessThanOrEqual(1280);
+		expect(await legacyHint.evaluate(element => getComputedStyle(element, "::before").content)).not.toBe("none");
+		await legacyHint.getByRole("button", { name: "知道了" }).click();
+
+		const tutorialHint = page.getByRole("dialog", { name: "第一次使用 Lorana Tales 吗？" });
+		await expect(tutorialHint).toContainText("点击“更多”打开教程");
+		const tutorialBounds = await tutorialHint.boundingBox();
+		expect(tutorialBounds).not.toBeNull();
+		expect(tutorialBounds!.x).toBeGreaterThanOrEqual(0);
+		expect(tutorialBounds!.x + tutorialBounds!.width).toBeLessThanOrEqual(1280);
+		expect(await tutorialHint.evaluate(element => getComputedStyle(element, "::after").content)).not.toBe("none");
 	});
 
 	test("account tutorial cards open above the account workspace", async ({ page }) => {
