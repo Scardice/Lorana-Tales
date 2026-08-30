@@ -107,6 +107,11 @@ $EDITOR config.toml
 
 # 直接启动，不需要 pnpm install，也不需要重新构建
 npm start
+
+# 使用 PM2 或宝塔 PM2 项目时，直接托管包内的滚动启动器
+# 配置固定为单实例 fork 模式，并自动使用当前解压目录与 config.toml
+pm2 start ecosystem.config.cjs
+pm2 save
 ```
 
 包内同时保留 `config.toml.example` 和 `NIGHTLY-README.md`。如果要在其他操作系统上运行，建议使用源码仓库按当前平台重新执行 `pnpm install && pnpm build`，因为 `better-sqlite3` 的原生依赖与平台和 CPU 架构有关。

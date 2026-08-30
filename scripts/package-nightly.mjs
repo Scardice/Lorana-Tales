@@ -28,6 +28,7 @@ const requiredPaths = [
 	"VERSION",
 	"LICENSE",
 	"THIRD_PARTY_NOTICES.md",
+	"ecosystem.config.cjs",
 	"scripts/rolling-launcher.mjs",
 ];
 
@@ -94,6 +95,10 @@ await fs.copyFile(
 	path.join(repoRoot, "THIRD_PARTY_NOTICES.md"),
 	path.join(outputDir, "THIRD_PARTY_NOTICES.md"),
 );
+await fs.copyFile(
+	path.join(repoRoot, "ecosystem.config.cjs"),
+	path.join(outputDir, "ecosystem.config.cjs"),
+);
 await fs.writeFile(
 	path.join(outputDir, "package.json"),
 	`${JSON.stringify(runtimePackage, null, "\t")}\n`,
@@ -107,6 +112,7 @@ const packageReadme = [
 	"",
 	`This Linux x64 package is prebuilt for Node.js ${runtimePackage.engines.node}.`,
 	"Edit `config.toml` and run `npm start`.",
+	"For PM2 or BT Panel deployments, run `pm2 start ecosystem.config.cjs` instead; the bundled configuration supervises the rolling updater as a single fork-mode process.",
 	"The package already contains the compiled server, frontend, and production dependencies; no build or dependency installation step is required.",
 	"",
 	"- Edit `config.toml` before the first start.",

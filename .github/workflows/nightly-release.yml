@@ -72,7 +72,9 @@ jobs:
           test -f package.json
           test -d node_modules/.pnpm
           test -f OFFICIAL_BUILD.json
+          test -f ecosystem.config.cjs
           test -f scripts/rolling-launcher.mjs
+          node -e "const app=require('./ecosystem.config.cjs').apps?.[0]; if(app?.script !== require('node:path').join(process.cwd(),'scripts/rolling-launcher.mjs') || app?.exec_mode !== 'fork' || app?.instances !== 1) process.exit(1)"
           node --input-type=module -e "await import('better-sqlite3'); console.log('better-sqlite3 runtime loaded')"
 
       - name: Archive runtime package
