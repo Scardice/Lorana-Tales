@@ -383,7 +383,17 @@ async function readRemoteResource(rawUrl: string, options: NormalizedOptions): P
 			const transport = target.url.protocol === "https:" ? https : http;
 			const request = transport.request(target.url, {
 				headers: { Accept: "image/*,audio/*,application/octet-stream;q=0.7", "User-Agent": "Lorana-Tales-resource-cache/1" },
-				lookup: (_hostname, _options, callback) => callback(null, target.address, target.family),
+				lookup: (_hostname, lookupOptions, callback) => {
+					// Node 20+ may request every address for its connection-attempt
+					// scheduler. Returning the legacy scalar shape in that case makes
+					// Node treat the address as undefined and fail with
+					// ERR_INVALID_IP_ADDRESS before opening the socket.
+					if (typeof lookupOptions === "object" && lookupOptions.all) {
+						(callback as unknown as (error: null, addresses: Array<{ address: string; family: number }>) => void)(null, [{ address: target.address, family: target.family }]);
+						return;
+					}
+					callback(null, target.address, target.family);
+				},
 			}, (incoming) => {
 				const contentLength = Number(incoming.headers["content-length"] || 0);
 				if (contentLength > options.maxFileBytes) { incoming.destroy(); reject(new Error("resource exceeds configured size limit")); return; }
@@ -457,6 +467,7 @@ export class CqResourceCache {
 	private readonly jobs: WorkQueue;
 	private readonly writes = new WorkQueue(1);
 	private knownStorageBytes: number | null = null;
+	private sourceIndex: Map<string,string> | null = null;
 
 	constructor(options: CqResourceCacheOptions = {}) {
 		this.options = normalizeOptions(options);
@@ -544,6 +555,10 @@ export class CqResourceCache {
 			if (typeof value === "string") {
 				let next = value;
 				for (const [source, replacement] of replacements) next = next.replaceAll(source, replacement);
+				// A stable file/file_unique key can still resolve after a temporary URL
+				// expires. Once any attribute points at our cache, make every media URL
+				// in that CQ tag use the same local asset so clients never prefer stale upstream data.
+				next=next.replace(/\[CQ:(?:image|face|record|voice|audio),[^\]]*\]/gi,(tag)=>{const local=/\/cq-resources\/[a-f0-9]{64}\.[a-z0-9]+/i.exec(tag)?.[0];if(!local)return tag;return tag.replace(/\b(url|file|data|path)=(?:\[[^\]]+\]\([^)]+\)|https?:\/\/[^,\]\s]+)/gi,(_match,key)=>`${key}=${local}`)});
 				return next;
 			}
 			if (Array.isArray(value)) return value.map(rewrite);
@@ -565,6 +580,10 @@ export class CqResourceCache {
 
 	private async cacheCandidate(candidate: ResourceCandidate, supplied?: { bytes: Buffer; mime: string }): Promise<{ resourceId: string; reused: boolean }> {
 		return this.jobs.run(async () => {
+		if (!supplied && candidate.source) {
+			const cached = await this.lookupSourceResource(candidate.source);
+			if (cached) return { resourceId: cached, reused: true };
+		}
 		const downloaded = supplied || (candidate.base64
 			? { bytes: Buffer.from(candidate.base64.replaceAll(/\s+/g, ""), "base64"), mime: "" }
 			: await readRemoteResource(candidate.remoteUrl || "", this.options));
@@ -582,9 +601,16 @@ export class CqResourceCache {
 		const extension = extensionForMime(mime, candidate.kind);
 		const resourceId = `${crypto.createHash("sha256").update(normalized.bytes).digest("hex")}.${extension}`;
 		const reused = await this.writeResource(resourceId, normalized.bytes);
+		if (!supplied && candidate.source) await this.rememberSourceResource(candidate.source, resourceId);
 		return { resourceId, reused };
 		});
 	}
+
+	private sourceIndexPath(){return path.join(this.options.storagePath,"source-index.json")}
+	private sourceIndexKey(source:string){return crypto.createHash("sha256").update(source).digest("hex")}
+	private async loadSourceIndex(){if(this.sourceIndex)return this.sourceIndex;let parsed:Record<string,string>={};try{parsed=JSON.parse(await fs.readFile(this.sourceIndexPath(),"utf-8"))}catch(error){if((error as NodeJS.ErrnoException).code!=="ENOENT")console.warn(`[resource-cache] Source index ignored: ${error instanceof Error?error.message:String(error)}`)}this.sourceIndex=new Map(Object.entries(parsed).filter(([key,value])=>/^[a-f0-9]{64}$/.test(key)&&RESOURCE_ID_RE.test(value)));return this.sourceIndex}
+	private async lookupSourceResource(source:string){const index=await this.loadSourceIndex();const key=this.sourceIndexKey(source),resourceId=index.get(key);if(!resourceId)return"";const raw=path.join(this.options.storagePath,resourceId);for(const candidate of [raw,`${raw}.br`])try{await fs.access(candidate);await fs.utimes(candidate,new Date(),new Date());return resourceId}catch{/* try next */}index.delete(key);return""}
+	private async rememberSourceResource(source:string,resourceId:string){await this.writes.run(async()=>{const index=await this.loadSourceIndex();index.set(this.sourceIndexKey(source),resourceId);await fs.mkdir(this.options.storagePath,{recursive:true});await fs.writeFile(this.sourceIndexPath(),JSON.stringify(Object.fromEntries(index)))})}
 
 	private async writeResource(resourceId: string, bytes: Buffer): Promise<boolean> {
 		return this.writes.run(async () => {
@@ -622,10 +648,10 @@ export class CqResourceCache {
 		const rawPath = path.join(this.options.storagePath, resourceId);
 		const extension = resourceId.slice(resourceId.lastIndexOf(".") + 1);
 		try {
-			const compressed = await fs.readFile(`${rawPath}.br`);
+			const compressedPath=`${rawPath}.br`;const compressed = await fs.readFile(compressedPath);void fs.utimes(compressedPath,new Date(),new Date()).catch(()=>undefined);
 			return { body: acceptsBrotli ? compressed : await brotliDecompressAsync(compressed), contentType: mimeForExtension(extension), contentEncoding: acceptsBrotli ? "br" : undefined };
 		} catch { /* try raw file */ }
-		try { return { body: await fs.readFile(rawPath), contentType: mimeForExtension(extension) }; } catch { return null; }
+		try { const body=await fs.readFile(rawPath);void fs.utimes(rawPath,new Date(),new Date()).catch(()=>undefined);return { body, contentType: mimeForExtension(extension) }; } catch { return null; }
 	}
 
 	async cleanupExpired(): Promise<number> {

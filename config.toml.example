@@ -31,6 +31,16 @@ allowed_hosts = ["localhost", "127.0.0.1", "::1"]
 # HTTPS 公网部署建议设为 31536000；本地 HTTP 或尚未确认 HTTPS 全站可用时保持 0。
 hsts_max_age_seconds = 0
 
+[auto_update]
+# 仅官方 GitHub Release 包内生效；源码构建、fork 和缺少 OFFICIAL_BUILD.json 的包始终不会自动更新。
+# test 跟随正式版与 Testify 测试版，stable 只跟随正式版，off 完全关闭。默认快速迭代测试通道。
+channel = "test"
+# 检查间隔不低于 60 秒。新包会先校验 GitHub 摘要、SHA-256、提交号和归档结构，
+# 再在内部端口通过版本健康检查后无停机切流；切换后 30 秒内崩溃会回退旧工作进程。
+check_interval_seconds = 300
+# 新版本包的暂存目录；应放在持久磁盘，且不要与其他程序共用。
+staging_path = "./data/updates"
+
 [storage]
 # SQLite 数据库路径。
 # 相对路径会以项目根目录为基准；系统服务部署建议使用 /var/lib/scardice-story-painter/scardice.db，避免工作目录变化导致新建空库。

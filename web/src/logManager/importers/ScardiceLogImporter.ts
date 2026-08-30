@@ -52,7 +52,6 @@ export class ScardiceLogImporter extends LogImporter {
 			i.message += "\n\n";
 			i.version = data.version;
 		}
-		console.log(data);
 		return { items: data.items, charInfo, startText, version: data.version };
 	}
 }

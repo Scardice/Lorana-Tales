@@ -10,6 +10,9 @@ const PROJECT_ROOT = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
 	"../..",
 );
+const RUNTIME_ROOT = process.env.LORANA_RUNTIME_ROOT
+	? path.resolve(process.env.LORANA_RUNTIME_ROOT)
+	: PROJECT_ROOT;
 
 const EXPLICIT_CONFIG_PATH =
 	process.env.SCARDICE_CONFIG || process.env.CONFIG_FILE;
@@ -148,6 +151,11 @@ const DEFAULT_CONFIG = {
 		admin_bruteforce_max_attempts: 8,
 		admin_bruteforce_window_seconds: 60,
 		admin_bruteforce_block_seconds: 60,
+	},
+	auto_update: {
+		channel: "test",
+		check_interval_seconds: 300,
+		staging_path: "./data/updates",
 	},
 };
 
@@ -481,31 +489,39 @@ export function loadConfig() {
 
 	if (!path.isAbsolute(config.storage.sqlite_path)) {
 		config.storage.sqlite_path = path.resolve(
-			PROJECT_ROOT,
+			RUNTIME_ROOT,
 			config.storage.sqlite_path,
 		);
 	}
 	if (!path.isAbsolute(config.security.audit_log_path)) {
 		config.security.audit_log_path = path.resolve(
-			PROJECT_ROOT,
+			RUNTIME_ROOT,
 			config.security.audit_log_path,
 		);
 	}
 	if (!path.isAbsolute(config.resource_cache.path)) {
-		config.resource_cache.path = path.resolve(PROJECT_ROOT, config.resource_cache.path);
+		config.resource_cache.path = path.resolve(RUNTIME_ROOT, config.resource_cache.path);
 	}
 	if (config.resource_cache.cq_face_path && !path.isAbsolute(config.resource_cache.cq_face_path)) {
-		config.resource_cache.cq_face_path = path.resolve(PROJECT_ROOT, config.resource_cache.cq_face_path);
+		config.resource_cache.cq_face_path = path.resolve(RUNTIME_ROOT, config.resource_cache.cq_face_path);
 	}
 	for (const field of ["logo_path", "favicon_path"]) {
 		const configuredPath = String(config.branding[field] || "").trim();
 		if (configuredPath && !path.isAbsolute(configuredPath)) {
-			config.branding[field] = path.resolve(PROJECT_ROOT, configuredPath);
+			config.branding[field] = path.resolve(RUNTIME_ROOT, configuredPath);
 		}
 	}
 	for (const field of ["text_template_path", "html_template_path"]) {
 		const configuredPath = String(config.accounts.smtp[field] || "").trim();
-		if (configuredPath && !path.isAbsolute(configuredPath)) config.accounts.smtp[field] = path.resolve(PROJECT_ROOT, configuredPath);
+		if (configuredPath && !path.isAbsolute(configuredPath)) config.accounts.smtp[field] = path.resolve(RUNTIME_ROOT, configuredPath);
+	}
+	if (process.env.LORANA_INTERNAL_PORT) {
+		// The rolling launcher is the worker's only network peer. Trust only its
+		// canonical forwarding headers so public clients cannot spoof their IP.
+		config.server.host = "127.0.0.1";
+		config.server.port = Number(process.env.LORANA_INTERNAL_PORT);
+		config.server.trust_proxy = true;
+		config.server.trusted_proxy_cidrs = ["127.0.0.1/32", "::1/128"];
 	}
 
 	return config;

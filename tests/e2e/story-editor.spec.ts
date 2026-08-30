@@ -60,7 +60,7 @@ async function setDarkTheme(page: Page, dark: boolean) {
 	const html = page.locator("html");
 	const current = await html.evaluate(element => element.classList.contains("dark"));
 	if (current !== dark) {
-		await page.getByRole("button", { name: "更多" }).click();
+		await page.getByRole("navigation", { name: "作品工具栏" }).getByRole("button", { name: "更多" }).click();
 		await page.getByText("界面与输入设置", { exact: true }).click();
 		const settings = page.locator(".settings-modal");
 		const appearance = settings.locator(".settings-group").filter({ hasText: "外观" });
@@ -119,10 +119,12 @@ test.describe("Lorana Tales story editor", () => {
 		await page.getByRole("button", { name: "保存" }).click();
 		await expect(page.getByText("测试角色", { exact: true })).toBeVisible();
 
-		await page.getByRole("button", { name: "更多" }).click();
+		await page.getByRole("navigation", { name: "作品工具栏" }).getByRole("button", { name: "更多" }).click();
+		await expect(page.getByText("教程中心", { exact: true })).toBeVisible();
 		await expect(page.getByText("界面与输入设置", { exact: true })).toBeVisible();
 		await page.getByText("界面与输入设置", { exact: true }).click();
 		await expect(page.getByText("界面设置", { exact: true })).toBeVisible();
+		await expect(page.locator(".settings-modal").getByRole("button", { name: "教程", exact: true })).toHaveCount(0);
 		await assertViewportIntegrity(page);
 		await page.getByRole("button", { name: "关闭设置" }).click();
 
@@ -173,6 +175,7 @@ test.describe("Lorana Tales story editor", () => {
 		await expect(performanceModal.getByRole("button", { name: "关闭消息演出编排" })).toBeVisible();
 		await expect(performanceModal.getByRole("button", { name: "清除编排" })).toBeVisible();
 		await expect(performanceModal.getByRole("button", { name: "保存" })).toBeVisible();
+		await performanceModal.getByRole("button", { name: "添加一段" }).click();
 		await performanceModal.getByRole("button", { name: "选择特效" }).click();
 		const effectSelectionModal = page.locator(".effect-selection-modal");
 		const effectPicker = effectSelectionModal.getByLabel("特效选择");
@@ -181,9 +184,119 @@ test.describe("Lorana Tales story editor", () => {
 		await effectPicker.getByRole("button", { name: "绯红" }).click();
 		await effectPicker.getByRole("button", { name: "互动特效" }).click();
 		await expect(effectPicker.getByText("双方头像会在独立动画层中互动，不推动消息布局", { exact: true })).toBeVisible();
+		await expect(effectPicker.getByText("发送者", { exact: true })).toBeVisible();
+		const interactionTargetSelect = effectPicker.locator(".brush-interaction-target .n-base-selection");
+		await interactionTargetSelect.click();
+		await page.locator(".n-base-select-option").filter({ hasText: "测试角色" }).click();
 		await expect(effectPicker.getByRole("button", { name: /投掷 Emoji/ })).toBeVisible();
 		await expect(effectPicker.getByRole("button", { name: /晕倒/ })).toBeVisible();
-		await page.waitForTimeout(650);
+		for (const [effect, reaction] of [
+			["投掷 Emoji", "踉跄"],
+			["贴近爱心", "贴近回应"],
+			["施放法术", "踉跄"],
+			["展开法阵", "不回应"],
+			["突然惊吓", "跳起来"],
+			["近身冲击", "踉跄"],
+			["高速子弹", "晕倒"],
+			["飞掷刀刃", "晕倒"],
+		] as const) {
+			await effectPicker.getByRole("button", { name: new RegExp(effect) }).click();
+			await expect(effectPicker.getByRole("button", { name: new RegExp(reaction) })).toHaveClass(/active/);
+		}
+		await effectPicker.getByRole("button", { name: /施放法术/ }).click();
+		await expect(effectPicker.getByRole("button", { name: /踉跄/ })).toHaveClass(/active/);
+		await effectPicker.getByRole("button", { name: "重播互动特效" }).click();
+		await effectPicker.locator(".interaction-preview").evaluate(element => {
+			const source = element.querySelector(".interaction-preview__actor--source") as HTMLElement;
+			const target = element.querySelector(".interaction-preview__actor--target") as HTMLElement;
+			const projectile = element.querySelector(".interaction-preview__projectile") as HTMLElement;
+			for (const node of [source, target, projectile]) { const animation=node.getAnimations()[0]; if(animation){ animation.pause(); const duration=Number(animation.effect?.getTiming().duration)||2600; animation.currentTime=duration*.05; } }
+		});
+		await page.waitForTimeout(20);
+		const interactionLayers = await effectPicker.locator(".interaction-preview").evaluate(element => {
+			const source = element.querySelector(".interaction-preview__actor--source") as HTMLElement;
+			const target = element.querySelector(".interaction-preview__actor--target") as HTMLElement;
+			const projectile = element.querySelector(".interaction-preview__projectile") as HTMLElement;
+			return { sourceOpacity:Number(getComputedStyle(source).opacity),targetOpacity:Number(getComputedStyle(target).opacity),sourceZ:getComputedStyle(source).zIndex,targetZ:getComputedStyle(target).zIndex,projectileZ:getComputedStyle(projectile).zIndex,sourceAnimation:getComputedStyle(source).animationName,targetAnimation:getComputedStyle(target).animationName,targetDelay:getComputedStyle(target).animationDelay };
+		});
+		expect(interactionLayers.sourceAnimation).toContain("v10-preview-source");
+		expect(interactionLayers.targetAnimation).toContain("v10-preview-target-stagger");
+		expect(interactionLayers.targetDelay).toBe("0s");
+		expect(interactionLayers.sourceOpacity).toBeGreaterThan(.8);
+		expect(interactionLayers.targetOpacity).toBeGreaterThan(.8);
+		expect(interactionLayers.sourceZ).toBe(interactionLayers.targetZ);
+		expect(Number(interactionLayers.projectileZ)).toBeGreaterThan(Number(interactionLayers.targetZ));
+		const playerInteraction = page.locator(".interaction-scene");
+		await expect(playerInteraction).toBeVisible();
+		await playerInteraction.evaluate(element => {
+			for (const node of element.querySelectorAll<HTMLElement>(".interaction-character,.interaction-projectile")) { const animation=node.getAnimations()[0]; if(animation){ animation.pause(); const duration=Number(animation.effect?.getTiming().duration)||2600; animation.currentTime=duration*.05; } }
+		});
+		await page.waitForTimeout(20);
+		const playerLayers = await playerInteraction.evaluate(element => {
+			const source=element.querySelector(".interaction-character--source") as HTMLElement,target=element.querySelector(".interaction-character--target") as HTMLElement,projectile=element.querySelector(".interaction-projectile") as HTMLElement;
+			return {sourceOpacity:Number(getComputedStyle(source).opacity),targetOpacity:Number(getComputedStyle(target).opacity),sourceZ:getComputedStyle(source).zIndex,targetZ:getComputedStyle(target).zIndex,projectileZ:getComputedStyle(projectile).zIndex,sourceAnimation:getComputedStyle(source).animationName,targetAnimation:getComputedStyle(target).animationName};
+		});
+		expect(playerLayers.sourceOpacity).toBeGreaterThan(.8);
+		expect(playerLayers.targetOpacity).toBeGreaterThan(.8);
+		expect(playerLayers.sourceZ).toBe(playerLayers.targetZ);
+		expect(Number(playerLayers.projectileZ)).toBeGreaterThan(Number(playerLayers.targetZ));
+		expect(playerLayers.sourceAnimation).toContain("v10-player-source");
+		expect(playerLayers.targetAnimation).toContain("v10-target-stagger");
+		await effectPicker.getByRole("button", { name: "重播互动特效" }).click();
+		await page.waitForTimeout(120);
+		await effectPicker.locator(".interaction-preview__projectile").evaluate(element => { const animation=element.getAnimations()[0]; if(animation){animation.pause();const duration=Number(animation.effect?.getTiming().duration)||2600;animation.currentTime=duration*.21;} });
+		await expect(effectPicker.locator(".magic-array")).toBeVisible();
+		expect(Number(await effectPicker.locator(".magic-array").evaluate((element) => getComputedStyle(element).opacity))).toBeGreaterThan(0.5);
+		const magicGeometry = await effectPicker.locator(".interaction-preview").evaluate(element => {
+			const avatar = element.querySelector(".interaction-preview__actor--source img,.interaction-preview__actor--source>i")!.getBoundingClientRect();
+			const array = element.querySelector(".magic-array")!.getBoundingClientRect();
+			return { avatarHeight: avatar.height, arrayHeight: array.height, centerDelta: Math.abs((avatar.top + avatar.height / 2) - (array.top + array.height / 2)) };
+		});
+		expect(magicGeometry.arrayHeight).toBeLessThanOrEqual(magicGeometry.avatarHeight * 1.8);
+		expect(magicGeometry.centerDelta).toBeLessThan(10);
+		const magicLaunch = await effectPicker.locator(".interaction-preview").evaluate(element => {
+			const array = element.querySelector(".magic-array")!.getBoundingClientRect();
+			const orb = element.querySelector(".interaction-magic-orb")!.getBoundingClientRect();
+			const projectile = element.querySelector(".interaction-preview__projectile")!;
+			return { distance: Math.hypot(array.left + array.width / 2 - (orb.left + orb.width / 2), array.top + array.height / 2 - (orb.top + orb.height / 2)), array:{left:array.left,top:array.top,width:array.width,height:array.height},orb:{left:orb.left,top:orb.top,width:orb.width,height:orb.height}, animationName: getComputedStyle(projectile).animationName, animationDuration: getComputedStyle(projectile).animationDuration, transform:getComputedStyle(projectile).transform,translate:getComputedStyle(projectile).translate,currentTime: projectile.getAnimations()[0]?.currentTime };
+		});
+		expect(magicLaunch.distance).toBeLessThan(16);
+		await effectPicker.locator(".interaction-preview").screenshot({ path: "test-results/story-magic-25d-light.png" });
+		await effectPicker.getByRole("button", { name: /贴近爱心/ }).click();
+		await expect(effectPicker.getByRole("button", { name: /贴近回应/ })).toHaveClass(/active/);
+		await effectPicker.getByRole("button", { name: "重播互动特效" }).click();
+		await page.waitForTimeout(1100);
+		await expect(effectPicker.locator(".interaction-heart-particles")).toHaveCount(1);
+		await effectPicker.locator(".interaction-preview").screenshot({ path: "test-results/story-interaction-heart-light.png" });
+		await interactionTargetSelect.click();
+		await page.locator(".n-base-select-option").filter({ hasText: "无目标" }).click();
+		await effectPicker.getByRole("button", { name: /突然惊吓/ }).click();
+		await expect(effectPicker.locator(".interaction-surprise-mark")).toHaveText("!");
+		await expect(effectPicker.locator(".interaction-preview")).toHaveClass(/interaction-preview--source-only/);
+		const targetlessSurpriseOffset = await effectPicker.locator(".interaction-preview").evaluate(element => {
+			const sender = element.querySelector(".interaction-preview__actor--source img,.interaction-preview__actor--source>i")!.getBoundingClientRect();
+			const mark = element.querySelector(".interaction-preview__projectile")!.getBoundingClientRect();
+			return Math.hypot(sender.left + sender.width / 2 - (mark.left + mark.width / 2), sender.top + sender.height / 2 - (mark.top + mark.height / 2));
+		});
+		expect(targetlessSurpriseOffset).toBeLessThan(26);
+		await effectPicker.getByRole("button", { name: /近身冲击/ }).click();
+		await effectPicker.getByRole("button", { name: "重播互动特效" }).click();
+		await page.waitForTimeout(260);
+		expect(await effectPicker.locator(".interaction-preview__actor--source").evaluate(element => getComputedStyle(element).animationName)).toContain("v8-preview-impact-dash");
+		expect(await effectPicker.locator(".interaction-preview__projectile").evaluate(element => getComputedStyle(element).animationName)).toContain("v8-preview-impact-contact");
+		await effectPicker.getByRole("button", { name: /高速子弹/ }).click();
+		const bulletShape = await effectPicker.locator(".interaction-bullet-core").evaluate(element => ({ width: element.getBoundingClientRect().width, clipPath: getComputedStyle(element).clipPath }));
+		expect(bulletShape.width).toBeLessThan(50);
+		expect(bulletShape.clipPath).not.toBe("none");
+		await effectPicker.getByRole("button", { name: /飞掷刀刃/ }).click();
+		expect(await effectPicker.locator(".interaction-preview__actor--source").evaluate(element => getComputedStyle(element).animationName)).toContain("v10-preview-source");
+		expect(await effectPicker.locator(".interaction-preview__projectile").evaluate(element => getComputedStyle(element).animationName)).toContain("v9-preview-blade");
+		const bladeShape = await effectPicker.locator(".interaction-preview__sprite").evaluate(element => ({ background: getComputedStyle(element).backgroundImage, clipPath: getComputedStyle(element).clipPath }));
+		expect(bladeShape.background).toContain("linear-gradient");
+		expect(bladeShape.clipPath).not.toBe("none");
+		await effectPicker.getByRole("button", { name: "重播互动特效" }).click();
+		await page.waitForTimeout(850);
+		await effectPicker.locator(".interaction-preview").screenshot({ path: "test-results/story-interaction-blade-light.png" });
 		await page.screenshot({ path: "test-results/story-interaction-effect-picker-light.png", fullPage: true });
 		await effectPicker.getByRole("button", { name: "文本特效" }).click();
 		await effectSelectionModal.getByRole("button", { name: "完成" }).click();
@@ -197,14 +310,41 @@ test.describe("Lorana Tales story editor", () => {
 		await assertViewportIntegrity(page);
 		await page.screenshot({ path: "test-results/story-performance-message-light.png", fullPage: true });
 		await performanceModal.getByRole("button", { name: "取消" }).click();
+		await page.setViewportSize({ width: 390, height: 844 });
 		await page.getByRole("button", { name: "特效笔刷" }).click();
 		await page.getByRole("button", { name: "选择特效", exact: true }).click();
 		const brushModal = page.locator(".effect-brush-modal");
 		await expect(brushModal.getByText("文字特效", { exact: true })).toBeVisible();
 		await expect(brushModal.getByText("屏幕特效", { exact: true })).toBeVisible();
+		const brushTabs = await brushModal.locator(".effect-brush-switch-card").evaluateAll(elements => elements.map(element => element.getBoundingClientRect()));
+		expect(brushTabs).toHaveLength(3);
+		expect(Math.max(...brushTabs.map(rect => rect.top)) - Math.min(...brushTabs.map(rect => rect.top))).toBeLessThan(3);
+		expect(brushTabs.at(-1)!.right).toBeLessThanOrEqual(390);
+		await brushModal.getByRole("switch", { name: "启用屏幕特效" }).click();
 		await expect(brushModal.getByRole("button", { name: "重播特效" }).first()).toBeVisible();
-		await page.screenshot({ path: "test-results/story-effect-brush-light.png", fullPage: true });
+		await page.screenshot({ path: "test-results/story-effect-brush-mobile-light.png", fullPage: true });
 		await brushModal.getByRole("button", { name: "完成" }).click();
+		await page.setViewportSize({ width: 1280, height: 720 });
+		await page.getByRole("button", { name: "持续区间" }).click();
+		await page.getByRole("button", { name: "选择区间屏幕特效" }).click();
+		const rangeEffectModal = page.getByRole("dialog", { name: "区间屏幕特效" });
+		for (const [label, file] of [["下雨", "rain"], ["镜头雨痕", "rain-glass"], ["镜头血迹", "blood"], ["动态飘雪", "snow"]] as const) {
+			await rangeEffectModal.getByRole("button", { name: new RegExp(label) }).click();
+			await page.waitForTimeout(label === "下雨" || label === "动态飘雪" ? 520 : 900);
+			if (label === "下雨" || label === "动态飘雪") {
+				const weatherLayer = rangeEffectModal.locator(".preview-weather i").first();
+				const before = await weatherLayer.evaluate(element => ({ name: getComputedStyle(element).animationName, animations: element.getAnimations().map(animation => ({ currentTime: Number(animation.currentTime), playState: animation.playState })) }));
+				await page.waitForTimeout(240);
+				const after = await weatherLayer.evaluate(element => ({ name: getComputedStyle(element).animationName, animations: element.getAnimations().map(animation => ({ currentTime: Number(animation.currentTime), playState: animation.playState })) }));
+				expect(after.name).toContain(label === "下雨" ? "v8-preview-rain" : "v7-preview-snow");
+				expect(after.animations.some(animation => animation.playState === "running" && animation.currentTime > before.animations[0].currentTime)).toBe(true);
+			} else {
+				const overlayStyle = await rangeEffectModal.locator(".effect-preview__screen").evaluate(element => ({ animationName: getComputedStyle(element).animationName, backgroundImage: getComputedStyle(element).backgroundImage }));
+				expect(overlayStyle.animationName).toContain("v4-preview-overlay-in");
+			}
+			await rangeEffectModal.locator(".effect-preview").screenshot({ path: `test-results/story-persistent-${file}-light.png` });
+		}
+		await rangeEffectModal.getByRole("button", { name: "完成" }).click();
 		await page.screenshot({ path: "test-results/story-player-light.png", fullPage: true });
 		await page.getByRole("button", { name: "← 返回" }).click();
 		await expect(page.getByRole("button", { name: "演出编辑预览" })).toBeVisible();
@@ -220,6 +360,11 @@ test.describe("Lorana Tales story editor", () => {
 		expect(sspBytes.subarray(0, 2).toString("binary")).toBe("PK");
 
 		await page.getByRole("button", { name: "下载与导出" }).click();
+		page.once("dialog", async (dialog) => {
+			expect(dialog.type()).toBe("prompt");
+			expect(dialog.message()).toContain("作者署名");
+			await dialog.accept("端到端作者");
+		});
 		const htmlDownloadPromise = page.waitForEvent("download");
 		await page.getByRole("button", { name: "内嵌 HTML" }).click();
 		const htmlDownload = await htmlDownloadPromise;
@@ -233,6 +378,8 @@ test.describe("Lorana Tales story editor", () => {
 		const offline = await page.context().newPage();
 		await offline.goto(pathToFileURL(offlineHtmlPath).href, { waitUntil: "load" });
 		await expect(offline.getByRole("button", { name: "开始演出" })).toBeVisible();
+		await expect(offline.locator("#start-title")).toHaveText("端到端测试故事");
+		await expect(offline.locator("#start-author")).toHaveText("作者：端到端作者");
 		await offline.getByRole("button", { name: "开始演出" }).click();
 		await expect(offline.getByText("点击画布可以下一句，自动播放状态下也可以哦~", { exact: true })).toBeVisible();
 		await offline.getByText("点击画布可以下一句，自动播放状态下也可以哦~", { exact: true }).click();
@@ -302,7 +449,7 @@ test.describe("Lorana Tales story editor", () => {
 		await page.setViewportSize({ width: 1280, height: 800 });
 		await openCleanStory(page);
 		await setDarkTheme(page, false);
-		await page.getByRole("button", { name: "更多" }).click();
+		await page.getByRole("navigation", { name: "作品工具栏" }).getByRole("button", { name: "更多" }).click();
 		await page.getByText("教程中心", { exact: true }).click();
 		const center = page.getByRole("dialog", { name: "教程中心" });
 		await expect(center.getByText("基本使用教程", { exact: true })).toBeVisible();
@@ -322,8 +469,11 @@ test.describe("Lorana Tales story editor", () => {
 
 		await page.goto("/play?src=/tutorials/characters.ssp", { waitUntil: "networkidle" });
 		await expect(page.locator(".player--playback-only")).toBeVisible();
+		await expect(page.getByRole("dialog", { name: "创建第一个角色" })).toContainText("作者：Lorana Tales 学院");
 		await expect(page.locator(".player--playback-only .player-avatar img").first()).toHaveAttribute("src", /^blob:/);
 		await page.getByRole("button", { name: "开始演出" }).click();
+		await expect(page.getByText("点击画布可以下一句，自动播放状态下也可以哦~", { exact: true })).toBeVisible();
+		await page.getByText("点击画布可以下一句，自动播放状态下也可以哦~", { exact: true }).click();
 		await expect(page.getByText(/点击画布播放下一条|自动播放中/)).toBeVisible();
 		await page.getByRole("button", { name: "关闭演出" }).click();
 		await expect(page.locator(".player--playback-only")).toBeVisible();
@@ -371,12 +521,12 @@ test.describe("Lorana Tales story editor", () => {
 		await expect(panel).toBeVisible();
 
 		await page.evaluate(() => {
-			const labels = ["教程", "我的", "文档", "我的", "教程", "文档", "我的"];
+			const labels = ["教程", "特效预设", "我的", "文档", "我的", "教程", "文档", "我的"];
 			const buttons = [...document.querySelectorAll<HTMLButtonElement>(".workspace-nav nav button")];
 			for (const label of labels) buttons.find(button => button.textContent?.trim() === label)?.click();
 		});
 		await expect(panel.locator(".account-page")).toBeVisible();
-		for (const label of ["账号安全", "外观", "特效预设", "个人资料", "外观", "个人资料"]) {
+		for (const label of ["账号安全", "外观", "个人资料", "外观", "个人资料"]) {
 			await panel.getByRole("button", { name: label, exact: true }).click();
 		}
 		await expect(panel.getByText("快速切换验收", { exact: true }).first()).toBeVisible();
@@ -385,7 +535,7 @@ test.describe("Lorana Tales story editor", () => {
 	});
 
 
-	test("first editor visit offers the tutorial once", async ({ page }) => {
+	test("tutorial prompt repeats until the user opts out", async ({ page }) => {
 		await page.context().clearCookies();
 		await page.addInitScript(() => {
 			localStorage.clear();
@@ -393,6 +543,10 @@ test.describe("Lorana Tales story editor", () => {
 		});
 		await page.goto("/story?first-tutorial=1", { waitUntil: "networkidle" });
 		await expect(page.getByRole("dialog", { name: "第一次使用 Lorana Tales 吗？" })).toBeVisible();
+		await page.getByRole("button", { name: "暂时不用" }).click();
+		await page.reload({ waitUntil: "networkidle" });
+		await expect(page.getByRole("dialog", { name: "第一次使用 Lorana Tales 吗？" })).toBeVisible();
+		await page.getByRole("checkbox", { name: "以后不再显示" }).check();
 		await page.getByRole("button", { name: "暂时不用" }).click();
 		await page.reload({ waitUntil: "networkidle" });
 		await expect(page.getByRole("dialog", { name: "第一次使用 Lorana Tales 吗？" })).toHaveCount(0);

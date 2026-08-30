@@ -94,6 +94,8 @@ async function main() {
 		assert.match(health.headers.get("content-security-policy") || "", /frame-ancestors 'none'/);
 
 		assert.equal(await requestWithHost(address.port, "evil.example"), 400);
+		assert.equal(await requestWithHost(address.port, "127.0.0.1@evil.example"), 400);
+		assert.equal(await requestWithHost(address.port, "127.0.0.1:65536"), 400);
 		assert.equal((await fetch(`${base}/metrics`)).status, 401);
 		assert.equal((await fetch(`${base}/metrics`, { headers: { authorization: "Bearer audit-metrics-token" } })).status, 200);
 		assert.equal((await jsonRequest(base, "/api/account/projects")).response.status, 401);

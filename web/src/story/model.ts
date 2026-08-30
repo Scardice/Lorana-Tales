@@ -217,7 +217,7 @@ function messagesFromLogItem(
 export function storyFromLogItems(
   items: readonly LogItem[],
   chars: readonly CharItem[],
-  options: { title?: string; sourceKey?: string; sourceRevision?: string; assets?: Map<string, Uint8Array> } = {},
+  options: { title?: string; author?: string; sourceKey?: string; sourceRevision?: string; assets?: Map<string, Uint8Array> } = {},
 ): StoryDocument {
   const characters: StoryCharacter[] = [];
   const characterIds = new Map<string, string>();
@@ -297,6 +297,7 @@ export function storyFromLogItems(
     schemaVersion: STORY_SCHEMA_VERSION,
     id: createStoryId("document"),
     title: options.title || "跑团记录",
+    author: options.author?.trim() || "",
     createdAt: now,
     updatedAt: now,
     characters,
@@ -378,6 +379,7 @@ export function normalizeStoryDocument(input: StoryDocument): StoryDocument {
     schemaVersion: STORY_SCHEMA_VERSION,
     id: input.id || createStoryId("document"),
     title: input.title || "跑团记录",
+    author: String(input.author || "").trim().slice(0, 120),
     createdAt: input.createdAt || new Date().toISOString(),
     updatedAt: input.updatedAt || new Date().toISOString(),
     characters,
@@ -403,7 +405,7 @@ export function normalizeStoryDocument(input: StoryDocument): StoryDocument {
         })
       : [],
     effectTracks: Array.isArray(input.effectTracks)
-      ? input.effectTracks.filter((track) => track && typeof track.id === "string" && typeof track.startMessageId === "string" && typeof track.endMessageId === "string").map((track) => ({ ...track, color: typeof track.color === "string" && ["auto", "neutral", "red", "orange", "gold", "green", "cyan", "blue", "purple", "pink"].includes(track.color) ? track.color : undefined }))
+      ? input.effectTracks.filter((track) => track && typeof track.id === "string" && typeof track.startMessageId === "string" && typeof track.endMessageId === "string").map((track) => ({ ...track, color: typeof track.color === "string" && ["auto", "neutral", "red", "orange", "gold", "green", "cyan", "blue", "purple", "pink"].includes(track.color) ? track.color : undefined,intensityPercent:typeof track.intensityPercent==="number"?Math.max(10,Math.min(200,track.intensityPercent)):undefined,opacityPercent:typeof track.opacityPercent==="number"?Math.max(5,Math.min(100,track.opacityPercent)):undefined,speedPercent:typeof track.speedPercent==="number"?Math.max(10,Math.min(300,track.speedPercent)):undefined }))
       : [],
     characterStateEvents: Array.isArray(input.characterStateEvents)
       ? input.characterStateEvents.filter((event) => event && typeof event.id === "string" && typeof event.characterId === "string" && typeof event.afterMessageId === "string" && ["normal", "gray", "injured", "frozen", "cursed", "out", "dead", "wasted"].includes(event.state))

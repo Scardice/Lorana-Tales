@@ -2,7 +2,7 @@ import { ref } from "vue";
 import type { StoryEffectColor, StoryInteractionEffect, StoryInteractionReaction, StoryScreenEffect } from "~/story/types";
 
 export type ScreenEffectPresetConfig = { screenEffect: StoryScreenEffect; color: StoryEffectColor; durationMs: number; speedPercent: number; repeat: number };
-export type InteractionEffectPresetConfig = { interactionEffect: StoryInteractionEffect; reaction: StoryInteractionReaction; emoji: string };
+export type InteractionEffectPresetConfig = { interactionEffect: StoryInteractionEffect; reaction: StoryInteractionReaction; emoji: string; color: StoryEffectColor; speedPercent: number };
 export type EffectPresetConfig = ScreenEffectPresetConfig | InteractionEffectPresetConfig;
 export type EffectPreset = { id: string; name: string; kind: "screen" | "interaction"; folderId: string; config: EffectPresetConfig; local?: boolean };
 export type EffectPresetFolder = { id: string; name: string };

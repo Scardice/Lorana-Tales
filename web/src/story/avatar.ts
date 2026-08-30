@@ -13,5 +13,5 @@ export function storyAvatarUrl(id: string, name = "", refresh = false): string {
 	if (name.trim()) query.set("name", name.trim());
 	if (refresh) query.set("refresh", String(Date.now()));
 	const suffix = query.size ? `?${query}` : "";
-	return `/api/editor/avatar/user/${encodeURIComponent(value)}${suffix}`;
+	return `/api/editor/avatar/qq/${encodeURIComponent(value)}${suffix}`;
 }

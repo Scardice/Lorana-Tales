@@ -28,6 +28,7 @@ const requiredPaths = [
 	"VERSION",
 	"LICENSE",
 	"THIRD_PARTY_NOTICES.md",
+	"scripts/rolling-launcher.mjs",
 ];
 
 for (const relativePath of requiredPaths) {
@@ -54,7 +55,7 @@ const runtimePackage = {
 	version: releaseVersion,
 	private: true,
 	type: sourcePackage.type,
-	engines: sourcePackage.engines || { node: ">=20.19" },
+	engines: sourcePackage.engines || { node: ">=24.20.0 <25" },
 	bin: sourcePackage.bin,
 	scripts: { start: sourcePackage.scripts.start },
 	dependencies: sourcePackage.dependencies,
@@ -67,6 +68,8 @@ await fs.cp(path.join(repoRoot, "dist"), path.join(outputDir, "dist"), {
 await fs.cp(path.join(repoRoot, "out"), path.join(outputDir, "out"), {
 	recursive: true,
 });
+await fs.mkdir(path.join(outputDir, "scripts"), { recursive: true });
+await fs.copyFile(path.join(repoRoot, "scripts/rolling-launcher.mjs"), path.join(outputDir, "scripts/rolling-launcher.mjs"));
 await fs.copyFile(
 	path.join(repoRoot, "config.toml.example"),
 	path.join(outputDir, "config.toml.example"),
@@ -96,6 +99,8 @@ await fs.writeFile(
 	`${JSON.stringify(runtimePackage, null, "\t")}\n`,
 );
 
+await fs.writeFile(path.join(outputDir, "OFFICIAL_BUILD.json"), `${JSON.stringify({ repository: process.env.GITHUB_REPOSITORY || "source-build", commit: process.env.GITHUB_SHA || "", version: releaseVersion, channel: String(process.env.LORANA_RELEASE_CHANNEL || "Source") }, null, 2)}\n`);
+
 const releaseChannel = process.env.LORANA_RELEASE_CHANNEL || "Nightly";
 const packageReadme = [
 	`# Lorana Tales ${releaseChannel}`,
@@ -108,6 +113,8 @@ const packageReadme = [
 	"- Keep the SQLite path and security audit path on persistent storage.",
 	"- Set `trust_proxy = true` only when every proxy/CDN hop is trusted and overwrites forwarding headers.",
 	"- Set `allowed_hosts` and `frontend_url` to the public host when deploying behind a proxy or CDN.",
+	"- Protect the official GitHub repository and Release workflow with strong authentication; they are the automatic updater's trust root.",
+	"- Restart the service manager once after a release changes the rolling launcher itself, so later checks use the new updater engine.",
 	"- See `THIRD_PARTY_NOTICES.md` for bundled DOCX-export dependency notices.",
 	"- This project is distributed under the MIT License; see `LICENSE`.",
 	"",

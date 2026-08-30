@@ -3,6 +3,25 @@ import { loadConfig } from "../config/load-config.js";
 import { startServer } from "../server/main.js";
 import { SqliteLogStore } from "../storage/sqlite-log-store.js";
 
+let activeRuntime: Awaited<ReturnType<typeof startServer>> | undefined;
+let stopping = false;
+
+function stopServer(signal: NodeJS.Signals) {
+	if (stopping || !activeRuntime) return;
+	stopping = true;
+	const runtime = activeRuntime;
+	const fallback = setTimeout(() => runtime.server.closeAllConnections(), 5_000);
+	fallback.unref();
+	runtime.server.close(() => {
+		clearTimeout(fallback);
+		runtime.store.close();
+	});
+	console.error(`[server] ${signal}: draining active requests`);
+}
+
+process.once("SIGTERM", () => stopServer("SIGTERM"));
+process.once("SIGINT", () => stopServer("SIGINT"));
+
 function printHelp() {
 	console.log(
 		[
@@ -46,7 +65,12 @@ async function main() {
 		return;
 	}
 
-	await startServer();
+	activeRuntime = await startServer();
+	await new Promise<void>((resolve, reject) => {
+		activeRuntime?.server.once("close", resolve);
+		activeRuntime?.server.once("error", reject);
+	});
+	activeRuntime = undefined;
 }
 
 main().catch((error) => {

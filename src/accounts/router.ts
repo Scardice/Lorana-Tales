@@ -518,6 +518,8 @@ export class AccountService {
 					tutorialPromptSeen: body.tutorialPromptSeen === true,
 					manualPlaybackHintSeen: body.manualPlaybackHintSeen === true,
 					tutorialPlaybackCoachSeen: body.tutorialPlaybackCoachSeen === true,
+					recordingGuideSeen: body.recordingGuideSeen === true,
+					legacyLinkHintSeen: body.legacyLinkHintSeen === true,
 				});
 				json(res, user ? 200 : 404, user ? { user: this.publicUser(user) } : { error: "account_not_found" });
 			} catch { json(res, 400, { error: "onboarding_invalid" }); }
@@ -526,12 +528,12 @@ export class AccountService {
 		app.patch("/api/account/profile", (req, res) => {
 			const session = this.requireSession(req, res, true); if (!session || !this.requireRiskClearance(session.user.id, "profile-change", req, res)) return;
 			try {
-				const body = readJson(req); const nickname = String(body.nickname ?? session.user.nickname).trim(); const email = normalizeEmail(body.email ?? session.user.email); const avatarUrl = String(body.avatarUrl ?? session.user.avatarUrl).trim();
-				if (!validNickname(nickname) || !validEmail(email) || !this.emailAllowed(email) || !validAvatarUrl(avatarUrl)) { json(res, 400, { error: "profile_invalid" }); return; }
+				const body = readJson(req); const nickname = String(body.nickname ?? session.user.nickname).trim(); const authorSignature = String(body.authorSignature ?? session.user.authorSignature).trim(); const email = normalizeEmail(body.email ?? session.user.email); const avatarUrl = String(body.avatarUrl ?? session.user.avatarUrl).trim();
+				if (!validNickname(nickname) || authorSignature.length > 120 || !validEmail(email) || !this.emailAllowed(email) || !validAvatarUrl(avatarUrl)) { json(res, 400, { error: "profile_invalid" }); return; }
 				if (email !== session.user.email && !this.store.verifyCode(String(body.codeId || ""), email, "change-email", String(body.code || ""))) { json(res, 400, { error: "verification_invalid" }); return; }
 				const duplicate = this.store.getUserByEmail(email); if (duplicate && duplicate.id !== session.user.id) { json(res, 409, { error: "account_exists" }); return; }
-				const user = this.store.updateUser(session.user.id, { email, nickname, avatarUrl });
-				this.store.audit(session.user.id, "account.profile-update", session.user.id, { emailChanged: email !== session.user.email, avatarChanged: avatarUrl !== session.user.avatarUrl });
+				const user = this.store.updateUser(session.user.id, { email, nickname, authorSignature, avatarUrl });
+				this.store.audit(session.user.id, "account.profile-update", session.user.id, { emailChanged: email !== session.user.email, avatarChanged: avatarUrl !== session.user.avatarUrl, authorChanged: authorSignature !== session.user.authorSignature });
 				json(res, 200, { user: this.publicUser(user as AccountUser) });
 			} catch { json(res, 400, { error: "profile_invalid" }); }
 		});

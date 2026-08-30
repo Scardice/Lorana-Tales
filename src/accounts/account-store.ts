@@ -45,6 +45,7 @@ export interface AccountUser {
 	email: string;
 	username: string;
 	nickname: string;
+	authorSignature: string;
 	avatarUrl: string;
 	displayName: string;
 	role: AccountRole;
@@ -58,6 +59,8 @@ export interface AccountUser {
 	tutorialPromptSeen: boolean;
 	manualPlaybackHintSeen: boolean;
 	tutorialPlaybackCoachSeen: boolean;
+	recordingGuideSeen: boolean;
+	legacyLinkHintSeen: boolean;
 	createdAt: string;
 	updatedAt: string;
 }
@@ -119,6 +122,7 @@ function rowToUser(row: SqlRow): AccountUser {
 		email: String(row.email || ""),
 		username: String(row.username || ""),
 		nickname: String(row.nickname || row.display_name || row.username || ""),
+		authorSignature: String(row.author_signature || ""),
 		avatarUrl: String(row.avatar_url || ""),
 		displayName: String(row.nickname || row.display_name || row.username || ""),
 		role: row.role === "admin" ? "admin" : "user",
@@ -137,6 +141,8 @@ function rowToUser(row: SqlRow): AccountUser {
 		tutorialPromptSeen: Number(row.tutorial_prompt_seen || 0) === 1,
 		manualPlaybackHintSeen: Number(row.manual_playback_hint_seen || 0) === 1,
 		tutorialPlaybackCoachSeen: Number(row.tutorial_playback_coach_seen || 0) === 1,
+		recordingGuideSeen: Number(row.recording_guide_seen || 0) === 1,
+		legacyLinkHintSeen: Number(row.legacy_link_hint_seen || 0) === 1,
 		createdAt: String(row.created_at || ""),
 		updatedAt: String(row.updated_at || ""),
 	};
@@ -190,6 +196,7 @@ export class AccountStore {
 				email TEXT NOT NULL UNIQUE COLLATE NOCASE,
 				username TEXT NOT NULL DEFAULT '' COLLATE NOCASE,
 				nickname TEXT NOT NULL DEFAULT '',
+				author_signature TEXT NOT NULL DEFAULT '',
 				avatar_url TEXT NOT NULL DEFAULT '',
 				display_name TEXT NOT NULL DEFAULT '',
 				password_hash TEXT NOT NULL,
@@ -204,6 +211,8 @@ export class AccountStore {
 				tutorial_prompt_seen INTEGER NOT NULL DEFAULT 0,
 				manual_playback_hint_seen INTEGER NOT NULL DEFAULT 0,
 				tutorial_playback_coach_seen INTEGER NOT NULL DEFAULT 0,
+				recording_guide_seen INTEGER NOT NULL DEFAULT 0,
+				legacy_link_hint_seen INTEGER NOT NULL DEFAULT 0,
 				created_at TEXT NOT NULL,
 				updated_at TEXT NOT NULL
 			);
@@ -315,6 +324,7 @@ export class AccountStore {
 		const columns = new Set((this.db.prepare("PRAGMA table_info(account_users)").all() as SqlRow[]).map((row) => String(row.name || "")));
 		if (!columns.has("username")) this.db.exec("ALTER TABLE account_users ADD COLUMN username TEXT NOT NULL DEFAULT '' COLLATE NOCASE");
 		if (!columns.has("nickname")) this.db.exec("ALTER TABLE account_users ADD COLUMN nickname TEXT NOT NULL DEFAULT ''");
+		if (!columns.has("author_signature")) this.db.exec("ALTER TABLE account_users ADD COLUMN author_signature TEXT NOT NULL DEFAULT ''");
 		if (!columns.has("avatar_url")) this.db.exec("ALTER TABLE account_users ADD COLUMN avatar_url TEXT NOT NULL DEFAULT ''");
 		if (!columns.has("account_group")) this.db.exec("ALTER TABLE account_users ADD COLUMN account_group TEXT NOT NULL DEFAULT 'default'");
 		if (!columns.has("quota_mb_override")) this.db.exec("ALTER TABLE account_users ADD COLUMN quota_mb_override INTEGER");
@@ -322,6 +332,8 @@ export class AccountStore {
 		if (!columns.has("tutorial_prompt_seen")) this.db.exec("ALTER TABLE account_users ADD COLUMN tutorial_prompt_seen INTEGER NOT NULL DEFAULT 0");
 		if (!columns.has("manual_playback_hint_seen")) this.db.exec("ALTER TABLE account_users ADD COLUMN manual_playback_hint_seen INTEGER NOT NULL DEFAULT 0");
 		if (!columns.has("tutorial_playback_coach_seen")) this.db.exec("ALTER TABLE account_users ADD COLUMN tutorial_playback_coach_seen INTEGER NOT NULL DEFAULT 0");
+		if (!columns.has("recording_guide_seen")) this.db.exec("ALTER TABLE account_users ADD COLUMN recording_guide_seen INTEGER NOT NULL DEFAULT 0");
+		if (!columns.has("legacy_link_hint_seen")) this.db.exec("ALTER TABLE account_users ADD COLUMN legacy_link_hint_seen INTEGER NOT NULL DEFAULT 0");
 		const projectColumns = new Set((this.db.prepare("PRAGMA table_info(editor_projects)").all() as SqlRow[]).map((row) => String(row.name || "")));
 		if (!projectColumns.has("last_activity_at")) {
 			this.db.exec("ALTER TABLE editor_projects ADD COLUMN last_activity_at TEXT NOT NULL DEFAULT ''");
@@ -453,13 +465,14 @@ export class AccountStore {
 		return this.getUserById(userId);
 	}
 
-	updateUser(userId: string, input: Partial<{ email: string; username: string; nickname: string; displayName: string; avatarUrl: string; role: AccountRole; group: string; quotaMbOverride: number | null; retentionDaysOverride: number | null }>) {
+	updateUser(userId: string, input: Partial<{ email: string; username: string; nickname: string; authorSignature: string; displayName: string; avatarUrl: string; role: AccountRole; group: string; quotaMbOverride: number | null; retentionDaysOverride: number | null }>) {
 		const current = this.getUserById(userId);
 		if (!current) return null;
 		const email = input.email ? normalizeEmail(input.email) : current.email;
 		const username = input.username === undefined ? current.username : String(input.username).trim();
 		const nicknameInput = input.nickname === undefined ? input.displayName : input.nickname;
 		const nickname = nicknameInput === undefined ? current.nickname : String(nicknameInput).trim().slice(0, 80) || username;
+		const authorSignature = input.authorSignature === undefined ? current.authorSignature : String(input.authorSignature).trim().slice(0, 120);
 		const avatarUrl = input.avatarUrl === undefined ? current.avatarUrl : String(input.avatarUrl).trim().slice(0, 2048);
 		const role = input.role || current.role;
 		const group = input.group === undefined ? current.group : String(input.group).trim().slice(0, 40) || "default";
@@ -469,20 +482,22 @@ export class AccountStore {
 		const retentionDaysOverride = input.retentionDaysOverride === undefined
 			? current.retentionDaysOverride
 			: input.retentionDaysOverride === null ? null : Math.max(0, Math.floor(Number(input.retentionDaysOverride)));
-		this.db.prepare("UPDATE account_users SET email = ?, username = ?, nickname = ?, avatar_url = ?, display_name = ?, role = ?, account_group = ?, quota_mb_override = ?, retention_days_override = ?, updated_at = ? WHERE id = ?")
-			.run(email, username, nickname, avatarUrl, nickname, role, group, quotaMbOverride, retentionDaysOverride, nowIso(), userId);
+		this.db.prepare("UPDATE account_users SET email = ?, username = ?, nickname = ?, author_signature = ?, avatar_url = ?, display_name = ?, role = ?, account_group = ?, quota_mb_override = ?, retention_days_override = ?, updated_at = ? WHERE id = ?")
+			.run(email, username, nickname, authorSignature, avatarUrl, nickname, role, group, quotaMbOverride, retentionDaysOverride, nowIso(), userId);
 		return this.getUserById(userId);
 	}
 
-	markOnboarding(userId: string, input: { tutorialPromptSeen?: boolean; manualPlaybackHintSeen?: boolean; tutorialPlaybackCoachSeen?: boolean }) {
+	markOnboarding(userId: string, input: { tutorialPromptSeen?: boolean; manualPlaybackHintSeen?: boolean; tutorialPlaybackCoachSeen?: boolean; recordingGuideSeen?: boolean; legacyLinkHintSeen?: boolean }) {
 		const current = this.getUserById(userId);
 		if (!current) return null;
 		this.db.prepare(`UPDATE account_users SET
 			tutorial_prompt_seen = CASE WHEN ? = 1 THEN 1 ELSE tutorial_prompt_seen END,
 			manual_playback_hint_seen = CASE WHEN ? = 1 THEN 1 ELSE manual_playback_hint_seen END,
 			tutorial_playback_coach_seen = CASE WHEN ? = 1 THEN 1 ELSE tutorial_playback_coach_seen END,
+			recording_guide_seen = CASE WHEN ? = 1 THEN 1 ELSE recording_guide_seen END,
+			legacy_link_hint_seen = CASE WHEN ? = 1 THEN 1 ELSE legacy_link_hint_seen END,
 			updated_at = ? WHERE id = ?`)
-			.run(input.tutorialPromptSeen ? 1 : 0, input.manualPlaybackHintSeen ? 1 : 0, input.tutorialPlaybackCoachSeen ? 1 : 0, nowIso(), userId);
+			.run(input.tutorialPromptSeen ? 1 : 0, input.manualPlaybackHintSeen ? 1 : 0, input.tutorialPlaybackCoachSeen ? 1 : 0, input.recordingGuideSeen ? 1 : 0, input.legacyLinkHintSeen ? 1 : 0, nowIso(), userId);
 		return this.getUserById(userId);
 	}
 

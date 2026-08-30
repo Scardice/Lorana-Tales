@@ -9,13 +9,14 @@ SSP v2 是 ZIP 容器，但只接受以下内容：
 ```text
 story.lorana
 manifest.lorana
+metadata.lorana
 assets/<sha256>.<ext>
 ```
 
-- `story.lorana` 使用 Lorana Tales Story Language 2，保存角色、消息、布局、演出编排和特效参数。
-- `manifest.lorana` 把逻辑资源 ID 映射到内容哈希、MIME、大小和尺寸。
+- `story.lorana` 使用 Lorana Tales Story Language 2，只保存角色、消息、布局、演出编排和特效参数，不再重复标题和署名。
+- `metadata.lorana` 单独保存标题与作者署名；`manifest.lorana` 只描述包结构，并把逻辑资源 ID 映射到内容哈希、MIME、大小和尺寸。
 - `assets/` 按 SHA-256 内容寻址。两个逻辑资源的压缩后内容相同时，包内只保存一份。
-- 不保存 JSON 文档，也不接受清单外文件。旧 SSP v1 仍可导入，重新保存后会升级为 v2。
+- 不保存 JSON 文档，也不接受清单外文件。当前 Testify 阶段不兼容早期试验包，格式变更会直接升级 v2 结构。
 
 ## 安全边界
 
@@ -50,9 +51,41 @@ SSP 是声明式数据，不是插件包。导入器遵循以下规则：
 
 特效可以拥有持续时间、目标角色、媒体打开/返回等参数，但 SSP 只能选择应用内已经实现的效果 ID。若未来需要第三方扩展，应通过受版本控制、由站点管理员安装的代码扩展实现，不能把 JavaScript 放进用户 SSP。
 
+持续区间效果不再集中写成带 `from` / `to` 的全局声明。起点消息前单独写事件，终点消息后结束事件，源码阅读顺序与演出时间线一致：
+
+```xml
+<effect-start id="rain-1" type="rain-glass" color="cyan" intensity="90%" opacity="70%" speed="120%" />
+<msg by="character-a">
+  雨落下来了。
+</msg>
+<msg by="character-b">
+  窗上的水痕越来越长。
+</msg>
+<effect-end id="rain-1" />
+```
+
+起止事件必须成对出现；开发期格式不解析旧的全局 `<effect ... from="..." to="...">` 写法。
+
+单条消息最多叠加五段独立特效。`delay` 是相对该消息出现时刻的延迟，文字、屏幕和头像互动可以放在同一段，也可以拆成多段：
+
+```xml
+<effects>
+  <effect id="fx-1" delay="0ms" text="impact" />
+  <effect id="fx-2" delay="420ms" screen="damage" color="red" duration="600ms" speed="120%" repeat="1" />
+  <effect id="fx-3" delay="800ms" interact="magic" target="character-b" interaction-color="purple" interaction-speed="130%" />
+  <msg by="character-a">
+    看好了——这才叫叠加。
+  </msg>
+</effects>
+```
+
+`target` 可以省略，此时只播放发起角色的动作，不生成目标头像。互动类型包括 `throw`、`heart`、`magic`、`magic-circle`、`surprise`、`impact`、`bullet`、`blade`；`magic-circle` 只展开法阵，不发射光弹。
+
+启用自动播放时，每段的“延迟 + 自身持续时间”不得超过该消息停留时长。图形编辑器会在保存时阻止超时配置；多选批量应用会整体覆盖原有特效栈。
+
 ## 离线 HTML
 
-“内嵌 HTML”导出的是单文件演出播放器：头像、图片、QQ 表情和语音都转换为 data URL，现代浏览器可直接用 `file://` 打开。播放器包含开始遮罩、上一条/下一条、播放/暂停、进度、倍速、音量、全屏、图片查看、语音阻塞、引用定位、逐词动画、单次与持续屏幕效果。
+“内嵌 HTML”导出的是单文件演出播放器：头像、图片、QQ 表情和语音都转换为 data URL，现代浏览器可直接用 `file://` 打开。开始遮罩展示标题和作者署名；播放器还包含上一条/下一条、播放/暂停、进度、倍速、音量、全屏、图片查看、语音阻塞、引用定位、逐词动画、单次与持续屏幕效果。
 
 远程资源在导出时无法获取会变成占位符，并在开始界面提示数量；播放器不会在观看时重新联网。浏览器的 `prefers-reduced-motion` 设置会自动压缩动画时长。
 

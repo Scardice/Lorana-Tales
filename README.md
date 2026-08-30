@@ -4,7 +4,7 @@
 
 # Lorana Tales
 
-[![Node](https://img.shields.io/badge/node-%3E=20.19-green)](https://nodejs.org/)
+[![Node](https://img.shields.io/badge/node-24.20%20LTS-green)](https://nodejs.org/)
 [![pnpm](https://img.shields.io/badge/pnpm-latest-orange)](https://pnpm.io/)
 
 前后端一体的 Lorana Tales TRPG 跑团 Log 着色器。
@@ -40,7 +40,7 @@
 
 ### 前置要求
 
-- Node.js >= 20.19
+- Node.js >= 24.20.0 且 < 25（仅支持仍在安全维护期内的 Node 24 LTS）
 - pnpm
 
 ### 安装与启动
@@ -80,11 +80,11 @@ pnpm dev:server
 pnpm dev
 ```
 
-生产部署仍使用 `pnpm build && pnpm start`，只需要启动一个 Node 进程。
+生产部署仍使用 `pnpm build && pnpm start`。源码构建与 fork 会直接启动当前编译版本；带官方构建标记的 Linux Release 包则由同一个启动器进程托管工作进程与平滑更新代理。
 
 ### TypeScript 构建
 
-服务端源码使用 TypeScript 编写，`pnpm build:server` 会把 `src/**/*.ts` 编译到 `dist/`。`pnpm start` 只运行编译后的 `dist/bin/scardice-story-painter.js`。
+服务端源码使用 TypeScript 编写，`pnpm build:server` 会把 `src/**/*.ts` 编译到 `dist/`。`pnpm start` 运行 `scripts/rolling-launcher.mjs`；不满足官方包自动更新条件时，它会直接运行编译后的 `dist/bin/scardice-story-painter.js`。
 
 前端源码也使用 TypeScript/Vue SFC，`pnpm build:web` 会生成 `out/` 静态产物。
 
@@ -92,9 +92,9 @@ pnpm dev
 
 ### Nightly Release
 
-每次 `main` 分支有新提交时，GitHub Actions 会重新构建并更新 [Nightly Release](https://github.com/Scardice/Lorana-Tales/releases/tag/nightly)。它是一个滚动的预发布版本，固定使用 `nightly` 标签，不会创建大量按提交分裂的 Release。
+每次 `main` 分支有新提交时，GitHub Actions 会删除旧的 [Nightly Release](https://github.com/Scardice/Lorana-Tales/releases/tag/nightly) 与标签，再以当前提交重新创建。这样发布时间、源码归档与二进制包都严格对应同一基线，同时仍只保留一个滚动 Nightly。
 
-Nightly 包面向 Linux x64，使用 Node.js `>=20.19`，已经包含服务端 `dist/`、前端 `out/`、生产依赖和 `better-sqlite3` 原生模块，不需要再编译源码。下载 `.tar.gz` 或 `.zip` 后：
+Nightly 包面向 Linux x64，使用 Node.js `>=24.20.0 <25`，已经包含服务端 `dist/`、前端 `out/`、生产依赖和 `better-sqlite3` 原生模块，不需要再编译源码。下载 `.tar.gz` 或 `.zip` 后：
 
 需要长期保留的测试版或正式版由仓库的 `Release` Action 手动创建：输入 `VERSION` 同格式的版本号，并选择 `test` 或 `stable`。测试版会标记为 prerelease，正式版会成为 latest；两者都使用独立版本标签，不会被 Nightly 覆盖。新版沉浸式染色器显示的完整构建版本为 `VERSION+Git短提交码`，例如 `0.1.0-testify.1+8280e02`。
 
@@ -110,6 +110,10 @@ npm start
 ```
 
 包内同时保留 `config.toml.example` 和 `NIGHTLY-README.md`。如果要在其他操作系统上运行，建议使用源码仓库按当前平台重新执行 `pnpm install && pnpm build`，因为 `better-sqlite3` 的原生依赖与平台和 CPU 架构有关。
+
+官方 Linux Release 包默认启用 `auto_update.channel = "test"`：启动器只跟踪官方仓库带 SemVer 版本号的测试版与正式版 Release，并同时核对 GitHub 资产摘要、`SHA256SUMS`、完整提交号和包内官方构建标记。归档还会经过路径、符号链接、文件数与解压体积检查；新版本在随机本机端口通过版本健康检查后才切换内置代理，公网监听端口不会关闭，切换后 30 秒内异常退出会自动回退旧工作进程。`stable` 仅跟随正式版，`off` 关闭更新。源码构建、fork 或缺少官方标记的包不会自动更新；Nightly 也不会被自动更新器当作版本目标。更新暂存目录、检查间隔和通道均在 `[auto_update]` 配置。
+
+自动更新的信任根是官方 GitHub 仓库及其 Release 权限，因此维护者账号必须启用强验证，并建议为 Release Action 配置受保护环境与人工审批。普通前后端功能会无停机切换；若 Release 修改的是启动器本身的安全逻辑，仍应在维护窗口重启一次服务管理器，使新的启动器代码成为下一轮更新基线。
 
 ## 配置
 
@@ -347,7 +351,7 @@ PNG、JPEG 和 WebP 会以 `image_quality` 重编码为 WebP；只有更小才�
 
 新版沉浸式染色器位于 `/story`，旧版位于 `/legacy`；裸路径 `/` 服从 `[editor].default_mode`。关闭 `[editor].enable_story_mode` 后会隐藏新版入口并让 `/story` 回落旧版。新版是独立的固定视口 Web App，旧版配置区不会混入其中。
 
-新版会把旧格式日志无损映射为故事工程，旁白角色固定存在且不可删除。修改会保存在当前浏览器的 IndexedDB，刷新或再次打开相同日志时会询问是否恢复。`Ctrl+S` 下载 `.ssp`：它是包含 `story.lorana` 与 `assets/` 的高压缩 ZIP 工程包，不保存 JSON 故事文档。`story.lorana` 使用用户可直接编辑的 Lorana Tales Story Language，例如 `<time:2000ms>` 控制消息停留时间、`<wt:100ms>文字<wt/>` 控制局部逐词停顿；语音转写或声音描述保存在同一条音频消息正文中。编辑器内置语法文档和应用前校验。SSP 会校验压缩包路径、文件数和解压体积，旧版染色器日志也可直接导入新版。
+新版会把旧格式日志无损映射为故事工程，旁白角色固定存在且不可删除。修改会保存在当前浏览器的 IndexedDB，刷新或再次打开相同日志时会询问是否恢复。`Ctrl+S` 下载 `.ssp`：它是包含 `metadata.lorana`、`story.lorana`、`manifest.lorana` 与 `assets/` 的高压缩 ZIP 工程包，不保存 JSON 故事文档。标题和作者署名单独写入最外层 `metadata.lorana`；`story.lorana` 使用用户可直接编辑的 Lorana Tales Story Language，例如 `<time:2000ms>` 控制消息停留时间、`<wt:100ms>文字<wt/>` 控制局部逐词停顿。内嵌 HTML 下载前会询问本次署名，播放器会在开始前展示标题和作者。编辑器内置语法文档和应用前校验，SSP 会校验压缩包路径、文件数和解压体积，旧版染色器日志也可直接导入新版。
 
 预览支持手动/自动演出、逐词动画、录制编排、组内头像跟随滚动、图片查看、语音波形播放、按消息边界分页的长图导出，以及尽可能把资源内嵌为 Data URL 的独立 HTML。传统 Word 导出仍采用原先的角色名与正文排版，不导出聊天气泡。
 

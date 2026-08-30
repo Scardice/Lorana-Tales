@@ -264,6 +264,7 @@ export const useStore = defineStore("main", {
     /** 更新pc列表 */
     async updatePcList(charInfo: Map<string, CharItem>) {
       const exists = new Set();
+      let colorMapChanged = false;
       for (const i of this.pcList) {
         exists.add(packNameId(i));
       }
@@ -275,13 +276,14 @@ export const useStore = defineStore("main", {
           if (!c) {
             c = this.getColor();
             this.pcNameColorMap.set(v.name, c);
-            this.colorMapSave();
+            colorMapChanged = true;
           }
           v.color = c;
           this.pcList.push(v);
           exists.add(id);
         }
       }
+      if (colorMapChanged) this.colorMapSave();
     },
 
     async tryRemovePC(name: string) {

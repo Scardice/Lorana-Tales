@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import type { Server } from "node:http";
+import { isIP } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Express } from "express";
@@ -112,17 +113,20 @@ function hostnameFromHost(value): string {
 	const host = String(value || "")
 		.trim()
 		.toLowerCase();
-	if (!host) return "";
-	try {
-		return new URL(`http://${host}`).hostname.toLowerCase();
-	} catch {
-		if (host.startsWith("[") && host.includes("]")) {
-			return host.slice(1, host.indexOf("]"));
-		}
-		const colonCount = (host.match(/:/g) || []).length;
-		if (colonCount === 1) return host.split(":")[0];
-		return host;
-	}
+	if (!host || /[\s,\\/@]/.test(host)) return "";
+	const bracketed = /^\[([^\]]+)](?::(\d{1,5}))?$/.exec(host);
+	if (bracketed) return isIP(bracketed[1]) === 6 && validHostPort(bracketed[2]) ? bracketed[1] : "";
+	const regular = /^([^:]+)(?::(\d{1,5}))?$/.exec(host);
+	if (!regular || !validHostPort(regular[2])) return "";
+	const hostname = regular[1].replace(/\.$/, "");
+	if (isIP(hostname)) return hostname;
+	return hostname.length <= 253 && /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*$/.test(hostname) ? hostname : "";
+}
+
+function validHostPort(value: string | undefined): boolean {
+	if (value === undefined) return true;
+	const port = Number(value);
+	return Number.isInteger(port) && port >= 1 && port <= 65_535;
 }
 
 function hostFromUrl(value): string {
@@ -456,7 +460,7 @@ export async function startServer(
 		res.status(200);
 		res.setHeader("Cache-Control", "no-store");
 		res.setHeader("Content-Type", "application/json; charset=utf-8");
-		res.send(JSON.stringify({ ok: true, timestamp: new Date().toISOString() }));
+		res.send(JSON.stringify({ ok: true, timestamp: new Date().toISOString(), version: String(process.env.LORANA_BUILD_VERSION || "") }));
 	});
 
 	app.get("/metrics", async (req, res) => {
@@ -641,7 +645,7 @@ export async function startServer(
 		const resolved: AvatarCandidate[] = [];
 		for (const platform of order) {
 			try {
-				resolved.push(platform === "qq" ? { platform, imageUrl: `http://q1.qlogo.cn/g?b=qq&nk=${encodeURIComponent(userId)}&s=100`, names: [] } : await fetchPlatformAvatar(platform, userId));
+				resolved.push(platform === "qq" ? { platform, imageUrl: `https://q1.qlogo.cn/g?b=qq&nk=${encodeURIComponent(userId)}&s=100`, names: [] } : await fetchPlatformAvatar(platform, userId));
 			} catch { /* Try the next configured provider. */ }
 		}
 		if (!resolved.length) throw new Error("No avatar provider resolved this identity");
@@ -649,8 +653,9 @@ export async function startServer(
 		const nameMatch = expected && resolved.find((item) => item.names.some((name) => avatarName(name) === expected || avatarName(name).includes(expected) || expected.includes(avatarName(name))));
 		return nameMatch || (expected ? resolved.find((item) => item.platform === "qq") : undefined) || resolved[0];
 	}
-	async function resolveAvatarCandidates(userId: string, expectedName: string) {
-		const probes: Array<Promise<AvatarCandidate>> = [Promise.resolve({ platform: "qq" as const, imageUrl: `http://q1.qlogo.cn/g?b=qq&nk=${encodeURIComponent(userId)}&s=100`, names: [] })];
+	async function resolveAvatarCandidates(userId: string, expectedName: string, refresh = false) {
+		const refreshSuffix = refresh ? `&t=${Date.now()}` : "";
+		const probes: Array<Promise<AvatarCandidate>> = [Promise.resolve({ platform: "qq" as const, imageUrl: `https://q1.qlogo.cn/g?b=qq&nk=${encodeURIComponent(userId)}&s=100${refreshSuffix}`, names: [] })];
 		if (config.avatar_providers.discord_enabled && config.avatar_providers.discord_bot_token) probes.push(fetchPlatformAvatar("discord", userId));
 		if (config.avatar_providers.kook_enabled && config.avatar_providers.kook_bot_token) probes.push(fetchPlatformAvatar("kook", userId));
 		const settled = await Promise.allSettled(probes);
@@ -673,7 +678,7 @@ export async function startServer(
 		if (!/^\d{5,20}$/.test(userId)) { res.status(400).type("application/json").send(JSON.stringify({ error: "invalid_platform_user_id" })); return; }
 		if (!takeEditorFetchQuota("avatar-candidates", getClientIp(req, trustProxyPolicy), 30)) { res.status(429).type("application/json").send(JSON.stringify({ error: "avatar_fetch_rate_limited" })); return; }
 		try {
-			const candidates = await resolveAvatarCandidates(userId, String(req.query.name || ""));
+			const candidates = await resolveAvatarCandidates(userId, String(req.query.name || ""), req.query.refresh != null);
 			res.status(200).set({ "Cache-Control": "no-store", "Content-Type": "application/json; charset=utf-8" }).send(JSON.stringify({ candidates }));
 		} catch (error) {
 			console.error("[server] avatar candidates failed:", error instanceof Error ? error.message : error);
@@ -708,10 +713,10 @@ export async function startServer(
 			return;
 		}
 		try {
-			const candidate = await resolveUserAvatar(uin, String(req.query.name || ""));
-			const resourceId = await resourceCache.cacheRemoteImage(candidate.imageUrl);
+			const refreshSuffix = req.query.refresh == null ? "" : `&t=${Date.now()}`;
+			const resourceId = await resourceCache.cacheRemoteImage(`https://q1.qlogo.cn/g?b=qq&nk=${encodeURIComponent(uin)}&s=100${refreshSuffix}`);
 			res.setHeader("Cache-Control", req.query.refresh == null ? "public, max-age=86400" : "no-store");
-			res.setHeader("X-Avatar-Provider", candidate.platform);
+			res.setHeader("X-Avatar-Provider", "qq");
 			res.redirect(302, resourceCache.resourceUrl(resourceId));
 		} catch (error) {
 			console.error("[server] QQ avatar cache failed:", error);
@@ -878,6 +883,7 @@ export async function startServer(
 
 	const { host, port } = config.server;
 	const server = app.listen(port, host, () => {
+		server.ref();
 		console.log(
 			`[server] Lorana Tales Backend running at http://${host}:${port}`,
 		);
@@ -916,7 +922,8 @@ export async function startServer(
 			console.log(`[admin] Admin password loaded from configuration`);
 		}
 	});
-
+	// Keep the socket referenced once binding has completed. The CLI also owns
+	// the returned runtime until this server closes.
 	return { app, server, store, config, accountService };
 }
 

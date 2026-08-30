@@ -12,7 +12,7 @@
 import { acceptCompletion, autocompletion, completionKeymap, type CompletionContext, type CompletionResult, startCompletion } from "@codemirror/autocomplete";
 import { history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { EditorState } from "@codemirror/state";
-import { Decoration, type DecorationSet, EditorView, keymap, ViewPlugin, type ViewUpdate } from "@codemirror/view";
+import { Decoration, type DecorationSet, EditorView, keymap, ViewPlugin, type ViewUpdate, WidgetType } from "@codemirror/view";
 import { basicSetup } from "codemirror";
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 
@@ -22,11 +22,14 @@ const host = ref<HTMLElement>();
 let view: EditorView | undefined;
 
 const mobileSnippets = [
-	{ label: "<msg>", apply: '<msg by="">\n\n<msg/>', cursor: 9 },
-	{ label: "<role>", apply: '<role id="" name="" side="left" palette="neutral" bubble="">', cursor: 10 },
-	{ label: "<time>", apply: "<time:2000ms>", cursor: 6 },
+	{ label: "<msg>", apply: '<msg by="">\n  \n</msg>', cursor: 11 },
+	{ label: "<role>", apply: '<role id="" name="" side="left" palette="neutral" bubble="" />', cursor: 10 },
+	{ label: "<time>", apply: '<time duration="2000ms" />', cursor: 16 },
 	{ label: "<wt>", apply: "<wt:100ms><wt/>", cursor: 4 },
-	{ label: "<set>", apply: '<set name="" value="">', cursor: 11 },
+	{ label: "<set>", apply: '<set name="" value="" />', cursor: 11 },
+	{ label: "叠加", apply: '<effects>\n  <effect id="" delay="0ms" screen="damage" screen-color="red" />\n  <msg by="">\n    \n  </msg>\n</effects>', cursor: 28 },
+	{ label: "区间始", apply: '<effect-start id="" type="rain-glass" color="cyan" intensity="100%" opacity="70%" speed="100%" />', cursor: 18 },
+	{ label: "区间终", apply: '<effect-end id="" />', cursor: 16 },
 ];
 
 function roleIds(source: string) {
@@ -38,12 +41,15 @@ function storyCompletions(context: CompletionContext): CompletionResult | null {
 	if (!context.explicit && (!prefix || prefix.from === prefix.to)) return null;
 	const options = [
 		{ label: "<story>", type: "keyword", detail: "故事标题", apply: '<story title="">', boost: 99 },
-		{ label: "<role>", type: "keyword", detail: "定义角色", apply: '<role id="" name="" side="left" palette="neutral" bubble="">', boost: 98 },
-		{ label: "<msg>", type: "keyword", detail: "消息块", apply: '<msg by="">\n\n<msg/>', boost: 100 },
-		{ label: "<set>", type: "keyword", detail: "全局配置", apply: '<set name="" value="">' },
-		{ label: "<time>", type: "keyword", detail: "完整显示后停留", apply: "<time:2000ms>" },
+		{ label: "<role>", type: "keyword", detail: "定义角色", apply: '<role id="" name="" side="left" palette="neutral" bubble="" />', boost: 98 },
+		{ label: "<msg>", type: "keyword", detail: "消息块", apply: '<msg by="">\n  \n</msg>', boost: 100 },
+		{ label: "<effects>", type: "keyword", detail: "包裹一条消息的叠加特效", apply: '<effects>\n  <effect id="" delay="0ms" screen="damage" screen-color="red" />\n  <msg by="">\n    \n  </msg>\n</effects>', boost: 99 },
+		{ label: "<set>", type: "keyword", detail: "全局配置", apply: '<set name="" value="" />' },
+		{ label: "<time>", type: "keyword", detail: "完整显示后停留", apply: '<time duration="2000ms" />' },
 		{ label: "<wt>", type: "keyword", detail: "逐词延迟偏移，可为负数", apply: "<wt:100ms>文本<wt/>" },
-		{ label: "<msg/>", type: "keyword", detail: "结束消息", apply: "<msg/>" },
+		{ label: "</msg>", type: "keyword", detail: "结束消息", apply: "</msg>" },
+		{ label: "<effect-start>", type: "keyword", detail: "从下一条消息开始区间屏幕特效", apply: '<effect-start id="" type="rain-glass" color="cyan" intensity="100%" opacity="70%" speed="100%" />' },
+		{ label: "<effect-end>", type: "keyword", detail: "在上一条消息结束区间特效", apply: '<effect-end id="" />' },
 		...roleIds(context.state.doc.toString()).map((id) => ({ label: id, type: "variable", detail: "角色 id", apply: id })),
 	];
 	return { from: prefix?.from ?? context.pos, options, validFor: /<?\/?[\w-]*/ };
@@ -55,6 +61,13 @@ function insertSnippet(text: string, cursor = text.length) {
 	const selection = view.state.selection.main;
 	view.dispatch({ changes: { from: selection.from, to: selection.to, insert: text }, selection: { anchor: selection.from + Math.min(cursor, text.length) } });
 	view.focus();
+}
+
+class FoldedUrlWidget extends WidgetType {
+	constructor(readonly fullUrl:string){super()}
+	eq(other:FoldedUrlWidget){return other.fullUrl===this.fullUrl}
+	toDOM(){const element=document.createElement("span");element.className="cm-folded-url";element.textContent="…";element.title=this.fullUrl;return element}
+	ignoreEvent(){return false}
 }
 
 function syntaxDecorations(editor: EditorView): DecorationSet {
@@ -83,6 +96,7 @@ function syntaxDecorations(editor: EditorView): DecorationSet {
 			const from = visible.from + (match.index || 0); const to = from + match[0].length;
 			if (!inComment(from, to)) ranges.push({ from, to, value: Decoration.mark({ class: "tok-value" }) });
 		}
+		for(const pattern of [/\b(?:url|asset|source-url|file|source-part)="(https?:\/\/[^"\s]{72,})"/g,/\b(?:url|asset|source-url|file)=(https?:\/\/[^,\]\s]{72,})/g])for(const match of text.matchAll(pattern)){const url=match[1];const offset=(match.index||0)+match[0].indexOf(url);const keep=Math.min(52,url.length-8);const from=visible.from+offset+keep,to=visible.from+offset+url.length;const cursor=editor.state.selection.main.head;if(cursor>=from-1&&cursor<=to+1)continue;ranges.push({from,to,value:Decoration.replace({widget:new FoldedUrlWidget(url)})})}
 	}
 	ranges.sort((left, right) => left.from - right.from || right.to - left.to);
 	return Decoration.set(ranges, true);
@@ -91,7 +105,7 @@ function syntaxDecorations(editor: EditorView): DecorationSet {
 const storyHighlight = ViewPlugin.fromClass(class {
 	decorations: DecorationSet;
 	constructor(editor: EditorView) { this.decorations = syntaxDecorations(editor); }
-	update(update: ViewUpdate) { if (update.docChanged || update.viewportChanged) this.decorations = syntaxDecorations(update.view); }
+	update(update: ViewUpdate) { if (update.docChanged || update.viewportChanged || update.selectionSet) this.decorations = syntaxDecorations(update.view); }
 }, { decorations: (plugin) => plugin.decorations });
 
 onMounted(() => {
@@ -110,7 +124,7 @@ onMounted(() => {
 				EditorView.updateListener.of((update) => { if (update.docChanged) emit("update:modelValue", update.state.doc.toString()); }),
 				EditorView.theme({
 					"&": { height: "100%", backgroundColor: "#1e1e1e", color: "#d4d4d4", fontSize: "14px" },
-					".cm-content": { padding: "14px 0", caretColor: "#aeafad", fontFamily: "'Cascadia Code','SFMono-Regular',Consolas,monospace" },
+					".cm-content": { padding: "14px 0", caretColor: "#aeafad", fontFamily: "'Maple Mono NF CN','Maple Mono SC NF','Sarasa Mono SC','Noto Sans Mono CJK SC','Microsoft YaHei UI','Cascadia Mono',Consolas,monospace", lineHeight: "1.72", letterSpacing: ".01em" },
 					".cm-line": { padding: "0 16px 0 8px" },
 					".cm-gutters": { backgroundColor: "#181818", color: "#858585", borderRight: "1px solid #2a2a2a" },
 					".cm-activeLine,.cm-activeLineGutter": { backgroundColor: "#ffffff0a" },
@@ -122,6 +136,7 @@ onMounted(() => {
 					".tok-attribute": { color: "#9cdcfe" },
 					".tok-string": { color: "#ce9178" },
 					".tok-value": { color: "#b5cea8" },
+					".cm-folded-url": { display:"inline-grid", placeItems:"center", minWidth:"1.4em", margin:"0 .08em", border:"1px solid #60706d", borderRadius:"5px", backgroundColor:"#2b3533", color:"#9fd8d1", cursor:"text", fontWeight:"700" },
 				}),
 			],
 		}),

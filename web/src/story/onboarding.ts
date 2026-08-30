@@ -1,4 +1,4 @@
-export type OnboardingFlag = "tutorialPromptSeen" | "manualPlaybackHintSeen" | "tutorialPlaybackCoachSeen";
+export type OnboardingFlag = "tutorialPromptSeen" | "manualPlaybackHintSeen" | "tutorialPlaybackCoachSeen" | "recordingGuideSeen" | "legacyLinkHintSeen";
 
 interface AccountMe {
   authenticated?: boolean;
@@ -11,6 +11,8 @@ const cookieNames: Record<OnboardingFlag, string> = {
   tutorialPromptSeen: "lorana_tutorial_prompt_seen",
   manualPlaybackHintSeen: "lorana_manual_playback_hint_seen",
   tutorialPlaybackCoachSeen: "lorana_tutorial_playback_coach_seen",
+  recordingGuideSeen: "lorana_recording_guide_seen",
+  legacyLinkHintSeen: "lorana_legacy_link_hint_seen",
 };
 
 function cookieValue(name: string) {

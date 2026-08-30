@@ -67,6 +67,8 @@ export interface StoryMessagePerformance {
   tokenGroups?: Array<{ start: number; end: number }>;
   /** Override the global per-token entrance animation for this message. */
   tokenAnimation?: StoryStreamTokenAnimation;
+  /** Ordered, independently delayed visual effect segments. At most five are played. */
+  effects?: StoryMessageEffectSegment[];
   /** One-shot screen effect fired when this message appears. */
   screenEffect?: StoryScreenEffect;
   /** Safe preset colour applied independently from the effect motion. */
@@ -80,11 +82,15 @@ export interface StoryMessagePerformance {
   /** Choreographed interaction between the speaking character and another character. */
   interaction?: {
     effect: StoryInteractionEffect;
-    targetCharacterId: string;
-    /** Emoji or a short glyph used as the projectile/symbol. */
+    targetCharacterId?: string;
+    /** Optional user glyph override. Built-in resources are used when omitted. */
     emoji?: string;
     /** Independent response animation for the target; none supports deliberate non-response. */
     reaction?: StoryInteractionReaction;
+    /** Tint for built-in interaction resources and the magic array. */
+    color?: StoryEffectColor;
+    /** Playback speed percentage for charge, travel and target reaction. */
+    speedPercent?: number;
   };
   /** Automatically open an image after it appears, then close it after the configured time. */
   imagePreview?: {
@@ -97,18 +103,47 @@ export interface StoryMessagePerformance {
   replyPreview?: { durationMs: number };
 }
 
+export interface StoryMessageEffectSegment {
+  id: string;
+  /** Delay from the moment the message becomes visible. */
+  delayMs: number;
+  /** Optional animation applied to the message text/bubble at this point. */
+  textAnimation?: StoryStreamTokenAnimation;
+  screen?: {
+    effect: Exclude<StoryScreenEffect, "none">;
+    color?: StoryEffectColor;
+    durationMs?: number;
+    speedPercent?: number;
+    repeat?: number;
+  };
+  interaction?: {
+    effect: StoryInteractionEffect;
+    targetCharacterId?: string;
+    emoji?: string;
+    reaction?: StoryInteractionReaction;
+    color?: StoryEffectColor;
+    speedPercent?: number;
+  };
+}
+
 export type StoryStreamTokenAnimation = "none" | "fade" | "rise" | "blur" | "impact" | "shake" | "ghost";
 export type StoryScreenEffect = "none" | "shake-light" | "shake-heavy" | "glow" | "warm-glow" | "cold-flash" | "flash" | "flicker" | "damage" | "heartbeat" | "blackout" | "dream" | "vignette" | "ripple" | "curtain" | "chromatic" | "zoom-focus";
 export type StoryEffectColor = "auto" | "neutral" | "red" | "orange" | "gold" | "green" | "cyan" | "blue" | "purple" | "pink";
-export type StoryInteractionEffect = "throw" | "heart" | "magic" | "surprise" | "impact" | "bullet" | "blade";
+export type StoryInteractionEffect = "throw" | "heart" | "magic" | "magic-circle" | "surprise" | "impact" | "bullet" | "blade";
 export type StoryInteractionReaction = "none" | "bounce" | "stagger" | "faint" | "shatter" | "gray" | "affection";
 export type StoryCharacterState = "normal" | "gray" | "injured" | "frozen" | "cursed" | "out" | "dead" | "wasted";
-export type StoryPersistentEffect = "low-health" | "curse" | "dream-haze" | "storm" | "magic-aura";
+export type StoryPersistentEffect = "low-health" | "curse" | "dream-haze" | "storm" | "magic-aura" | "rain-glass" | "blood-stain" | "snowfall" | "underwater" | "film-grain";
 
 export interface StoryEffectTrack {
   id: string;
   effect: StoryPersistentEffect;
   color?: StoryEffectColor;
+  /** Visual strength of the persistent effect. */
+  intensityPercent?: number;
+  /** Opacity of the persistent overlay. */
+  opacityPercent?: number;
+  /** Motion speed; 100 is the preset's natural speed. */
+  speedPercent?: number;
   startMessageId: string;
   endMessageId: string;
 }
@@ -212,6 +247,8 @@ export interface StoryDocument {
   schemaVersion: number;
   id: string;
   title: string;
+  /** Human-facing signature embedded into SSP and standalone HTML exports. */
+  author: string;
   createdAt: string;
   updatedAt: string;
   characters: StoryCharacter[];

@@ -1,5 +1,8 @@
 overrides:
   "brace-expansion@>=2.0.0 <2.1.4": 2.1.4
+  # 1.20.2/1.20.3 were newly published without the stronger provenance used by
+  # an earlier release; retain the mature audited release until that is fixed.
+  fastq: 1.20.1
   ini: ^1.3.8
   nanoid: 3.3.18
 
@@ -9,3 +12,11 @@ allowBuilds:
   better-sqlite3: true
   esbuild: true
   vue-demi: true
+
+# Supply-chain guardrails: wait for registry takedowns, reject trust downgrades,
+# and never let a transitive dependency introduce a new git/tarball source.
+minimumReleaseAge: 1440
+minimumReleaseAgeStrict: true
+minimumReleaseAgeIgnoreMissingTime: false
+trustPolicy: no-downgrade
+blockExoticSubdeps: true

@@ -36,6 +36,7 @@ async function rejects(action: () => Promise<unknown>, pattern: RegExp) {
 
 const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3, 4]);
 const document = storyFromLogItems([], [], { title: "安全往返 </script> 测试" });
+document.author = "雪桃 & Lorana Tales";
 document.id = "document-roundtrip";
 document.createdAt = "2026-08-27T00:00:00.000Z";
 document.updatedAt = "2026-08-27T01:02:03.000Z";
@@ -74,10 +75,10 @@ document.messages.push(
 			stream: true,
 			tokenDelays: { 0: -20, 1: 80 },
 			tokenGroups: [{ start: 0, end: 2 }],
-			tokenAnimation: "impact",
-			screenEffect: "damage",
-			screenEffectColor: "purple",
-			interaction: { effect: "heart", targetCharacterId: "character-narrator", emoji: "❤", reaction: "affection" },
+			effects: [
+				{ id: "message-effect-1", delayMs: 0, textAnimation: "impact", screen: { effect: "damage", color: "purple", durationMs: 500, speedPercent: 120, repeat: 1 } },
+				{ id: "message-effect-2", delayMs: 420, interaction: { effect: "heart", targetCharacterId: "character-narrator", emoji: "❤", reaction: "affection", color: "pink", speedPercent: 135 } },
+			],
 		},
 	},
 	{
@@ -105,22 +106,35 @@ const blob = await createStoryPackage(archive);
 const packed = new Uint8Array(await blob.arrayBuffer());
 const entries = unzipSync(packed);
 assert.ok(entries["manifest.lorana"]);
+assert.ok(entries["metadata.lorana"]);
 assert.ok(entries["story.lorana"]);
+const storySource = strFromU8(entries["story.lorana"]);
+const manifestSource = strFromU8(entries["manifest.lorana"]);
+const metadataSource = strFromU8(entries["metadata.lorana"]);
+assert.doesNotMatch(storySource, /\b(?:title|author)="/);
+assert.match(manifestSource, /<package [^>]*metadata="metadata\.lorana"/);
+assert.match(metadataSource, /<metadata [^>]*title="安全往返 <\/script> 测试" author="雪桃 & Lorana Tales"/);
+assert.match(storySource, /<roles>[\s\S]*<\/roles>/, "角色应使用缩进包裹结构");
+assert.match(storySource, /<effects>[\s\S]*delay="420ms"[\s\S]*<msg [^>]+>[\s\S]*<\/msg>[\s\S]*<\/effects>/, "叠加特效应包裹对应消息");
+assert.match(storySource, /<time duration="1200ms"\s*\/>/, "停留时间应使用自闭合结构");
 assert.equal(Object.keys(entries).filter((name) => name.startsWith("assets/")).length, 1, "相同内容必须只保存一份");
 assert.doesNotMatch(strFromU8(entries["story.lorana"]), /\{\s*"/);
 
 const restored = await readStoryPackage(packed);
 assert.equal(restored.document.title, document.title);
+assert.equal(restored.document.author, document.author);
 assert.equal(restored.document.updatedAt, document.updatedAt);
 assert.equal(restored.document.source.kind, document.source.kind);
 assert.equal(restored.document.source.name, document.source.name);
 assert.equal(restored.document.source.revision, document.source.revision);
 assert.equal(restored.document.characters.find((item) => item.id === "alice")?.avatarSource, "package");
-assert.equal(restored.document.messages[0].performance?.screenEffect, "damage");
+assert.equal(restored.document.messages[0].performance?.effects?.length, 2);
+assert.equal(restored.document.messages[0].performance?.effects?.[0]?.screen?.effect, "damage");
 assert.equal(restored.document.messages[0].performance?.typingDurationMs, 480);
-assert.equal(restored.document.messages[0].performance?.screenEffectColor, "purple");
+assert.equal(restored.document.messages[0].performance?.effects?.[0]?.screen?.color, "purple");
 assert.equal(restored.document.effectTracks[0]?.color, "orange");
-assert.equal(restored.document.messages[0].performance?.interaction?.reaction, "affection");
+assert.equal(restored.document.messages[0].performance?.effects?.[1]?.interaction?.reaction, "affection");
+assert.equal(restored.document.messages[0].performance?.effects?.[1]?.delayMs, 420);
 assert.equal(restored.document.characterStateEvents[0]?.state, "dead");
 assert.equal(restored.document.characterStateEvents[0]?.label, "阵亡");
 assert.equal(restored.document.messages[0].sourcePartText, "原始分段");
@@ -136,7 +150,8 @@ assert.ok(Buffer.isBuffer(binaryProject?.document));
 assert.deepEqual(new Uint8Array(binaryProject!.document as Buffer), packed);
 const legacyProject = accountStore.createProject(testUser.id, "旧工程", { language: "legacy", assets: [] });
 assert.deepEqual(legacyProject?.document, { language: "legacy", assets: [] });
-assert.equal(accountStore.updateUser(testUser.id, { retentionDaysOverride: 14 })?.retentionDaysOverride, 14);
+assert.equal(accountStore.updateUser(testUser.id, { retentionDaysOverride: 14, authorSignature: "格式测试作者" })?.retentionDaysOverride, 14);
+assert.equal(accountStore.getUserById(testUser.id)?.authorSignature, "格式测试作者");
 database.prepare("UPDATE editor_projects SET last_activity_at = ? WHERE id = ?").run("2020-01-01T00:00:00.000Z", legacyProject!.id);
 const cleanupResult = accountStore.cleanupInactiveProjects((user) => user.retentionDaysOverride ?? 30);
 assert.equal(cleanupResult.deletedProjects, 1);
@@ -259,8 +274,11 @@ const html = await createPerformanceHtml(
 	restored,
 	async (ref) => ref && restored.assets.has(ref.id) ? "data:image/png;base64,iVBORw0KGgo=" : "",
 	async (character: StoryCharacter) => character.avatar ? "data:image/png;base64,iVBORw0KGgo=" : "",
+	Object.fromEntries(["arcaneParry","bloodLensOverlay","bloodSplatter01","bloodSplatter02","bulletStrip","crescentSlash","electricImpact","lensRaindrops","magicalProjectile","radiantHeal","rainField","rainOverlay"].map((key)=>[key,"data:image/png;base64,iVBORw0KGgo="])),
 );
 assert.match(html, /Content-Security-Policy/);
+assert.match(html, /"author":"雪桃 & Lorana Tales"/);
+assert.match(html, /作者：/);
 assert.match(html, /id="next"/);
 assert.match(html, /id="volume"/);
 assert.match(html, /id="fullscreen"/);
@@ -268,6 +286,13 @@ assert.match(html, /persistent-layer/);
 assert.match(html, /characterStateByMessage/);
 assert.match(html, /reaction-affection/);
 assert.match(html, /typingDurationMs/);
+assert.match(html, /function scheduleEffects\(m\)/, "离线播放器必须调度多段特效");
+assert.match(html, /v5-html-snow/, "离线播放器必须包含连续飘雪动画");
+assert.match(html, /lensRaindrops/, "离线播放器必须内嵌镜头雨痕资源");
+assert.match(html, /bloodLensOverlay/, "离线播放器必须内嵌镜头血迹资源");
+assert.match(html, /html-game-rain/, "离线播放器必须包含动态降雨运行时");
+assert.match(html, /html-game-snow/, "离线播放器必须包含分层飘雪运行时");
+assert.match(html, /html-magic-plane/, "离线播放器必须包含侧前方法阵运行时");
 assert.doesNotMatch(html, /<\/script>\s*测试/);
 assert.doesNotMatch(html, /https?:\/\//);
 const scripts = [...html.matchAll(/<script(?: [^>]*)?>([\s\S]*?)<\/script>/g)];

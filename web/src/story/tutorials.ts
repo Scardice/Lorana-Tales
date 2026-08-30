@@ -59,6 +59,7 @@ function tutorialArchive(id: string, title: string, lines: Line[]): StoryArchive
       schemaVersion: STORY_SCHEMA_VERSION,
       id: `tutorial-${id}`,
       title,
+      author: "Lorana Tales 学院",
       createdAt: now,
       updatedAt: now,
       characters: structuredClone(characters),

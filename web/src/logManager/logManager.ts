@@ -70,7 +70,7 @@ export class LogManager {
       const importer = _importer as LogImporter;
       if (importer.check(text)) {
         const ret = importer.parse(text);
-        console.log(`初步识别log为 ${importer.name} 格式，解析为:`, ret);
+        console.info(`初步识别 log 为 ${importer.name} 格式，共 ${ret.items.length} 条`);
         if (genFakeHeadItem) {
           const item = {} as LogItem;
           item.isRaw = true;
@@ -107,7 +107,6 @@ export class LogManager {
     }
     if (this.working) return;
     this.working = true;
-    console.log("syncChange");
 
     if (!this.lastText) {
       const info = this.parse(curText, true);
@@ -133,18 +132,13 @@ export class LogManager {
       // flush 代表刷新当前editer的文本，使其与内部数据结构一致，用于导入非余烬文本格式日志
       let needFlush = false;
 
-      for (const i of this.lastIndexInfoList) {
-        if (a < i.indexEnd && b >= i.indexStart) {
-          influence.push(i);
-        }
-        if (i === last) {
-          if (last.indexEnd === r1[0]) {
-            influence.push(i);
-          }
-        }
-      }
+      // Index ranges are ordered. A binary search avoids walking every message
+      // for each keystroke in a long log.
+      let low=0,high=this.lastIndexInfoList.length;
+      while(low<high){const middle=(low+high)>>>1;if(this.lastIndexInfoList[middle].indexEnd<=a)low=middle+1;else high=middle}
+      for(let index=low;index<this.lastIndexInfoList.length;index+=1){const item=this.lastIndexInfoList[index];if(item.indexStart>b)break;if(a<item.indexEnd&&b>=item.indexStart)influence.push(item)}
+      if(last?.indexEnd===a&&influence.at(-1)!==last)influence.push(last);
       // console.log("H", this.lastIndexInfoList, r1, influence)
-      console.log("TEST", this.lastIndexInfoList, r1, r2, influence);
 
       // 省事起见，不做精细控制，直接重建被影响的部分
       const replacePart = curText.slice(...r2);
@@ -169,7 +163,6 @@ export class LogManager {
           changedText,
           influence[0] === this.lastIndexInfoList[0],
         );
-        console.log("changedText", [changedText], rInfo);
         const offset = r2[1] - r2[0] - (r1[1] - r1[0]);
 
         if (rInfo) {
@@ -191,7 +184,7 @@ export class LogManager {
                 // 合并到当前最后一个节点中
                 if (right[0].item.isRaw) {
                   // 没有这种情况？？？为什么
-                  console.log("XXXXXXXXXXX", right);
+                  console.warn("解析器遇到异常的头部原始文本节点");
                 }
               }
             }

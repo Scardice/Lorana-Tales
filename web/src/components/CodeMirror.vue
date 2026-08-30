@@ -71,22 +71,23 @@ function getExts(highlight = false) {
 }
 
 class ImagePreviewWidget extends WidgetType {
-	constructor(readonly url: string) {
+	constructor(readonly url: string,readonly loaded=false) {
 		super();
 	}
 
 	eq(other: ImagePreviewWidget) {
-		return other.url === this.url;
+		return other.url === this.url&&other.loaded===this.loaded;
 	}
 
 	toDOM() {
 		let wrap = document.createElement("span");
 		wrap.setAttribute("aria-hidden", "true");
-		wrap.className = "cm-my-image"; // edit-image
-		let box = wrap.appendChild(document.createElement("img"));
-		box.src = this.url;
-		// box.setAttribute('crossOrigin', 'anonymous')
-		box.setAttribute("data-original", this.url);
+		wrap.className = `cm-my-image${this.loaded?" is-loaded":" is-placeholder"}`; // edit-image
+		if(this.loaded){
+			let box = wrap.appendChild(document.createElement("img"));
+			box.src = this.url;
+			box.setAttribute("data-original", this.url);
+		}
 		return wrap;
 	}
 
@@ -96,25 +97,27 @@ class ImagePreviewWidget extends WidgetType {
 }
 
 class FoldedBase64ImageWidget extends WidgetType {
-	constructor(readonly url: string) {
+	constructor(readonly url: string,readonly loaded=false) {
 		super();
 	}
 
 	eq(other: FoldedBase64ImageWidget) {
-		return other.url === this.url;
+		return other.url === this.url&&other.loaded===this.loaded;
 	}
 
 	toDOM() {
 		const wrap = document.createElement("span");
-		wrap.className = "cm-base64-image-fold";
+		wrap.className = `cm-base64-image-fold${this.loaded?" is-loaded":" is-placeholder"}`;
 
 		const label = wrap.appendChild(document.createElement("span"));
 		label.className = "cm-base64-image-fold__label";
 		label.textContent = "[base64 image]";
 
-		const image = wrap.appendChild(document.createElement("img"));
-		image.src = this.url;
-		image.setAttribute("data-original", this.url);
+		if(this.loaded){
+			const image = wrap.appendChild(document.createElement("img"));
+			image.src = this.url;
+			image.setAttribute("data-original", this.url);
+		}
 
 		return wrap;
 	}
@@ -124,7 +127,12 @@ class FoldedBase64ImageWidget extends WidgetType {
 	}
 }
 
-function base64ImageDecoration(text: string, from: number, to: number) {
+function base64ImageDecoration(text: string, from: number, to: number,loadImages=false) {
+	if(!text.includes("base64://"))return undefined;
+	if(!loadImages)return Decoration.replace({widget:new FoldedBase64ImageWidget("",false)}).range(from,to);
+	// Keep a hard per-image safety ceiling against malformed or hostile payloads;
+	// ordinary embedded images remain available after the viewport settles.
+	if (text.length > 8_000_000) return Decoration.replace({widget:new FoldedBase64ImageWidget("",false)}).range(from,to);
 	const cqMatch = /file=base64:\/\/([A-Za-z0-9+/=\s]+)\]/.exec(text);
 	const bracketMatch = /\[(?:image|图):base64:\/\/([A-Za-z0-9+/=\s]+)\]/.exec(
 		text,
@@ -133,11 +141,11 @@ function base64ImageDecoration(text: string, from: number, to: number) {
 	if (!base64) return undefined;
 
 	return Decoration.replace({
-		widget: new FoldedBase64ImageWidget(base64ImageSrc(base64)),
+		widget: new FoldedBase64ImageWidget(loadImages?base64ImageSrc(base64):"",loadImages),
 	}).range(from, to);
 }
 
-function imagePreviews(view: EditorView): DecorationSet {
+function imagePreviews(view: EditorView,loadImages=false): DecorationSet {
 	const widgets: Array<Range<Decoration>> = [];
 	for (let { from, to } of view.visibleRanges) {
 		syntaxTree(view.state).iterate({
@@ -146,8 +154,12 @@ function imagePreviews(view: EditorView): DecorationSet {
 			enter: (node) => {
 				let { from, to } = node;
 				if (node.name.startsWith("image-")) {
+					if(!loadImages&&to-from>64_000){
+						widgets.push(Decoration.replace({widget:new FoldedBase64ImageWidget("",false)}).range(from,to));
+						return;
+					}
 					const text = view.state.doc.sliceString(from, to);
-					const base64Decoration = base64ImageDecoration(text, from, to);
+					const base64Decoration = base64ImageDecoration(text, from, to,loadImages);
 					if (base64Decoration) {
 						widgets.push(base64Decoration);
 						return;
@@ -159,7 +171,7 @@ function imagePreviews(view: EditorView): DecorationSet {
 						) as RegExpExecArray;
 					if (m) {
 						let deco = Decoration.widget({
-							widget: new ImagePreviewWidget(m[1]),
+							widget: new ImagePreviewWidget(m[1],loadImages),
 							side: 0,
 						});
 						widgets.push(deco.range(to));
@@ -172,7 +184,7 @@ function imagePreviews(view: EditorView): DecorationSet {
 					) as RegExpExecArray;
 					if (m && !text.includes("file_unique")) {
 						let deco = Decoration.widget({
-							widget: new ImagePreviewWidget(m[1]),
+							widget: new ImagePreviewWidget(m[1],loadImages),
 							side: 0,
 						});
 						widgets.push(deco.range(to));
@@ -183,7 +195,7 @@ function imagePreviews(view: EditorView): DecorationSet {
 					) as RegExpExecArray;
 					if (m) {
 						let deco = Decoration.widget({
-							widget: new ImagePreviewWidget(m[1]),
+							widget: new ImagePreviewWidget(m[1],loadImages),
 							side: 0,
 						});
 						widgets.push(deco.range(to));
@@ -197,6 +209,7 @@ function imagePreviews(view: EditorView): DecorationSet {
 							let deco = Decoration.widget({
 								widget: new ImagePreviewWidget(
 									`https://gchat.qpic.cn/gchatpic_new/0/0-0-${m[1]}/0?term=2,subType=1`,
+									loadImages,
 								),
 								side: 0,
 							});
@@ -208,7 +221,7 @@ function imagePreviews(view: EditorView): DecorationSet {
 					m = /file=(https?:\/\/[^\]]+)\]/.exec(text) as RegExpExecArray;
 					if (m) {
 						let deco = Decoration.widget({
-							widget: new ImagePreviewWidget(m[1]),
+							widget: new ImagePreviewWidget(m[1],loadImages),
 							side: 0,
 						});
 						widgets.push(deco.range(to));
@@ -222,7 +235,7 @@ function imagePreviews(view: EditorView): DecorationSet {
 					if (m) {
 						const url = `https://gchat.qpic.cn/gchatpic_new/0/0-0-${m[1]}${m[2]}${m[3]}${m[4]}${m[5]}/0?term=2,subType=1`;
 						let deco = Decoration.widget({
-							widget: new ImagePreviewWidget(url),
+							widget: new ImagePreviewWidget(url,loadImages),
 							side: 0,
 						});
 						widgets.push(deco.range(to));
@@ -236,6 +249,7 @@ function imagePreviews(view: EditorView): DecorationSet {
 						let deco = Decoration.widget({
 							widget: new ImagePreviewWidget(
 								`https://gchat.qpic.cn/gchatpic_new/0/0-0-${m[1]}/0?term=2,subType=1`,
+								loadImages,
 							),
 							side: 0,
 						});
@@ -250,6 +264,7 @@ function imagePreviews(view: EditorView): DecorationSet {
 						let deco = Decoration.widget({
 							widget: new ImagePreviewWidget(
 								`https://gchat.qpic.cn/gchatpic_new/0/0-0-${m[1].toUpperCase()}/0?term=2,subType=1`,
+								loadImages,
 							),
 							side: 0,
 						});
@@ -263,7 +278,7 @@ function imagePreviews(view: EditorView): DecorationSet {
 					if (m) {
 						const url = `https://gchat.qpic.cn/gchatpic_new/0/0-0-${m[1]}${m[2]}${m[3]}${m[4]}${m[5]}/0?term=2`;
 						let deco = Decoration.widget({
-							widget: new ImagePreviewWidget(url),
+							widget: new ImagePreviewWidget(url,loadImages),
 							side: 0,
 						});
 						widgets.push(deco.range(to));
@@ -275,18 +290,36 @@ function imagePreviews(view: EditorView): DecorationSet {
 	return Decoration.set(widgets);
 }
 
+const refreshImagePreviews = StateEffect.define<void>();
 const imagePreviewPlugin = ViewPlugin.fromClass(
 	class {
-		decorations: DecorationSet;
+		decorations = Decoration.none;
+		private timer = 0;
 
 		constructor(view: EditorView) {
-			this.decorations = imagePreviews(view);
+			this.decorations=imagePreviews(view,false);
+			this.schedule(view);
 		}
 
 		update(update: ViewUpdate) {
 			if (update.docChanged || update.viewportChanged) {
-				this.decorations = imagePreviews(update.view);
+				this.decorations = imagePreviews(update.view,false);
+				this.schedule(update.view);
+				return;
 			}
+			if(update.transactions.some(transaction=>transaction.effects.some(effect=>effect.is(refreshImagePreviews))))this.decorations=imagePreviews(update.view,true);
+		}
+
+		private schedule(view:EditorView){
+			window.clearTimeout(this.timer);
+			const delay=view.state.doc.length>600_000?320:140;
+			this.timer=window.setTimeout(()=>{
+				if(view.dom.isConnected)view.dispatch({effects:refreshImagePreviews.of()});
+			},delay);
+		}
+
+		destroy(){
+			window.clearTimeout(this.timer);
 		}
 	},
 	{
@@ -387,7 +420,9 @@ const createEditor = (editorContainer: HTMLDivElement | undefined) => {
 故事落下了帷幕。
 记录已经关闭。
 `,
-		extensions: getExts(),
+		// Start in the low-memory configuration. Main.vue enables wrapping,
+		// thumbnails and optional highlighting after the real document size is known.
+		extensions: getExts(false),
 	});
 
 	store.editor = new EditorView({
@@ -434,19 +469,43 @@ onMounted(() => {
   font-size: 2rem;
 }
 
+.cm-my-image {
+  display: inline-grid;
+  width: 8rem;
+  height: 6rem;
+  overflow: hidden;
+  place-items: center;
+  vertical-align: middle;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 6px;
+  background: linear-gradient(110deg, rgba(148,163,184,.12) 30%, rgba(148,163,184,.24) 45%, rgba(148,163,184,.12) 60%);
+  background-size: 220% 100%;
+}
+.cm-my-image.is-placeholder,.cm-base64-image-fold.is-placeholder{animation:cm-image-placeholder 1.2s linear infinite}
 .cm-my-image > img {
-  max-width: 8rem;
-  max-height: 6rem;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
 
 .cm-base64-image-fold {
-  display: inline-flex;
+  position: relative;
+  display: inline-grid;
+  width: 8rem;
+  height: 6rem;
+  overflow: hidden;
   align-items: center;
-  gap: 0.5rem;
+  justify-items: center;
   vertical-align: middle;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 6px;
+  background: linear-gradient(110deg, rgba(148,163,184,.12) 30%, rgba(148,163,184,.24) 45%, rgba(148,163,184,.12) 60%);
+  background-size: 220% 100%;
 }
 
 .cm-base64-image-fold__label {
+  position: absolute;
+  z-index: 1;
   border: 1px solid rgba(148, 163, 184, 0.5);
   border-radius: 3px;
   padding: 0 0.35rem;
@@ -456,7 +515,9 @@ onMounted(() => {
 }
 
 .cm-base64-image-fold > img {
-  max-width: 8rem;
-  max-height: 6rem;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
+@keyframes cm-image-placeholder{to{background-position:-220% 0}}
 </style>

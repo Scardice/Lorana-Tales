@@ -317,20 +317,20 @@
           </div>
 
           <n-message-provider>
-            <preview-main
-              :is-show="isShowPreview"
+            <preview-main v-if="isShowPreview"
+              :is-show="true"
               :preview-items="previewItems"
             ></preview-main>
-            <preview-bbs
-              :is-show="isShowPreviewBBS"
+            <preview-bbs v-else-if="isShowPreviewBBS"
+              :is-show="true"
               :preview-items="previewItems"
             ></preview-bbs>
-            <preview-bbs-pineapple
-              :is-show="isShowPreviewBBSPineapple"
+            <preview-bbs-pineapple v-else-if="isShowPreviewBBSPineapple"
+              :is-show="true"
               :preview-items="previewItems"
             ></preview-bbs-pineapple>
-            <preview-trg
-              :is-show="isShowPreviewTRG"
+            <preview-trg v-else-if="isShowPreviewTRG"
+              :is-show="true"
               :preview-items="previewItems"
             ></preview-trg>
           </n-message-provider>
@@ -417,7 +417,7 @@ import {
   useNotification,
 } from "naive-ui";
 import randomColor from "randomcolor";
-import uaParser from "ua-parser-js";
+import { UAParser } from "ua-parser-js";
 import {
   computed,
   h,
@@ -706,7 +706,6 @@ const clearText = () => {
 };
 
 const doFlush = () => {
-  console.log("flush");
   logMan.flush();
 };
 
@@ -865,7 +864,7 @@ const previewClick = (mode: "preview" | "bbs" | "bbspineapple" | "trg") => {
 };
 
 function setupUA() {
-  const parser = new uaParser.UAParser();
+  const parser = new UAParser();
   parser.setUA(navigator.userAgent);
   const deviceType = parser.getDevice();
 
@@ -906,6 +905,9 @@ setupUA();
 updateCompactViewport();
 
 const applyQQImageRKey = async (text: string) => {
+	// RKey replacement creates another complete copy of the input. Keep original
+	// links for very large logs instead of briefly doubling their peak memory.
+	if(text.length>750_000)return text;
   if (!shouldApplyQQImageRKeyReplacement(text)) {
     return text;
   }
@@ -935,6 +937,8 @@ const browserAlert = () => {
   // 2 不做提示 因为兼容良好
 };
 
+let deferredHighlightTimer=0;
+let deferredFlushTimer=0;
 onMounted(async () => {
   window.addEventListener("resize", updateCompactViewport, { passive: true });
   window.addEventListener("keydown", onStorySaveShortcut);
@@ -943,11 +947,12 @@ onMounted(async () => {
   const password = location.hash.slice(1);
 
   const showHl = () => {
-    setTimeout(() => {
+    window.clearTimeout(deferredHighlightTimer);
+    deferredHighlightTimer=window.setTimeout(() => {
       if (!isMobile.value) {
         store.doEditorHighlight = true;
         store.reloadEditor();
-      }
+	  }else store.reloadEditor();
     }, 1000);
   };
 
@@ -1043,15 +1048,19 @@ onMounted(async () => {
     showHl();
   }
 
-  ensureStoryArchive();
-  try {
-    const draft = await loadLocalStoryDraft(storyDraftKey);
-    if (draft && confirm("检测到这个日志在当前浏览器保存的高级编辑修改，是否恢复？")) {
-      onStoryChange({ ...draft, document: normalizeStoryDocument(draft.document) });
-      message.success("已恢复本地编辑修改");
+  // The classic route must not mirror a long log into a second Tales document.
+  // That conversion duplicates every message and is only useful in immersive mode.
+  if(!legacyOnly){
+    ensureStoryArchive();
+    try {
+      const draft = await loadLocalStoryDraft(storyDraftKey);
+      if (draft && confirm("检测到这个日志在当前浏览器保存的高级编辑修改，是否恢复？")) {
+        onStoryChange({ ...draft, document: normalizeStoryDocument(draft.document) });
+        message.success("已恢复本地编辑修改");
+      }
+    } catch (error) {
+      console.error("读取沉浸编辑草稿失败", error);
     }
-  } catch (error) {
-    console.error("读取沉浸编辑草稿失败", error);
   }
 
   // cminstance.value = cmRefDom.value?.cminstance;
@@ -1060,8 +1069,9 @@ onMounted(async () => {
   colors.value = randomColor({ count: 16 });
   browserAlert();
   await nextTick(() => {
-    setTimeout(() => {
-      doFlush();
+    window.clearTimeout(deferredFlushTimer);
+    deferredFlushTimer=window.setTimeout(() => {
+      if(store.editor.state.doc.length<=600_000&&logMan.curItems.length<=6_000)doFlush();
     }, 3000);
   });
 });
@@ -1070,6 +1080,9 @@ onBeforeUnmount(() => {
   window.removeEventListener("resize", updateCompactViewport);
   window.removeEventListener("keydown", onStorySaveShortcut);
   saveStoryDraft.cancel();
+  window.clearTimeout(editorReloadTimer);
+  window.clearTimeout(deferredHighlightTimer);
+  window.clearTimeout(deferredFlushTimer);
   for (const url of storyObjectUrls.values()) URL.revokeObjectURL(url);
   storyObjectUrls.clear();
 });
@@ -1169,8 +1182,7 @@ const previewItems = ref<LogItem[]>([]);
 function showPreview() {
   const tmp: LogItem[] = [];
   let index = 0;
-  const _offTopicHide = store.exportOptions.offTopicHide;
-  console.log("当前日志条目数量: ", logMan.curItems.length);
+  const prefilterEmpty=logMan.curItems.length<=6_000;
 
   for (let i of logMan.curItems) {
     if (i.isRaw) continue;
@@ -1181,13 +1193,15 @@ function showPreview() {
     //   const msg = i.message.replaceAll(/^[(（].+?$/gm, '') // 【
     //   if (msg.trim() === '') continue;
     // }
-    let msg = msgImageFormat(i.message, store.exportOptions);
-    msg = msgAtFormat(msg, store.pcList);
-    msg = msgOffTopicFormat(msg, store.exportOptions, i.isDice);
-    msg = msgCommandFormat(msg, store.exportOptions);
-    msg = msgIMUseridFormat(msg, store.exportOptions, i.isDice);
-    msg = msgOffTopicFormat(msg, store.exportOptions, i.isDice); // 再过滤一次
-    if (msg.trim() === "") continue;
+    if(prefilterEmpty){
+      let msg = msgImageFormat(i.message, store.exportOptions);
+      msg = msgAtFormat(msg, store.pcList);
+      msg = msgOffTopicFormat(msg, store.exportOptions, i.isDice);
+      msg = msgCommandFormat(msg, store.exportOptions);
+      msg = msgIMUseridFormat(msg, store.exportOptions, i.isDice);
+      msg = msgOffTopicFormat(msg, store.exportOptions, i.isDice); // 再过滤一次
+      if (msg.trim() === "") continue;
+    }
 
     i.index = index;
     tmp.push(i);
@@ -1200,16 +1214,19 @@ const store = useStore();
 store.colorMapLoad();
 
 // 修改ot选项后重建items
-watch(() => store.exportOptions.offTopicHide, showPreview);
+const previewVisible=()=>isShowPreview.value||isShowPreviewBBS.value||isShowPreviewBBSPineapple.value||isShowPreviewTRG.value;
+watch(() => store.exportOptions.offTopicHide, ()=>{if(previewVisible())showPreview()});
+watch([isShowPreview,isShowPreviewBBS,isShowPreviewBBSPineapple,isShowPreviewTRG],(visible)=>{
+  if(!visible.some(Boolean))previewItems.value=[];
+});
 watch(
   () => store.pcList.map((pc) => `${pc.IMUserId}-${pc.role}-${pc.name}`),
-  () => showPreview(),
+  () => {if(previewVisible())showPreview()},
   { deep: false },
 );
 
 const editor = ref();
 watch(isDark, () => {
-  console.log("dark watch");
   store.reloadEditor();
 });
 
@@ -1370,9 +1387,7 @@ const onChange = (v: ViewUpdate) => {
           const r1 = [ranges[i].fromA, ranges[i].toA];
           const r2 = [ranges[i].fromB, ranges[i].toB];
 
-          console.log("XXX", v, r1, r2);
           if (r1[0] === 0 && r1[1] === logMan.lastText.length) {
-            console.log("全部文本被删除，清除pc列表");
             store.pcList = [];
           }
           logMan.syncChange(payloadText, r1, r2);
@@ -1388,7 +1403,6 @@ const onChange = (v: ViewUpdate) => {
 const doEditorHighlightClick = (e: MouseEvent) => {
   // 因为原生click事件会执行两次，第一次在label标签上，第二次在input标签上，故此处理
   if (e.target instanceof HTMLInputElement) return;
-
   const doHl = () => {
     // 编辑器染色
     setTimeout(() => {
@@ -1453,8 +1467,11 @@ const doEditorHighlightClick = (e: MouseEvent) => {
   doHl();
 };
 
+let editorReloadTimer=0;
 const reloadFunc = () => {
-  store.reloadEditor();
+  if(!store.doEditorHighlight)return;
+  window.clearTimeout(editorReloadTimer);
+  editorReloadTimer=window.setTimeout(()=>store.reloadEditor(),180);
 };
 const pcList = computed(() => store.pcList);
 watch(pcList, reloadFunc, { deep: true });
