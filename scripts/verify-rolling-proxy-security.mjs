@@ -96,7 +96,7 @@ assert.equal(compareSemver("1.0.0-testify.10", "1.0.0-testify.2"), 1);
 assert.equal(compareSemver("1.0.0-testify.1", "1.0.0-testify.beta"), -1);
 
 const releases = [
-	{ tag_name: "nightly", draft: false, prerelease: true },
+	{ tag_name: "nightly", draft: false, prerelease: true, target_commitish: "b".repeat(40) },
 	{ tag_name: "v0.2.0-testify.2", draft: false, prerelease: true },
 	{ tag_name: "v0.2.0-testify.10", draft: false, prerelease: true },
 	{ tag_name: "v0.1.9", draft: false, prerelease: false },
@@ -104,6 +104,8 @@ const releases = [
 ];
 assert.equal(selectRelease(releases, "test", "0.1.0-testify.1")?.tag_name, "v0.2.0-testify.10");
 assert.equal(selectRelease(releases, "stable", "0.1.0-testify.1")?.tag_name, "v0.1.9");
+assert.equal(selectRelease(releases, "nightly", "0.1.0-testify.1", "a".repeat(40))?.tag_name, "nightly");
+assert.equal(selectRelease(releases, "nightly", "0.1.0-testify.1", "b".repeat(40)), null);
 
 const digest = "a".repeat(64);
 assert.equal(checksumForAsset(`${digest}  package.tar.gz\n`, "package.tar.gz"), digest);

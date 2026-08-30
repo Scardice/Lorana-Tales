@@ -56,6 +56,8 @@ jobs:
         run: pnpm build
 
       - name: Stage portable runtime package
+        env:
+          LORANA_RELEASE_CHANNEL: Nightly
         run: node scripts/package-nightly.mjs release/lorana-tales-nightly
 
       - name: Deploy audited production dependency tree
@@ -74,6 +76,7 @@ jobs:
           test -f OFFICIAL_BUILD.json
           test -f ecosystem.config.cjs
           test -f scripts/rolling-launcher.mjs
+          node -e "const marker=require('./OFFICIAL_BUILD.json'); if(marker.repository !== process.env.GITHUB_REPOSITORY || marker.commit !== process.env.GITHUB_SHA || marker.channel !== 'Nightly') process.exit(1)"
           node -e "const app=require('./ecosystem.config.cjs').apps?.[0]; if(app?.script !== require('node:path').join(process.cwd(),'scripts/rolling-launcher.mjs') || app?.exec_mode !== 'fork' || app?.instances !== 1) process.exit(1)"
           node --input-type=module -e "await import('better-sqlite3'); console.log('better-sqlite3 runtime loaded')"
 

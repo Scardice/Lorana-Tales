@@ -153,7 +153,7 @@ const DEFAULT_CONFIG = {
 		admin_bruteforce_block_seconds: 60,
 	},
 	auto_update: {
-		channel: "test",
+		channel: "nightly",
 		check_interval_seconds: 300,
 		staging_path: "./data/updates",
 	},

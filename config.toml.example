@@ -33,8 +33,8 @@ hsts_max_age_seconds = 0
 
 [auto_update]
 # 仅官方 GitHub Release 包内生效；源码构建、fork 和缺少 OFFICIAL_BUILD.json 的包始终不会自动更新。
-# test 跟随正式版与 Testify 测试版，stable 只跟随正式版，off 完全关闭。默认快速迭代测试通道。
-channel = "test"
+# nightly 跟随 main 的滚动 Nightly，test 跟随正式版与 Testify 测试版，stable 只跟随正式版，off 完全关闭。
+channel = "nightly"
 # 检查间隔不低于 60 秒。新包会先校验 GitHub 摘要、SHA-256、提交号和归档结构，
 # 再在内部端口通过版本健康检查后无停机切流；切换后 30 秒内崩溃会回退旧工作进程。
 check_interval_seconds = 300

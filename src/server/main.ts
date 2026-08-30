@@ -460,7 +460,7 @@ export async function startServer(
 		res.status(200);
 		res.setHeader("Cache-Control", "no-store");
 		res.setHeader("Content-Type", "application/json; charset=utf-8");
-		res.send(JSON.stringify({ ok: true, timestamp: new Date().toISOString(), version: String(process.env.LORANA_BUILD_VERSION || "") }));
+		res.send(JSON.stringify({ ok: true, timestamp: new Date().toISOString(), version: String(process.env.LORANA_BUILD_VERSION || ""), commit: String(process.env.LORANA_BUILD_COMMIT || "") }));
 	});
 
 	app.get("/metrics", async (req, res) => {

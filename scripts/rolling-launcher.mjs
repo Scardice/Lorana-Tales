@@ -27,7 +27,8 @@ const serverEntry = path.join(launcherRoot, "dist/bin/scardice-story-painter.js"
 
 function readConfiguration() {
 	const value = fs.existsSync(configPath) ? toml.parse(fs.readFileSync(configPath, "utf8")) : {};
-	const channel = ["off", "test", "stable"].includes(String(value.auto_update?.channel || "test")) ? String(value.auto_update?.channel || "test") : "off";
+	const configuredChannel = String(value.auto_update?.channel || "nightly").trim().toLowerCase();
+	const channel = ["off", "nightly", "test", "stable"].includes(configuredChannel) ? configuredChannel : "off";
 	const trustedProxyCidrs = Array.isArray(value.server?.trusted_proxy_cidrs)
 		? value.server.trusted_proxy_cidrs.map(String)
 		: ["127.0.0.1/32", "::1/128"];
@@ -128,8 +129,8 @@ export function sanitizedProxyHeaders(source) {
 	return headers;
 }
 
-function spawnWorker(entry, port, version) {
-	return spawn(process.execPath, [entry], { cwd: launcherRoot, env: { ...process.env, SCARDICE_CONFIG: configPath, LORANA_RUNTIME_ROOT: launcherRoot, LORANA_INTERNAL_PORT: String(port), LORANA_UPDATE_WORKER: "1", LORANA_BUILD_VERSION: String(version || "") }, stdio: "inherit", windowsHide: true });
+function spawnWorker(entry, port, marker) {
+	return spawn(process.execPath, [entry], { cwd: launcherRoot, env: { ...process.env, SCARDICE_CONFIG: configPath, LORANA_RUNTIME_ROOT: launcherRoot, LORANA_INTERNAL_PORT: String(port), LORANA_UPDATE_WORKER: "1", LORANA_BUILD_VERSION: String(marker?.version || ""), LORANA_BUILD_COMMIT: String(marker?.commit || "") }, stdio: "inherit", windowsHide: true });
 }
 function waitForExit(child) { return new Promise((resolve) => child.once("exit", resolve)); }
 async function readBoundedBody(response, maxBytes) {
@@ -155,7 +156,7 @@ async function requestJson(url) {
 }
 function availablePort() { return new Promise((resolve, reject) => { const probe=http.createServer();probe.once("error",reject);probe.listen(0,"127.0.0.1",()=>{const address=probe.address();const port=typeof address==="object"&&address?address.port:0;probe.close(error=>error?reject(error):resolve(port))}) }); }
 export function healthCheckHost(allowedHosts) { return Array.isArray(allowedHosts) && allowedHosts.length ? String(allowedHosts[0]) : "127.0.0.1"; }
-async function healthy(port, expectedVersion, host) { for(let attempt=0;attempt<40;attempt+=1){try{const response=await fetch(`http://127.0.0.1:${port}/healthz`,{headers:{Host:healthCheckHost([host])},signal:AbortSignal.timeout(1200)});if(response.ok){const body=await response.json();if(body?.ok===true&&String(body.version||"")===String(expectedVersion||""))return true}}catch{}await new Promise(resolve=>setTimeout(resolve,500))}return false }
+async function healthy(port, expectedMarker, host) { for(let attempt=0;attempt<40;attempt+=1){try{const response=await fetch(`http://127.0.0.1:${port}/healthz`,{headers:{Host:healthCheckHost([host])},signal:AbortSignal.timeout(1200)});if(response.ok){const body=await response.json();if(body?.ok===true&&String(body.version||"")===String(expectedMarker?.version||"")&&String(body.commit||"")===String(expectedMarker?.commit||""))return true}}catch{}await new Promise(resolve=>setTimeout(resolve,500))}return false }
 
 export function parseSemver(value) {
 	const match = /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(String(value || ""));
@@ -178,7 +179,11 @@ export function compareSemver(left, right) {
 	}
 	return 0;
 }
-export function selectRelease(releases, channel, currentVersion) {
+
+export function selectRelease(releases, channel, currentVersion, currentCommit = "") {
+	if (channel === "nightly") {
+		return releases.find(item => !item?.draft && item.tag_name === "nightly" && item.prerelease === true && /^[a-f0-9]{40}$/i.test(String(item.target_commitish || "")) && String(item.target_commitish).toLowerCase() !== String(currentCommit).toLowerCase()) || null;
+	}
 	return releases
 		.filter(item => !item?.draft && parseSemver(item.tag_name) && (channel === "test" || (!item.prerelease && !parseSemver(item.tag_name).prerelease.length)))
 		.filter(item => compareSemver(item.tag_name, currentVersion) > 0)
@@ -238,15 +243,15 @@ async function ensurePrivateDirectory(target) {
 	if (typeof process.getuid === "function" && stat.uid !== process.getuid()) throw new Error("更新暂存目录不属于当前服务用户");
 	return resolved;
 }
-async function validatePackageRoot(extracted, release, version) {
+async function validatePackageRoot(extracted, release, version, expectedChannel) {
 	const roots=(await fsp.readdir(extracted,{withFileTypes:true})).filter(item=>item.isDirectory());
 	if(roots.length!==1||(await fsp.readdir(extracted,{withFileTypes:true})).some(item=>!item.isDirectory()))throw new Error("Release 包目录结构无效");
 	const nextRoot=path.join(extracted,roots[0].name);
 	for(const required of ["OFFICIAL_BUILD.json","package.json","dist/bin/scardice-story-painter.js","out/index.html","node_modules"]){const stat=await fsp.lstat(path.join(nextRoot,required));if(stat.isSymbolicLink()||(required==="node_modules"?!stat.isDirectory():!stat.isFile()))throw new Error(`Release 包缺少安全的 ${required}`)}
 	const nextMarker=JSON.parse(await fsp.readFile(path.join(nextRoot,"OFFICIAL_BUILD.json"),"utf8"));
-	if(nextMarker.repository!==OFFICIAL_REPOSITORY||String(nextMarker.version)!==version||!/^[a-f0-9]{40}$/i.test(String(nextMarker.commit||""))||String(nextMarker.commit)!==String(release.target_commitish)||String(nextMarker.channel)!==(release.prerelease?"Test Release":"Release"))throw new Error("Release 官方构建标记与标签提交不一致");
+	if(nextMarker.repository!==OFFICIAL_REPOSITORY||!parseSemver(nextMarker.version)||(version&&String(nextMarker.version)!==version)||!/^[a-f0-9]{40}$/i.test(String(nextMarker.commit||""))||String(nextMarker.commit)!==String(release.target_commitish)||String(nextMarker.channel)!==expectedChannel)throw new Error("Release 官方构建标记与标签提交不一致");
 	const manifest=JSON.parse(await fsp.readFile(path.join(nextRoot,"package.json"),"utf8"));
-	if(manifest.name!=="lorana-tales"||String(manifest.version)!==version||String(manifest.engines?.node)!==">=24.20.0")throw new Error("Release 运行清单无效或与当前 Node 基线不兼容");
+	if(manifest.name!=="lorana-tales"||String(manifest.version)!==String(nextMarker.version)||String(manifest.engines?.node)!==">=24.20.0")throw new Error("Release 运行清单无效或与当前 Node 基线不兼容");
 	return {nextRoot,nextMarker};
 }
 
@@ -258,9 +263,11 @@ async function main(){
 	}
 	let currentVersion=String(marker.version||"0.0.0");
 	if(!parseSemver(currentVersion))throw new Error("当前官方构建版本号无效");
+	let currentCommit=String(marker.commit||"");
+	if(!/^[a-f0-9]{40}$/i.test(currentCommit))throw new Error("当前官方构建提交号无效");
 	config.dataPath=await ensurePrivateDirectory(config.dataPath);
 	const internalHealthHost=healthCheckHost(config.allowedHosts);
-	let activePort=await availablePort();let worker=spawnWorker(serverEntry,activePort,currentVersion);if(!await healthy(activePort,currentVersion,internalHealthHost)){worker.kill("SIGTERM");throw new Error("初始服务健康检查失败")}
+	let activePort=await availablePort();let worker=spawnWorker(serverEntry,activePort,{version:currentVersion,commit:currentCommit});if(!await healthy(activePort,{version:currentVersion,commit:currentCommit},internalHealthHost)){worker.kill("SIGTERM");throw new Error("初始服务健康检查失败")}
 	let stopping=false;
 	const proxy=http.createServer((request,response)=>{
 		if(!request.url?.startsWith("/")||request.url.startsWith("//")){response.writeHead(400,{"content-type":"text/plain;charset=utf-8"});response.end("Bad Request");return}
@@ -285,10 +292,11 @@ async function main(){
 	const check=async()=>{if(updating)return;updating=true;try{
 		const releases=await requestJson(`https://api.github.com/repos/${OFFICIAL_REPOSITORY}/releases?per_page=30`);
 		if(!Array.isArray(releases))throw new Error("GitHub Release 响应格式无效");
-		const release=selectRelease(releases,config.channel,currentVersion);if(!release)return;
-		const version=String(release.tag_name).replace(/^v/,"");
+		const release=selectRelease(releases,config.channel,currentVersion,currentCommit);if(!release)return;
+		const nightly=config.channel==="nightly";
+		const version=nightly?"":String(release.tag_name).replace(/^v/,"");
 		if(!/^[a-f0-9]{40}$/i.test(String(release.target_commitish||"")))throw new Error("Release 必须固定到完整 Git 提交");
-		const archiveName=`lorana-tales-${version}-linux-x64.tar.gz`,sumsName=`SHA256SUMS-${version}.txt`;
+		const archiveName=nightly?"lorana-tales-nightly-linux-x64.tar.gz":`lorana-tales-${version}-linux-x64.tar.gz`,sumsName=nightly?"SHA256SUMS.txt":`SHA256SUMS-${version}.txt`;
 		const archiveAsset=release.assets?.find(item=>item.name===archiveName),sumsAsset=release.assets?.find(item=>item.name===sumsName);
 		if(!archiveAsset||!sumsAsset)throw new Error("Release 缺少名称严格匹配的 Linux 包或 SHA256SUMS");
 		const apiArchiveDigest=assetDigest(archiveAsset),apiSumsDigest=assetDigest(sumsAsset);
@@ -297,7 +305,7 @@ async function main(){
 		if(!safeEqualHex(apiSumsDigest,sha256Bytes(sumsBytes)))throw new Error("SHA256SUMS 与 GitHub 资产摘要不一致");
 		const expected=checksumForAsset(sumsBytes.toString("utf8"),archiveName);
 		if(!safeEqualHex(expected,apiArchiveDigest))throw new Error("校验清单与 GitHub 资产摘要不一致");
-		const releaseDir=await ensurePrivateDirectory(path.join(config.dataPath,version));
+		const releaseDir=await ensurePrivateDirectory(path.join(config.dataPath,nightly?`nightly-${release.target_commitish}`:version));
 		const archivePath=path.join(releaseDir,archiveName);
 		if(fs.existsSync(archivePath)&&!safeEqualHex(await sha256(archivePath),expected))await fsp.unlink(archivePath);
 		if(!fs.existsSync(archivePath))await download(archiveAsset.browser_download_url,archivePath,release.tag_name,archiveName,MAX_ARCHIVE_BYTES);
@@ -305,16 +313,16 @@ async function main(){
 		const extracted=path.join(releaseDir,`package-${expected}`);
 		if(!fs.existsSync(extracted)){
 			const temporary=path.join(releaseDir,`.extract-${crypto.randomUUID()}`);
-			try{await extractTar(archivePath,temporary);await validatePackageRoot(temporary,release,version);await fsp.rename(temporary,extracted)}catch(error){await fsp.rm(temporary,{recursive:true,force:true});throw error}
+			try{await extractTar(archivePath,temporary);await validatePackageRoot(temporary,release,version,nightly?"Nightly":release.prerelease?"Test Release":"Release");await fsp.rename(temporary,extracted)}catch(error){await fsp.rm(temporary,{recursive:true,force:true});throw error}
 		}
-		const {nextRoot,nextMarker}=await validatePackageRoot(extracted,release,version);
-		const nextPort=await availablePort();const nextWorker=spawnWorker(path.join(nextRoot,"dist/bin/scardice-story-painter.js"),nextPort,nextMarker.version);
-		if(!await healthy(nextPort,nextMarker.version,internalHealthHost)){nextWorker.kill("SIGTERM");throw new Error("新版本健康检查失败，继续使用旧版本")}
+		const {nextRoot,nextMarker}=await validatePackageRoot(extracted,release,version,nightly?"Nightly":release.prerelease?"Test Release":"Release");
+		const nextPort=await availablePort();const nextWorker=spawnWorker(path.join(nextRoot,"dist/bin/scardice-story-painter.js"),nextPort,nextMarker);
+		if(!await healthy(nextPort,nextMarker,internalHealthHost)){nextWorker.kill("SIGTERM");throw new Error("新版本健康检查失败，继续使用旧版本")}
 		if(nextWorker.exitCode!==null)throw new Error("新版本在切换前意外退出，继续使用旧版本");
-		const previous=worker,previousPort=activePort,previousVersion=currentVersion;
+		const previous=worker,previousPort=activePort,previousVersion=currentVersion,previousCommit=currentCommit;
 		let retirement=null;
-		nextWorker.once("exit",(code,signal)=>{if(stopping||worker!==nextWorker)return;if(previous.exitCode===null&&!previous.killed){worker=previous;activePort=previousPort;currentVersion=previousVersion;if(retirement)clearTimeout(retirement);console.error(`[updater] New version exited during rollback window (${code??signal}); restored ${currentVersion}`)}else{console.error(`[updater] Active worker exited (${code??signal}); public listener remains available with 503 responses`)}});
-		worker=nextWorker;activePort=nextPort;currentVersion=String(nextMarker.version);console.log(`[updater] Switched to ${currentVersion} without closing public listener`);retirement=setTimeout(()=>previous.kill("SIGTERM"),30_000);retirement.unref()
+		nextWorker.once("exit",(code,signal)=>{if(stopping||worker!==nextWorker)return;if(previous.exitCode===null&&!previous.killed){worker=previous;activePort=previousPort;currentVersion=previousVersion;currentCommit=previousCommit;if(retirement)clearTimeout(retirement);console.error(`[updater] New version exited during rollback window (${code??signal}); restored ${currentVersion}+${currentCommit.slice(0,7)}`)}else{console.error(`[updater] Active worker exited (${code??signal}); public listener remains available with 503 responses`)}});
+		worker=nextWorker;activePort=nextPort;currentVersion=String(nextMarker.version);currentCommit=String(nextMarker.commit);console.log(`[updater] Switched to ${currentVersion}+${currentCommit.slice(0,7)} without closing public listener`);retirement=setTimeout(()=>previous.kill("SIGTERM"),30_000);retirement.unref()
 	}catch(error){console.error("[updater]",error)}finally{updating=false}};
 	const timer=setInterval(check,config.intervalSeconds*1000);timer.unref();setTimeout(check,10_000).unref();
 	const stop=signal=>{if(stopping)return;stopping=true;clearInterval(timer);proxy.close(()=>worker.kill(signal));setTimeout(()=>worker.kill(signal),5000).unref()};process.on("SIGTERM",()=>stop("SIGTERM"));process.on("SIGINT",()=>stop("SIGINT"));
