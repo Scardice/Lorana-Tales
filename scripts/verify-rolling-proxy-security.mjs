@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
 	checksumForAsset,
 	compareSemver,
+	healthCheckHost,
 	isAllowedHostHeader,
 	isTrustedProxyAddress,
 	normalizedHostHeader,
@@ -12,6 +13,10 @@ import {
 	validateDownloadUrl,
 	validateTarPaths,
 } from "./rolling-launcher.mjs";
+
+assert.equal(healthCheckHost(["story-painter.example"]), "story-painter.example");
+assert.equal(healthCheckHost([]), "127.0.0.1");
+assert.equal(isAllowedHostHeader(healthCheckHost(["story-painter.example"]), ["story-painter.example"]), true);
 
 const config = {
 	trustProxy: true,

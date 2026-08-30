@@ -154,7 +154,8 @@ async function requestJson(url) {
 	return JSON.parse((await readBoundedBody(response, MAX_API_BYTES)).toString("utf8"));
 }
 function availablePort() { return new Promise((resolve, reject) => { const probe=http.createServer();probe.once("error",reject);probe.listen(0,"127.0.0.1",()=>{const address=probe.address();const port=typeof address==="object"&&address?address.port:0;probe.close(error=>error?reject(error):resolve(port))}) }); }
-async function healthy(port, expectedVersion) { for(let attempt=0;attempt<40;attempt+=1){try{const response=await fetch(`http://127.0.0.1:${port}/healthz`,{headers:{Host:"127.0.0.1"},signal:AbortSignal.timeout(1200)});if(response.ok){const body=await response.json();if(body?.ok===true&&String(body.version||"")===String(expectedVersion||""))return true}}catch{}await new Promise(resolve=>setTimeout(resolve,500))}return false }
+export function healthCheckHost(allowedHosts) { return Array.isArray(allowedHosts) && allowedHosts.length ? String(allowedHosts[0]) : "127.0.0.1"; }
+async function healthy(port, expectedVersion, host) { for(let attempt=0;attempt<40;attempt+=1){try{const response=await fetch(`http://127.0.0.1:${port}/healthz`,{headers:{Host:healthCheckHost([host])},signal:AbortSignal.timeout(1200)});if(response.ok){const body=await response.json();if(body?.ok===true&&String(body.version||"")===String(expectedVersion||""))return true}}catch{}await new Promise(resolve=>setTimeout(resolve,500))}return false }
 
 export function parseSemver(value) {
 	const match = /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(String(value || ""));
@@ -258,7 +259,8 @@ async function main(){
 	let currentVersion=String(marker.version||"0.0.0");
 	if(!parseSemver(currentVersion))throw new Error("当前官方构建版本号无效");
 	config.dataPath=await ensurePrivateDirectory(config.dataPath);
-	let activePort=await availablePort();let worker=spawnWorker(serverEntry,activePort,currentVersion);if(!await healthy(activePort,currentVersion)){worker.kill("SIGTERM");throw new Error("初始服务健康检查失败")}
+	const internalHealthHost=healthCheckHost(config.allowedHosts);
+	let activePort=await availablePort();let worker=spawnWorker(serverEntry,activePort,currentVersion);if(!await healthy(activePort,currentVersion,internalHealthHost)){worker.kill("SIGTERM");throw new Error("初始服务健康检查失败")}
 	let stopping=false;
 	const proxy=http.createServer((request,response)=>{
 		if(!request.url?.startsWith("/")||request.url.startsWith("//")){response.writeHead(400,{"content-type":"text/plain;charset=utf-8"});response.end("Bad Request");return}
@@ -307,7 +309,7 @@ async function main(){
 		}
 		const {nextRoot,nextMarker}=await validatePackageRoot(extracted,release,version);
 		const nextPort=await availablePort();const nextWorker=spawnWorker(path.join(nextRoot,"dist/bin/scardice-story-painter.js"),nextPort,nextMarker.version);
-		if(!await healthy(nextPort,nextMarker.version)){nextWorker.kill("SIGTERM");throw new Error("新版本健康检查失败，继续使用旧版本")}
+		if(!await healthy(nextPort,nextMarker.version,internalHealthHost)){nextWorker.kill("SIGTERM");throw new Error("新版本健康检查失败，继续使用旧版本")}
 		if(nextWorker.exitCode!==null)throw new Error("新版本在切换前意外退出，继续使用旧版本");
 		const previous=worker,previousPort=activePort,previousVersion=currentVersion;
 		let retirement=null;
