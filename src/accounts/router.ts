@@ -487,8 +487,11 @@ export class AccountService {
 				if (current.status !== "active") { json(res, 403, { error: "account_disabled" }); return; }
 				const existingDevice = cookies(req).get(DEVICE_COOKIE) || "";
 				const trusted = this.store.isTrustedDevice(current.id, existingDevice, this.prefix(req), this.userAgent(req));
-				if (!current.mustChangePassword && !trusted && !this.store.verifyCode(String(body.codeId || ""), current.email, "login", String(body.code || ""))) {
-					json(res, 428, { error: "email_verification_required", email: current.email }); return;
+				if (!current.mustChangePassword && !trusted) {
+					const codeId = String(body.codeId || "");
+					const code = String(body.code || "").trim();
+					if (!codeId || !code) { json(res, 428, { error: "email_verification_required", email: current.email }); return; }
+					if (!this.store.verifyCode(codeId, current.email, "login", code)) { json(res, 401, { error: "verification_invalid" }); return; }
 				}
 				const device = trusted ? existingDevice : this.store.createTrustedDevice(current.id, this.prefix(req), this.userAgent(req), Number(this.config.trusted_device_days || 90));
 				const session = this.store.createSession(current, { sessionDays: Number(this.config.session_days || 30), deviceToken: device, ipPrefix: this.prefix(req), userAgent: this.userAgent(req) });

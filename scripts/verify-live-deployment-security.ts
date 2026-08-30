@@ -103,6 +103,9 @@ async function main() {
 		const firstLogin = await jsonRequest(base, "/api/account/login", { method: "POST", body: JSON.stringify({ username: userA.username, password: "Audit-user-password-A" }) });
 		assert.equal(firstLogin.response.status, 428, "new devices require email verification");
 		const codeId = service.store.createVerificationCode(userA.email, "login", "123456", "127.0.0.0/24", 10);
+		const invalidCode = await jsonRequest(base, "/api/account/login", { method: "POST", body: JSON.stringify({ username: userA.username, password: "Audit-user-password-A", codeId, code: "000000" }) });
+		assert.equal(invalidCode.response.status, 401);
+		assert.equal((invalidCode.body as { error?: string }).error, "verification_invalid", "an entered but invalid device code must not be reported as a missing verification step");
 		const jarA: CookieJar = new Map();
 		const loginA = await jsonRequest(base, "/api/account/login", { method: "POST", body: JSON.stringify({ username: userA.username, password: "Audit-user-password-A", codeId, code: "123456" }) }, jarA);
 		assert.equal(loginA.response.status, 200);
