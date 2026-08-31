@@ -11,6 +11,7 @@ import { AccountStore } from "../src/accounts/account-store";
 import { AccountService } from "../src/accounts/router";
 import { getClientIp } from "../src/server/client-ip";
 import { storyFromLogItems, storyStreamingText } from "../web/src/story/model";
+import { isStoryOffTopicText } from "../web/src/story/message-filter";
 import { createStoryPackage, readStoryPackage } from "../web/src/story/package";
 import { createPerformanceHtml } from "../web/src/story/standalone-performance";
 import type { StoryArchive, StoryCharacter } from "../web/src/story/types";
@@ -24,6 +25,11 @@ assert.equal(
 	"203.0.113.10",
 	"不可信直连请求不能伪造 X-Forwarded-For",
 );
+assert.equal(isStoryOffTopicText("(场外)"),true);
+assert.equal(isStoryOffTopicText("[CQ:face,id=14](场外)"),true);
+assert.equal(isStoryOffTopicText("[CQ:at,qq=123] （场外）"),true);
+assert.equal(isStoryOffTopicText("[CQ:face,id=14] [CQ:image,file=a]   (off topic)"),true);
+assert.equal(isStoryOffTopicText("[CQ:face,id=14] 正文"),false);
 assert.equal(
 	getClientIp(forwardedRequest("127.0.0.1", "198.51.100.20") as never, ["127.0.0.1/32"]),
 	"198.51.100.20",
@@ -282,6 +288,9 @@ assert.match(html, /作者：/);
 assert.match(html, /id="next"/);
 assert.match(html, /id="volume"/);
 assert.match(html, /id="fullscreen"/);
+assert.match(html, /fullscreenButton&&fullscreenButton\.remove\(\)/, "离线播放器应在启动后移除废弃的全屏按钮");
+assert.match(html, /这个演出没有开启自动播放/, "离线播放器应提示手动推进");
+assert.match(html, /播放完成/, "离线播放器应在末条消息稳定显示后展示完成态");
 assert.match(html, /persistent-layer/);
 assert.match(html, /characterStateByMessage/);
 assert.match(html, /reaction-affection/);

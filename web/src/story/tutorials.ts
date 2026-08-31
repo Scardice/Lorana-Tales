@@ -98,7 +98,7 @@ export const storyTutorials: StoryTutorial[] = [
     ["lora", "上方管理故事与导出，中间是故事画布，下方负责输入和选择角色。"],
     ["nia", "先点角色，再在输入框写话；消息就会站到那个角色的位置。", { interaction: { effect: "heart", targetCharacterId: "lora", emoji: "✨", reaction: "bounce" } }],
     ["narrator", "旁白位于中间，适合场景、动作与转场。默认旁白不可编辑，需要有名字的旁白时可以新建角色。"],
-    ["guide", "记住：编辑器负责写，演出编辑预览负责让它动起来。现在你已经认完路啦。", { tokenAnimation: "impact", screenEffect: "warm-glow", screenEffectColor: "gold" }],
+    ["guide", "记住：编辑器负责写，演出编辑负责让它动起来。现在你已经认完路啦。", { tokenAnimation: "impact", screenEffect: "warm-glow", screenEffectColor: "gold" }],
   ]),
   lesson({ id: "characters", category: "start", title: "创建第一个角色", summary: "名字、位置、头像与昼夜均可读配色。", duration: "约 2 分钟", level: "入门", points: ["新增角色", "左右位置", "头像配色"], challenge: "新建左右各一名角色，给其中一人换头像，再切换昼夜检查配色。" }, [
     ["lora", "点击底部的“新增角色”，先给角色起一个容易辨认的名字。"],
@@ -143,7 +143,7 @@ export const storyTutorials: StoryTutorial[] = [
   ]),
 
   lesson({ id: "play", category: "performance", title: "开始一场演出", summary: "预览、开始、暂停与手动推进。", duration: "约 2 分钟", level: "入门", points: ["开始演出", "暂停", "手动推进"], challenge: "开始一次手动演出，推进三条后暂停，向上翻看旧消息，再继续播放。" }, [
-    ["guide", "点击右上角“演出编辑预览”，会先看到全部消息，方便检查整体排版。"],
+    ["guide", "点击右上角“演出编辑”，会先看到全部消息，方便检查整体排版。"],
     ["lora", "点击“开始演出”后，配置条会收起；在画布任意空白处点击，就播放下一条。"],
     ["nia", "新气泡会从下方向上淡入，并自动滚到最新消息；你仍然可以自己往上翻。"],
     ["guide", "自动播放开启时，右上角按钮负责暂停与继续；关闭演出或触发返回会回到开始前的位置。"],

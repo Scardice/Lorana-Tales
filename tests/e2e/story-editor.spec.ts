@@ -83,7 +83,7 @@ async function addTextMessage(page: Page, text: string) {
 }
 
 test.describe("Lorana Tales story editor", () => {
-	test("desktop edit, theme, menus, source, fullscreen and player", async ({ page }) => {
+	test("desktop edit, theme, menus, source and player", async ({ page }) => {
 		await page.setViewportSize({ width: 1440, height: 900 });
 		await openCleanStory(page);
 		await setDarkTheme(page, true);
@@ -135,17 +135,13 @@ test.describe("Lorana Tales story editor", () => {
 		await page.locator(".raw-pane button.primary").click();
 		await page.waitForTimeout(300);
 
-		await page.getByRole("button", { name: "全屏编辑" }).click();
-		await expect(page.getByRole("button", { name: "退出全屏编辑" })).toBeVisible();
-		await assertViewportIntegrity(page);
-		await page.getByRole("button", { name: "退出全屏编辑" }).click();
-		await expect(page.getByRole("button", { name: "全屏编辑" })).toBeVisible();
+		await expect(page.getByRole("button", { name: /全屏编辑/ })).toHaveCount(0);
 
 		await setDarkTheme(page, false);
 		await assertViewportIntegrity(page);
 		await page.screenshot({ path: "test-results/story-desktop-light.png", fullPage: true });
 
-		await page.getByRole("button", { name: "演出编辑预览" }).click();
+		await page.getByRole("button", { name: "演出编辑" }).click();
 		await expect(page.getByRole("button", { name: "← 返回" })).toBeVisible();
 		await expect(page.locator(".player>header").getByText("端到端测试故事", { exact: true })).toBeVisible();
 		await assertViewportIntegrity(page);
@@ -168,7 +164,7 @@ test.describe("Lorana Tales story editor", () => {
 		await page.screenshot({ path: "test-results/story-player-display-settings-light.png", fullPage: true });
 		await playerDisplaySettings.getByRole("button", { name: "关闭界面设置" }).click();
 
-		await page.getByRole("button", { name: "演出编辑", exact: true }).click();
+		await page.getByRole("banner").getByRole("button", { name: "演出编辑", exact: true }).click();
 		await page.locator("article.player-message").first().click();
 		const performanceModal = page.locator(".performance-modal");
 		await expect(performanceModal.getByText("消息演出编排", { exact: true })).toBeVisible();
@@ -348,7 +344,7 @@ test.describe("Lorana Tales story editor", () => {
 		await rangeEffectModal.getByRole("button", { name: "完成" }).click();
 		await page.screenshot({ path: "test-results/story-player-light.png", fullPage: true });
 		await page.getByRole("button", { name: "← 返回" }).click();
-		await expect(page.getByRole("button", { name: "演出编辑预览" })).toBeVisible();
+		await expect(page.getByRole("button", { name: "演出编辑" })).toBeVisible();
 
 		await page.getByRole("button", { name: "下载与导出" }).click();
 		const sspDownloadPromise = page.waitForEvent("download");
@@ -382,8 +378,8 @@ test.describe("Lorana Tales story editor", () => {
 		await expect(offline.locator("#start-title")).toHaveText("端到端测试故事");
 		await expect(offline.locator("#start-author")).toHaveText("作者：端到端作者");
 		await offline.getByRole("button", { name: "开始演出" }).click();
-		await expect(offline.getByText("点击画布可以下一句，自动播放状态下也可以哦~", { exact: true })).toBeVisible();
-		await offline.getByText("点击画布可以下一句，自动播放状态下也可以哦~", { exact: true }).click();
+		await expect(offline.getByText("这个演出没有开启自动播放，请点击画布播放下一句。", { exact: true })).toBeVisible();
+		await offline.getByText("这个演出没有开启自动播放，请点击画布播放下一句。", { exact: true }).click();
 		await expect(offline.locator("#toggle")).toBeVisible();
 		await expect(offline.locator("#autoplay")).toBeVisible();
 		await offline.locator("#autoplay").check();
@@ -422,8 +418,17 @@ test.describe("Lorana Tales story editor", () => {
 		await page.locator(".story-editor main").click();
 		await expect(page.getByRole("navigation", { name: "添加资源" })).toBeHidden();
 
-		await page.getByRole("button", { name: "消息操作" }).click();
-		await expect(page.getByRole("menu", { name: "消息操作" })).toBeVisible();
+		for (let index = 1; index <= 8; index += 1) await addTextMessage(page, `底部菜单回归 ${index}`);
+		const lastMessage = page.locator("article.story-message").last();
+		await lastMessage.getByRole("button", { name: "消息操作" }).click();
+		const messageMenu = page.getByRole("menu", { name: "消息操作" });
+		await expect(messageMenu).toBeVisible();
+		await expect.poll(async () => {
+			const menu = await messageMenu.boundingBox();
+			const canvas = await page.locator(".story-editor main").boundingBox();
+			const composer = await page.locator(".composer").boundingBox();
+			return !!menu && !!canvas && !!composer && menu.y + menu.height <= canvas.y + canvas.height && menu.y + menu.height < composer.y;
+		}).toBe(true);
 		await assertViewportIntegrity(page);
 		await page.getByRole("menuitem", { name: /上插/ }).click();
 		await expect(page.getByText("上插", { exact: true })).toBeVisible();
@@ -434,7 +439,7 @@ test.describe("Lorana Tales story editor", () => {
 		await setDarkTheme(page, false);
 		await assertViewportIntegrity(page);
 		await page.screenshot({ path: "test-results/story-mobile-light.png", fullPage: true });
-		await page.getByRole("button", { name: "演出编辑预览" }).click();
+		await page.getByRole("button", { name: "演出编辑" }).click();
 		await page.getByRole("button", { name: "演出设置", exact: true }).click();
 		await page.waitForTimeout(300);
 		const mobilePerformanceSettings = page.getByLabel("演出设置", { exact: true });
@@ -519,6 +524,9 @@ test.describe("Lorana Tales story editor", () => {
 		await page.goto("/story?key=hint-position-qa#test-password", { waitUntil: "networkidle" });
 		await expect(page.locator(".story-editor .avatar img").first()).toBeVisible();
 		expect(avatarRequests).toBeGreaterThanOrEqual(2);
+		const claimPrompt = page.getByRole("dialog", { name: "认领这个故事？" });
+		await expect(claimPrompt).toBeVisible();
+		await claimPrompt.getByRole("button", { name: "暂不认领" }).click();
 
 		const legacyHint = page.getByRole("dialog", { name: "经典染色器提示" });
 		await expect(legacyHint).toBeVisible();
