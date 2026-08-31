@@ -526,6 +526,17 @@ test.describe("Lorana Tales story editor", () => {
 		expect(avatarRequests).toBeGreaterThanOrEqual(2);
 		const claimPrompt = page.getByRole("dialog", { name: "认领这个故事？" });
 		await expect(claimPrompt).toBeVisible();
+		const claimButtons = claimPrompt.getByRole("button", { name: /暂不认领|复制并认领/ });
+		await expect(claimButtons).toHaveCount(2);
+		for (const button of await claimButtons.all()) {
+			const style = await button.evaluate(element => {
+				const computed = getComputedStyle(element);
+				return { borderRadius: parseFloat(computed.borderRadius), height: element.getBoundingClientRect().height, background: computed.backgroundColor };
+			});
+			expect(style.borderRadius).toBeGreaterThanOrEqual(8);
+			expect(style.height).toBeGreaterThanOrEqual(40);
+			expect(style.background).not.toBe("rgba(0, 0, 0, 0)");
+		}
 		await claimPrompt.getByRole("button", { name: "暂不认领" }).click();
 
 		const legacyHint = page.getByRole("dialog", { name: "经典染色器提示" });
