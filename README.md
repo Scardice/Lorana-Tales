@@ -183,7 +183,7 @@ max_resources_per_log = 40 # 单份日志最多下载的 CQ 资源数，以及�
 image_quality = 65 # PNG/JPEG/WebP 转 WebP 时的有损质量（1-100）
 audio_bitrate_kbps = 128 # 语音转为 Ogg Opus 的目标码率
 ffmpeg_path = "ffmpeg" # 系统 FFmpeg 路径；项目不捆绑 GPL 二进制
-allowed_hosts = ["*.qq.com", "*.qlogo.cn", "*.qpic.cn", "*.gtimg.cn", "*.discordapp.com", "*.kookapp.cn", "*.kookcdn.com", "*.kaiheila.cn"] # 可信上游资源与平台头像域名
+allowed_hosts = ["*.qq.com", "*.qq.com.cn", "*.qlogo.cn", "*.qpic.cn", "*.gtimg.cn", "*.gtimg.com", "*.ugcimg.cn", "*.discordapp.com", "*.kookapp.cn", "*.kookcdn.com", "*.kaiheila.cn"] # QQ 新旧媒体、文件、头像 CDN 与已支持平台头像域名
 allow_public_hosts = false # 不建议开启；true 时允许任意公网域名
 download_timeout_seconds = 15 # 单资源下载超时
 max_concurrent_jobs = 2 # 图片/音频/无损压缩后台并发；上限 4
@@ -356,7 +356,7 @@ trusted_proxy_cidrs = ["127.0.0.1/32", "::1/128"]
 
 ### 资源本地归档
 
-开启 `[resource_cache].enabled` 后，服务会在上传时解压日志，提取 `CQ:image`、`face`、`record`、`voice`、`audio` 和 `file` 中的 URL 或 base64 资源，下载后将日志引用改为本站 `/cq-resources/...`。`CQ:video` 永远不会下载或写入硬盘，而会改成 `【视频】` 占位，避免视频耗尽服务端空间。默认只允许腾讯 QQ/QLogo/QPic/GTImg 域名；如日志确实使用其他图床，应将对应域名加入 `allowed_hosts`，而不是直接开启 `allow_public_hosts`。
+开启 `[resource_cache].enabled` 后，服务会在上传时解压日志，提取 `CQ:image`、`face`、`record`、`voice`、`audio` 和 `file` 中的 URL 或 base64 资源，下载后将日志引用改为本站 `/cq-resources/...`。`CQ:video` 永远不会下载或写入硬盘，而会改成 `【视频】` 占位，避免视频耗尽服务端空间。默认清单覆盖 QQ 新旧聊天图片、头像、语音与文件 CDN，包括 `multimedia.nt.qq.com.cn`、`grouptalk.c2c.qq.com`、`qqbot.ugcimg.cn`、QLogo、QPic 和 GTImg，以及已支持平台的头像域名。用户配置始终按原样生效，程序不会自动增删白名单；如日志使用其他图床，应手动将对应域名加入 `allowed_hosts`，不要直接开启 `allow_public_hosts`。`*.myqcloud.com`、`*.tencentcos.com` 等可由任意租户托管的公共对象存储，以及可跳转到任意目标的短链域名，不在默认白名单内。
 
 PNG、JPEG 和 WebP 会以 `image_quality` 重编码为 WebP；只有更小才替换原文件。GIF 会保持原格式和动画。语音会通过系统 FFmpeg 转为 128kbps（或 `audio_bitrate_kbps`）的 Ogg Opus；如果输出反而更大则保留较小的原文件。项目只调用运维环境提供的 FFmpeg，不捆绑其二进制，从而不把 GPL 分发义务混入 MIT 发布包。所有保存后的资源还会使用最高质量 Brotli 无损压缩；支持 Brotli 的浏览器直接得到压缩流，其他客户端由服务端即时解压。
 

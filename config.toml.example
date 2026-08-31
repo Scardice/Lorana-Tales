@@ -119,8 +119,10 @@ image_quality = 65
 audio_bitrate_kbps = 128 # 语音上传和归档时转为 Ogg Opus；较小的原文件不会被反向放大
 ffmpeg_path = "ffmpeg" # 使用系统 FFmpeg，不随 MIT 项目捆绑 GPL 二进制；可填写绝对路径
 
-# 允许下载的上游域名，支持 *.example.com 后缀匹配。默认仅覆盖 QQ/Tencent 常见媒体域名；需要其他图床时显式加入，避免日志 URL 被用于服务端请求探测。
-allowed_hosts = ["*.qq.com", "*.qlogo.cn", "*.qpic.cn", "*.gtimg.cn", "*.discordapp.com", "*.kookapp.cn", "*.kookcdn.com", "*.kaiheila.cn"]
+# 允许下载的上游域名，支持 *.example.com 后缀匹配。QQ 默认项覆盖新旧聊天图片、
+# 头像、语音与文件 CDN（包括 multimedia.nt.qq.com.cn、grouptalk.c2c.qq.com、
+# qqbot.ugcimg.cn）；现有配置不会被程序自动增删，需要其他图床时请手动加入。
+allowed_hosts = ["*.qq.com", "*.qq.com.cn", "*.qlogo.cn", "*.qpic.cn", "*.gtimg.cn", "*.gtimg.com", "*.ugcimg.cn", "*.discordapp.com", "*.kookapp.cn", "*.kookcdn.com", "*.kaiheila.cn"]
 
 # 是否允许 allowed_hosts 以外的任意公网地址。保持 false 更安全；true 时仍会拒绝内网、环回和链路本地地址，但不建议在不受信任上传环境开启。
 allow_public_hosts = false

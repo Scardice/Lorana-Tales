@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import toml from "toml";
+import { DEFAULT_RESOURCE_ALLOWED_HOSTS } from "../storage/resource-host-policy.js";
 
 /**
  * Default configuration values used when config.toml omits a field.
@@ -70,7 +71,7 @@ const DEFAULT_CONFIG = {
 		image_quality: 65,
 		audio_bitrate_kbps: 128,
 		ffmpeg_path: "ffmpeg",
-		allowed_hosts: ["*.qq.com", "*.qlogo.cn", "*.qpic.cn", "*.gtimg.cn", "*.discordapp.com", "*.kookapp.cn", "*.kookcdn.com", "*.kaiheila.cn"],
+		allowed_hosts: [...DEFAULT_RESOURCE_ALLOWED_HOSTS],
 		allow_public_hosts: false,
 		download_timeout_seconds: 15,
 		max_concurrent_jobs: 2,

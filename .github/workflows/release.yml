@@ -109,7 +109,8 @@ jobs:
         run: |
           set -euo pipefail
           base="lorana-tales-${RELEASE_VERSION}-linux-x64"
-          tar -czf "release/${base}.tar.gz" -C release "lorana-tales-${RELEASE_VERSION}"
+          tar --hard-dereference -czf "release/${base}.tar.gz" -C release "lorana-tales-${RELEASE_VERSION}"
+          ARCHIVE_PATH="release/${base}.tar.gz" node --input-type=module -e "const { inspectTar } = await import('./scripts/rolling-launcher.mjs'); await inspectTar(process.env.ARCHIVE_PATH)"
           (cd release && zip -qr "${base}.zip" "lorana-tales-${RELEASE_VERSION}")
           (cd release && sha256sum "${base}.tar.gz" "${base}.zip" > "SHA256SUMS-${RELEASE_VERSION}.txt")
 

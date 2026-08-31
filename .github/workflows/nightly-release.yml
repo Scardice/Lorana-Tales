@@ -82,8 +82,9 @@ jobs:
 
       - name: Archive runtime package
         run: |
-          tar -czf release/lorana-tales-nightly-linux-x64.tar.gz \
+          tar --hard-dereference -czf release/lorana-tales-nightly-linux-x64.tar.gz \
             -C release lorana-tales-nightly
+          node --input-type=module -e "const { inspectTar } = await import('./scripts/rolling-launcher.mjs'); await inspectTar('release/lorana-tales-nightly-linux-x64.tar.gz')"
           (cd release && zip -qr lorana-tales-nightly-linux-x64.zip lorana-tales-nightly)
           (cd release && sha256sum \
             lorana-tales-nightly-linux-x64.tar.gz \

@@ -9,6 +9,7 @@ import net from "node:net";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { ResourceCategory, ResourceIndex, ResourceObjectRecord } from "./resource-index.js";
+import { DEFAULT_RESOURCE_ALLOWED_HOSTS, resourceHostMatches } from "./resource-host-policy.js";
 import {
 	constants as zlibConstants,
 	brotliCompress,
@@ -192,8 +193,8 @@ function normalizeOptions(options: CqResourceCacheOptions = {}): NormalizedOptio
 			audioBitrateKbps: clampNumber(options.audio_bitrate_kbps, 128, 32, 320),
 			ffmpegPath: String(options.ffmpeg_path || "ffmpeg").trim() || "ffmpeg",
 		allowedHosts: Array.isArray(options.allowed_hosts)
-			? options.allowed_hosts.map((host) => String(host).trim().toLowerCase()).filter(Boolean)
-			: ["*.qq.com", "*.qlogo.cn", "*.qpic.cn", "*.gtimg.cn"],
+			? [...new Set(options.allowed_hosts.map((host) => String(host).trim().toLowerCase()).filter(Boolean))]
+			: [...DEFAULT_RESOURCE_ALLOWED_HOSTS],
 		allowPublicHosts: parseBoolean(options.allow_public_hosts, false),
 		downloadTimeoutMs:
 			clampNumber(options.download_timeout_seconds, 15, 1, 60) * 1000,
@@ -348,10 +349,6 @@ function mimeForExtension(extension: string): string {
 	return mime[extension] || "application/octet-stream";
 }
 
-function hostMatches(host: string, allowedHosts: string[]): boolean {
-	return allowedHosts.some((rule) => rule === host || (rule.startsWith("*.") && host.endsWith(rule.slice(1))));
-}
-
 const NON_PUBLIC_IPS = (() => {
 	const list = new net.BlockList();
 	const add = (address: string, prefix: number, type: "ipv4" | "ipv6") =>
@@ -393,7 +390,7 @@ async function assertSafeRemoteUrl(rawUrl: string, options: NormalizedOptions) {
 	const url = new URL(rawUrl);
 	if (!/^https?:$/.test(url.protocol) || url.username || url.password) throw new Error("unsupported resource URL");
 	const host = url.hostname.toLowerCase();
-	if (!options.allowPublicHosts && !hostMatches(host, options.allowedHosts)) throw new Error(`resource host is not allowed: ${host}`);
+	if (!options.allowPublicHosts && !resourceHostMatches(host, options.allowedHosts)) throw new Error(`resource host is not allowed: ${host}`);
 	if (net.isIP(host)) {
 		if (!isPublicIp(host)) throw new Error("resource host resolves to a private address");
 		return { url, address: host, family: net.isIP(host) };

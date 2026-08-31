@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { CqResourceCache } from "../src/storage/cq-resource-cache.js";
 import { SqliteResourceIndex } from "../src/storage/resource-index.js";
+import { DEFAULT_RESOURCE_ALLOWED_HOSTS, resourceHostMatches } from "../src/storage/resource-host-policy.js";
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "lorana-resource-storage-"));
 const legacy = path.join(root, "legacy");
@@ -12,6 +13,14 @@ const resources = path.join(root, "resources");
 const indexPath = path.join(root, "indexes", "resources.sqlite");
 
 try {
+	assert.equal(resourceHostMatches("multimedia.nt.qq.com.cn", DEFAULT_RESOURCE_ALLOWED_HOSTS), true);
+	assert.equal(resourceHostMatches("gchat.qpic.cn", DEFAULT_RESOURCE_ALLOWED_HOSTS), true);
+	assert.equal(resourceHostMatches("qqbot.ugcimg.cn", DEFAULT_RESOURCE_ALLOWED_HOSTS), true);
+	assert.equal(resourceHostMatches("mat1.gtimg.com", DEFAULT_RESOURCE_ALLOWED_HOSTS), true);
+	assert.equal(resourceHostMatches("attacker-qq.com.cn", DEFAULT_RESOURCE_ALLOWED_HOSTS), false);
+	assert.equal(resourceHostMatches("qq.com.cn.evil.example", DEFAULT_RESOURCE_ALLOWED_HOSTS), false);
+	assert.equal(resourceHostMatches("multimedia.nt.qq.com.cn", ["*.qq.com"]), false);
+
 	await fs.mkdir(legacy, { recursive: true });
 	await fs.writeFile(path.join(legacy, "source-index.json"), "{}", "utf8");
 	const legacyCache = new CqResourceCache(
