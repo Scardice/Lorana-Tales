@@ -29,6 +29,7 @@ const requiredPaths = [
 	"LICENSE",
 	"THIRD_PARTY_NOTICES.md",
 	"ecosystem.config.cjs",
+	"migrate_storage.py",
 	"scripts/rolling-launcher.mjs",
 ];
 
@@ -99,6 +100,10 @@ await fs.copyFile(
 	path.join(repoRoot, "ecosystem.config.cjs"),
 	path.join(outputDir, "ecosystem.config.cjs"),
 );
+await fs.copyFile(
+	path.join(repoRoot, "migrate_storage.py"),
+	path.join(outputDir, "migrate_storage.py"),
+);
 await fs.writeFile(
 	path.join(outputDir, "package.json"),
 	`${JSON.stringify(runtimePackage, null, "\t")}\n`,
@@ -116,7 +121,8 @@ const packageReadme = [
 	"The package already contains the compiled server, frontend, and production dependencies; no build or dependency installation step is required.",
 	"",
 	"- Edit `config.toml` before the first start.",
-	"- Keep the SQLite path and security audit path on persistent storage.",
+	"- Keep the database, resource index, resource directory, and security audit path on persistent storage.",
+	"- Resource layout v2 is never migrated automatically; run `python3 migrate_storage.py resources ...` after backup when upgrading a legacy resource directory.",
 	"- Set `trust_proxy = true` only when every proxy/CDN hop is trusted and overwrites forwarding headers.",
 	"- Set `allowed_hosts` and `frontend_url` to the public host when deploying behind a proxy or CDN.",
 	"- Protect the official GitHub repository and Release workflow with strong authentication; they are the automatic updater's trust root.",

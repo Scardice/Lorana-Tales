@@ -121,8 +121,10 @@ export class SqliteLogStore implements LogStore {
 	constructor(dbPath: string, options: { maxTotalBytes?: number } = {}) {
 		this.dbPath = dbPath === ":memory:" ? dbPath : path.resolve(dbPath);
 		this.maxTotalBytes = Math.max(1, Number(options.maxTotalBytes || 4096 * 1024 * 1024));
-		if (this.dbPath !== ":memory:") fs.mkdirSync(path.dirname(this.dbPath), { recursive: true });
+		const existed = this.dbPath !== ":memory:" && fs.existsSync(this.dbPath);
+		if (this.dbPath !== ":memory:") fs.mkdirSync(path.dirname(this.dbPath), { recursive: true, mode: 0o700 });
 		this.db = new Database(this.dbPath);
+		if (this.dbPath !== ":memory:" && !existed && process.platform !== "win32") fs.chmodSync(this.dbPath, 0o600);
 
 		this.db.pragma("journal_mode = WAL");
 		this.db.pragma("synchronous = NORMAL");

@@ -41,10 +41,19 @@ check_interval_seconds = 300
 # 新版本包的暂存目录；应放在持久磁盘，且不要与其他程序共用。
 staging_path = "./data/updates"
 
-[storage]
-# SQLite 数据库路径。
-# 相对路径会以项目根目录为基准；系统服务部署建议使用 /var/lib/scardice-story-painter/scardice.db，避免工作目录变化导致新建空库。
+[database]
+# sqlite 与 postgres 是同级后端；切换前使用仓库根目录 migrate_storage.py 显式迁移。
+driver = "sqlite"
+# SQLite 主数据库路径。相对路径以项目根目录为基准。
 sqlite_path = "./data/scardice.db"
+# PostgreSQL 建议通过 DATABASE_URL 注入，避免凭据写入仓库。driver=postgres 时必填。
+postgres_url = ""
+pool_max = 10
+# disable、prefer、require 或 verify-full。本机/Unix Socket 可用 disable；公网 PostgreSQL 必须用 verify-full。
+# prefer 为兼容旧配置保留，但会按 verify-full 处理，绝不会静默降级到明文。
+ssl = "disable"
+
+[storage]
 
 # 公共传统日志数据库的总容量硬上限，单位 MB。正文、数据库页、索引与保守行开销都会计入。
 # 可用环境变量 MAX_LOG_STORAGE_MB 覆盖；账号云端工程与 CQ 资源各自使用独立额度。
@@ -84,8 +93,13 @@ kook_bot_token = ""
 # 开启后服务会下载可信来源资源，替换日志中的上游 URL；关闭时日志保持原样。默认 false，避免未确认的带宽与磁盘占用。
 enabled = false
 
-# CQ 资源存储目录。相对路径以项目根目录为基准；不要与其他程序共用，缓存清理只会删除本功能生成的文件。
-path = "./data/cq-resources"
+# 统一资源目录。内部按 cq-images、cq-audio、avatars、uploads、files 分类并按哈希分片。
+# v2 不会自动读取或搬迁旧的扁平 CQ 目录；必须先运行 migrate_storage.py resources。
+path = "./data/resources"
+
+# SQLite 后端的资源索引数据库。留空时为 <path>/resource-index.sqlite；可放到 SSD，资源目录放机械盘。
+# PostgreSQL 后端会把资源索引放入 PostgreSQL，此项不使用。
+index_sqlite_path = ""
 
 # 可选：QQ 内置 CQ 表情资源目录。为避免把腾讯素材误标为 MIT，本项目不重新分发素材。
 # 请将资源包解压后填写包含 faces/0/apng/0.png 这类路径的根目录；留空时 [CQ:face] 显示【图片】占位。
@@ -118,7 +132,7 @@ download_timeout_seconds = 15
 max_concurrent_jobs = 2
 # 图片解码前后的像素总数硬限制，防止体积很小但尺寸巨大的图片耗尽内存。
 max_image_pixels = 40000000
-# 整个 CQ 资源目录的硬盘配额，单位 MB；达到后拒绝新增但仍可读取和清理旧资源。
+# 整个资源目录的硬盘配额，单位 MB；达到后拒绝新增但仍可读取和清理旧资源。
 max_total_mb = 4096
 
 [accounts]

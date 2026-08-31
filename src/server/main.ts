@@ -8,6 +8,7 @@ import type { Express } from "express";
 import express from "express";
 import { AccountService } from "../accounts/router.js";
 import { AccountStore } from "../accounts/account-store.js";
+import { PostgresAccountStore } from "../accounts/postgres-account-store.js";
 import { createAdminRouter } from "../api/admin.js";
 import { handleDiceApiRequest } from "../api/dice.js";
 import { loadConfig } from "../config/load-config.js";
@@ -19,7 +20,9 @@ import {
 } from "../security/injection-guard.js";
 import type { LogStore } from "../storage/log-store.js";
 import { SqliteLogStore } from "../storage/sqlite-log-store.js";
+import { createPostgresPool, PostgresLogStore } from "../storage/postgres-log-store.js";
 import { CqResourceCache } from "../storage/cq-resource-cache.js";
+import { PostgresResourceIndex, SqliteResourceIndex } from "../storage/resource-index.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "../..");
@@ -27,7 +30,8 @@ const projectRoot = path.resolve(__dirname, "../..");
 type StartServerResult = {
 	app: Express;
 	server: Server;
-	store: SqliteLogStore;
+	store: LogStore;
+	resourceCache: CqResourceCache;
 	config: ReturnType<typeof loadConfig>;
 	accountService: AccountService | null;
 };
@@ -357,25 +361,37 @@ export async function startServer(
 		return record;
 	}
 
-	const store = new SqliteLogStore(config.storage.sqlite_path, {
-		maxTotalBytes: Math.max(1, Number(config.storage.max_total_mb || 4096)) * 1024 * 1024,
-	});
+	const maxLogBytes = Math.max(1, Number(config.storage.max_total_mb || 4096)) * 1024 * 1024;
+	const postgres = config.database.driver === "postgres"
+		? createPostgresPool({ url: config.database.postgres_url, poolMax: config.database.pool_max, ssl: config.database.ssl })
+		: null;
+	const store: LogStore = postgres
+		? new PostgresLogStore(postgres, maxLogBytes)
+		: new SqliteLogStore(config.database.sqlite_path, { maxTotalBytes: maxLogBytes });
+	if (store instanceof PostgresLogStore) await store.initialize();
+	const resourceIndex = postgres
+		? new PostgresResourceIndex(postgres)
+		: new SqliteResourceIndex(config.resource_cache.index_sqlite_path);
 	let accountService: AccountService | null = null;
 	if (config.accounts?.enabled) {
 		if (String(config.accounts.encryption_key || "").length < 32) {
 			throw new Error("accounts.encryption_key must contain at least 32 characters when accounts are enabled");
 		}
 		const publicBase = String(config.app.frontend_url || "").replace(/\/$/, "");
-		accountService = new AccountService(new AccountStore(store.db), config.accounts, trustProxyPolicy, store, {
+		const accountStore = postgres
+			? new PostgresAccountStore(postgres)
+			: new AccountStore((store as SqliteLogStore).db);
+		if (accountStore instanceof PostgresAccountStore) await accountStore.initialize();
+		accountService = new AccountService(accountStore, config.accounts, trustProxyPolicy, store, {
 			siteTitle: String(config.branding.site_title || "Lorana Tales"),
 			logoUrl: brandingLogo && publicBase ? `${publicBase}/branding/logo?v=${brandingLogo.version}` : "",
 		});
 		await accountService.ensureInitialAdmin();
-		const projectCleanup = accountService.cleanupInactiveProjects();
+		const projectCleanup = await accountService.cleanupInactiveProjects();
 		console.log(`[server] Account project cleanup deleted ${projectCleanup.deletedProjects} inactive projects and freed ${projectCleanup.freedBytes} bytes`);
-		const projectCleanupTimer = setInterval(() => {
+		const projectCleanupTimer = setInterval(async () => {
 			try {
-				const result = accountService?.cleanupInactiveProjects();
+				const result = await accountService?.cleanupInactiveProjects();
 				if (result?.deletedProjects) console.log(`[server] Account project cleanup deleted ${result.deletedProjects} inactive projects and freed ${result.freedBytes} bytes`);
 			} catch (error) {
 				console.error("[server] Account project cleanup failed:", error);
@@ -383,10 +399,11 @@ export async function startServer(
 		}, 6 * 60 * 60 * 1000);
 		projectCleanupTimer.unref();
 	}
-	const resourceCache = new CqResourceCache(config.resource_cache);
+	const resourceCache = new CqResourceCache(config.resource_cache, resourceIndex);
 	if (resourceCache.enabled) {
+		await resourceCache.initialize();
 		const deleted = await resourceCache.cleanupExpired();
-		console.log(`[server] CQ resource cache startup cleanup: ${deleted} files removed`);
+		console.log(`[server] Resource cache startup cleanup: ${deleted} files removed`);
 	}
 
 	if (config.app.cleanup_on_start) {
@@ -416,6 +433,13 @@ export async function startServer(
 	const app = express();
 	app.disable("x-powered-by");
 	app.set("trust proxy", trustProxy ? trustProxyPolicy : false);
+	app.use((req, res, next) => {
+		if (!req.url.startsWith("/") || req.url.startsWith("//")) {
+			res.status(400).type("text/plain").send("Bad Request");
+			return;
+		}
+		next();
+	});
 	app.use(setSecurityHeaders);
 	app.use((req, res, next) => {
 		const hstsSeconds = Math.max(0, Math.min(63_072_000, Number(config.server?.hsts_max_age_seconds || 0)));
@@ -888,7 +912,7 @@ export async function startServer(
 			`[server] Lorana Tales Backend running at http://${host}:${port}`,
 		);
 		console.log(
-			`[server] SQLite database: ${path.resolve(config.storage.sqlite_path)}`,
+			`[server] Database: ${postgres ? "PostgreSQL" : path.resolve(config.database.sqlite_path)}`,
 		);
 		console.log(`[server] Frontend URL: ${config.app.frontend_url || "auto"}`);
 		console.log(
@@ -896,7 +920,7 @@ export async function startServer(
 		);
 		console.log(`[server] Max upload: ${config.app.max_upload_mb} MB`);
 		console.log(
-			`[server] CQ resource cache: ${resourceCache.enabled ? `enabled (${config.resource_cache.retention_days} days, ${config.resource_cache.path})` : "disabled"}`,
+			`[server] Resource cache: ${resourceCache.enabled ? `enabled (${config.resource_cache.retention_days} days, ${config.resource_cache.path})` : "disabled"}`,
 		);
 		console.log(`[server] Accounts: ${accountService ? "enabled" : "disabled"}`);
 		console.log(`[server] Trust proxy: ${trustProxy ? "enabled" : "disabled"}`);
@@ -922,9 +946,12 @@ export async function startServer(
 			console.log(`[admin] Admin password loaded from configuration`);
 		}
 	});
+	server.on("clientError", (_error, socket) => {
+		if (socket.writable) socket.end("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
+	});
 	// Keep the socket referenced once binding has completed. The CLI also owns
 	// the returned runtime until this server closes.
-	return { app, server, store, config, accountService };
+	return { app, server, store, config, accountService, resourceCache };
 }
 
 const directRunPath = process.argv[1] ? path.resolve(process.argv[1]) : "";

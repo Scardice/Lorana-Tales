@@ -3,6 +3,7 @@ import net from "node:net";
 import type { Express, Request, Response } from "express";
 import { getClientIp, isTrustedProxyRequest, type TrustedProxyPolicy } from "../server/client-ip.js";
 import { AccountStore, type AccountUser, isValidUsername, normalizeEmail } from "./account-store.js";
+import type { PostgresAccountStore } from "./postgres-account-store.js";
 import { CaptchaService } from "./captcha.js";
 import { AccountMailer } from "./mailer.js";
 import type { LogStore } from "../storage/log-store.js";
@@ -180,7 +181,7 @@ function sendProject(res: Response, project: Record<string, unknown> | null) {
 }
 
 export class AccountService {
-	readonly store: AccountStore;
+	readonly store: AccountStore | PostgresAccountStore;
 	readonly config;
 	readonly captcha: CaptchaService;
 	readonly mailer: AccountMailer | null;
@@ -190,7 +191,7 @@ export class AccountService {
 	private captchaChallengeTimes = new Map<string, number[]>();
 	private passwordAttemptTimes = new Map<string, number[]>();
 
-	constructor(store: AccountStore, config, trustProxy: TrustedProxyPolicy = false, logStore: LogStore | null = null, branding = { siteTitle: "Lorana Tales", logoUrl: "" }) {
+	constructor(store: AccountStore | PostgresAccountStore, config, trustProxy: TrustedProxyPolicy = false, logStore: LogStore | null = null, branding = { siteTitle: "Lorana Tales", logoUrl: "" }) {
 		this.store = store;
 		this.config = config;
 		this.captcha = new CaptchaService(config);
@@ -202,8 +203,8 @@ export class AccountService {
 
 	async ensureInitialAdmin() {
 		const adminGroup = String(this.config.admin_group || "admin");
-		this.store.normalizeAdminGroup(adminGroup, String(this.config.default_group || "default"));
-		if (this.store.activeAdminCount() > 0) return;
+		await this.store.normalizeAdminGroup(adminGroup, String(this.config.default_group || "default"));
+		if (await this.store.activeAdminCount() > 0) return;
 		const username = String(this.config.initial_admin_username || "").trim();
 		const password = String(this.config.initial_admin_password || "");
 		if (!username || username.length > 80 || !validPassword(password)) {
@@ -211,15 +212,15 @@ export class AccountService {
 		}
 		const configuredEmail = normalizeEmail(this.config.initial_admin_email);
 		const email = validEmail(configuredEmail) ? configuredEmail : `${crypto.createHash("sha256").update(username).digest("hex").slice(0, 16)}@bootstrap.invalid`;
-		const existing = this.store.getUserByEmail(email);
+		const existing = await this.store.getUserByEmail(email);
 		if (existing) {
-			this.store.updateUser(existing.id, { username, nickname: username, role: "admin", group: adminGroup });
+			await this.store.updateUser(existing.id, { username, nickname: username, role: "admin", group: adminGroup });
 			await this.store.updatePassword(existing.id, password, true);
-			this.store.audit("system", "account.bootstrap-admin", existing.id);
+			await this.store.audit("system", "account.bootstrap-admin", existing.id);
 			return;
 		}
 		const user = await this.store.createUser({ email, password, username, nickname: username, role: "admin", group: adminGroup, mustChangePassword: true });
-		this.store.audit("system", "account.bootstrap-admin", user.id);
+		await this.store.audit("system", "account.bootstrap-admin", user.id);
 	}
 
 	private secure(req: Request) {
@@ -243,26 +244,26 @@ export class AccountService {
 	private ip(req: Request) { return getClientIp(req, this.trustProxy); }
 	private prefix(req: Request) { return networkPrefix(this.ip(req)); }
 
-	getSession(req: Request) {
+	async getSession(req: Request) {
 		const token = cookies(req).get(SESSION_COOKIE) || "";
-		const session = this.store.getSession(token);
+		const session = await this.store.getSession(token);
 		if (!session) return null;
-		if (!this.store.sessionMatchesContext(session, this.prefix(req), this.userAgent(req))) {
-			this.store.revokeSession(token);
+		if (!await this.store.sessionMatchesContext(session, this.prefix(req), this.userAgent(req))) {
+			await this.store.revokeSession(token);
 			return null;
 		}
-		const user = this.store.refreshExpiredBan(session.user);
+		const user = await this.store.refreshExpiredBan(session.user);
 		if (user.status !== "active") return null;
 		return { ...session, user };
 	}
 
-	isAdmin(req: Request) { const user = this.getSession(req)?.user; return user?.role === "admin" && user.group === String(this.config.admin_group || "admin") && !user.mustChangePassword; }
+	async isAdmin(req: Request) { const user = (await this.getSession(req))?.user; return user?.role === "admin" && user.group === String(this.config.admin_group || "admin") && !user.mustChangePassword; }
 
-	private requireSession(req: Request, res: Response, mutate = false, allowInitialChange = false) {
-		const session = this.getSession(req);
+	private async requireSession(req: Request, res: Response, mutate = false, allowInitialChange = false) {
+		const session = await this.getSession(req);
 		if (!session) { json(res, 401, { error: "authentication_required" }); return null; }
 		if (session.user.mustChangePassword && !allowInitialChange) { json(res, 428, { error: "credentials_change_required" }); return null; }
-		if (mutate && !this.store.verifyCsrf(session, String(req.headers["x-csrf-token"] || ""))) {
+		if (mutate && !await this.store.verifyCsrf(session, String(req.headers["x-csrf-token"] || ""))) {
 			json(res, 403, { error: "csrf_failed" }); return null;
 		}
 		return session;
@@ -295,8 +296,8 @@ export class AccountService {
 		}
 	}
 
-	private publicUser(user: AccountUser) {
-		return { ...user, canAdmin: user.role === "admin" && user.group === String(this.config.admin_group || "admin") && !user.mustChangePassword, banReason: user.status === "banned" ? user.banReason : "", projectCount: this.store.projectCount(user.id) };
+	private async publicUser(user: AccountUser) {
+		return { ...user, canAdmin: user.role === "admin" && user.group === String(this.config.admin_group || "admin") && !user.mustChangePassword, banReason: user.status === "banned" ? user.banReason : "", projectCount: await this.store.projectCount(user.id) };
 	}
 
 	private storagePolicy(user: Pick<AccountUser, "id" | "group" | "quotaMbOverride" | "retentionDaysOverride">) {
@@ -330,24 +331,24 @@ export class AccountService {
 		return Number.isFinite(shareExpires) && shareExpires > Date.now();
 	}
 
-	cleanupInactiveProjects() {
-		return this.store.cleanupInactiveProjects((user) => this.storagePolicy(user).retentionDays);
+	async cleanupInactiveProjects() {
+		return await this.store.cleanupInactiveProjects((user) => this.storagePolicy(user).retentionDays);
 	}
 
-	storageUsage(user: AccountUser) {
+	async storageUsage(user: AccountUser) {
 		const policy = this.storagePolicy(user);
-		const usedBytes = this.store.projectStorageBytes(user.id);
-		const projectCount = this.store.projectCount(user.id);
+		const usedBytes = await this.store.projectStorageBytes(user.id);
+		const projectCount = await this.store.projectCount(user.id);
 		return { ...policy, usedBytes, remainingBytes: Math.max(0, policy.quotaBytes - usedBytes), projectCount };
 	}
 
-	private riskNeedsCaptcha(userId: string, req: Request) {
+	private async riskNeedsCaptcha(userId: string, req: Request) {
 		const windowMs = Math.max(1, Number(this.config.risk_cooldown_minutes || 15)) * 60000;
-		return this.store.recentRiskCount(userId, this.prefix(req), Date.now() - windowMs) >= 5;
+		return await this.store.recentRiskCount(userId, this.prefix(req), Date.now() - windowMs) >= 5;
 	}
 
-	private requireRiskClearance(userId: string, scope: string, req: Request, res: Response) {
-		if (!this.riskNeedsCaptcha(userId, req)) return true;
+	private async requireRiskClearance(userId: string, scope: string, req: Request, res: Response) {
+		if (!await this.riskNeedsCaptcha(userId, req)) return true;
 		const subject = `${userId}:${this.prefix(req)}`;
 		if (this.captcha.isTrusted(subject)) return true;
 		const token = String(req.headers["x-captcha-clearance"] || "");
@@ -397,10 +398,10 @@ export class AccountService {
 		app.post("/api/account/captcha/verify", async (req, res) => {
 			try {
 				const body = readJson(req);
-				const session = this.getSession(req);
+				const session = await this.getSession(req);
 				const scope = String(body.scope || "verification-send").slice(0, 80);
 				const email = normalizeEmail(body.email);
-				const account = scope === "verification-send" ? null : this.store.getUserByEmail(email);
+				const account = scope === "verification-send" ? null : await this.store.getUserByEmail(email);
 				const subject = session ? `${session.user.id}:${this.prefix(req)}` : `${account?.id || email}:${this.prefix(req)}`;
 				const valid = await this.captcha.verify({ id: String(body.id || ""), answer: String(body.answer || ""), payload: body.payload, token: String(body.token || ""), remoteIp: this.ip(req) });
 				if (!valid) { json(res, 400, { error: "captcha_invalid" }); return; }
@@ -418,26 +419,26 @@ export class AccountService {
 				const purpose = ["register", "login", "reset-password", "change-email"].includes(String(body.purpose)) ? String(body.purpose) : "login";
 				if (!validEmail(email) || !this.emailAllowed(email)) { json(res, 400, { error: "email_not_allowed" }); return; }
 				if (purpose === "register" && this.config.registration_enabled === false) { json(res, 403, { error: "registration_disabled" }); return; }
-				const currentSession = this.getSession(req);
+				const currentSession = await this.getSession(req);
 				const subject = currentSession ? `${currentSession.user.id}:${this.prefix(req)}` : `${email}:${this.prefix(req)}`;
 				if (!this.captcha.consumeClearance(String(body.captchaClearance || ""), subject, "verification-send")) { json(res, 428, { error: "captcha_required", scope: "verification-send" }); return; }
 				if (!this.mailer) { json(res, 503, { error: "smtp_not_configured" }); return; }
 				// Do not disclose whether a registration email already exists. Return the
 				// same shaped success response after CAPTCHA without sending another mail.
-				const targetAccount = this.store.getUserByEmail(email);
+				const targetAccount = await this.store.getUserByEmail(email);
 				if ((purpose === "register" && targetAccount) || (["login", "reset-password"].includes(purpose) && !targetAccount)) {
 					json(res, 200, { id: crypto.randomUUID(), resendAfterSeconds: Number(this.config.email_code_resend_seconds || 60) });
 					return;
 				}
-				const counts = this.store.verificationSendCounts(email, this.prefix(req), Date.now() - 3600000);
+				const counts = await this.store.verificationSendCounts(email, this.prefix(req), Date.now() - 3600000);
 				const resendMs = Math.max(1, Number(this.config.email_code_resend_seconds || 60)) * 1000;
-				if (this.store.lastVerificationAt(email, purpose) > Date.now() - resendMs) { json(res, 429, { error: "verification_resend_wait", retryAfterSeconds: Math.ceil(resendMs / 1000) }); return; }
+				if (await this.store.lastVerificationAt(email, purpose) > Date.now() - resendMs) { json(res, 429, { error: "verification_resend_wait", retryAfterSeconds: Math.ceil(resendMs / 1000) }); return; }
 				if (counts.emailCount >= Number(this.config.email_code_per_hour || 5) || counts.ipCount >= Number(this.config.ip_email_code_per_hour || 10)) {
-					this.store.recordRisk("", this.prefix(req), "verification-rate-limit", email);
+					await this.store.recordRisk("", this.prefix(req), "verification-rate-limit", email);
 					json(res, 429, { error: "verification_rate_limited" }); return;
 				}
 				const code = crypto.randomInt(100000, 1000000).toString();
-				const id = this.store.createVerificationCode(email, purpose, code, this.prefix(req), Number(this.config.email_code_ttl_minutes || 10));
+				const id = await this.store.createVerificationCode(email, purpose, code, this.prefix(req), Number(this.config.email_code_ttl_minutes || 10));
 				const account = targetAccount || currentSession?.user;
 				try {
 					await this.mailer.sendCode(email, code, purpose, {
@@ -448,7 +449,7 @@ export class AccountService {
 						expires_minutes: String(this.config.email_code_ttl_minutes || 10),
 					});
 				} catch (error) {
-					this.store.deleteVerificationCode(id);
+					await this.store.deleteVerificationCode(id);
 					throw new Error("smtp_delivery_failed", { cause: error });
 				}
 				json(res, 200, { id, resendAfterSeconds: Number(this.config.email_code_resend_seconds || 60) });
@@ -464,12 +465,12 @@ export class AccountService {
 				const body = readJson(req); const email = normalizeEmail(body.email); const password = String(body.password || ""); const username = String(body.username || "").trim(); const nickname = String(body.nickname || "").trim();
 				if (this.config.registration_enabled === false) { json(res, 403, { error: "registration_disabled" }); return; }
 				if (!validEmail(email) || !this.emailAllowed(email) || !validPassword(password) || !isValidUsername(username) || nickname.length < 1 || nickname.length > 80) { json(res, 400, { error: "invalid_registration" }); return; }
-				if (!this.store.verifyCode(String(body.codeId || ""), email, "register", String(body.code || ""))) { json(res, 400, { error: "verification_invalid" }); return; }
+				if (!await this.store.verifyCode(String(body.codeId || ""), email, "register", String(body.code || ""))) { json(res, 400, { error: "verification_invalid" }); return; }
 				const user = await this.store.createUser({ email, password, username, nickname, group: String(this.config.default_group || "default") });
-				this.store.audit(user.id, "account.register", user.id);
-				const device = this.store.createTrustedDevice(user.id, this.prefix(req), this.userAgent(req), Number(this.config.trusted_device_days || 90));
-				const session = this.store.createSession(user, { sessionDays: Number(this.config.session_days || 30), deviceToken: device, ipPrefix: this.prefix(req), userAgent: this.userAgent(req) });
-				this.setAuthCookies(req, res, session, device); json(res, 201, { user: this.publicUser(user), csrfToken: session.csrfToken });
+				await this.store.audit(user.id, "account.register", user.id);
+				const device = await this.store.createTrustedDevice(user.id, this.prefix(req), this.userAgent(req), Number(this.config.trusted_device_days || 90));
+				const session = await this.store.createSession(user, { sessionDays: Number(this.config.session_days || 30), deviceToken: device, ipPrefix: this.prefix(req), userAgent: this.userAgent(req) });
+				this.setAuthCookies(req, res, session, device); json(res, 201, { user: await this.publicUser(user), csrfToken: session.csrfToken });
 			} catch (error) { console.error("[accounts] register failed", error); json(res, 409, { error: "account_exists" }); }
 		});
 
@@ -478,153 +479,153 @@ export class AccountService {
 				if (!this.allowPasswordAttempt(req)) { json(res, 429, { error: "login_rate_limited" }); return; }
 				const body = readJson(req); const identity = String(body.email || body.username || "").trim(); const password = String(body.password || "");
 				if (identity.length > 254 || password.length > 256) { json(res, 401, { error: "invalid_credentials" }); return; }
-				const known = this.store.getUserByIdentity(identity);
+				const known = await this.store.getUserByIdentity(identity);
 				const user = await this.store.verifyPasswordIdentity(identity, password);
-				if (!user) { this.store.recordRisk(known?.id || "", this.prefix(req), "login-failed", identity); json(res, 401, { error: "invalid_credentials" }); return; }
-				if (!this.requireRiskClearance(user.id, "login", req, res)) return;
-				const current = this.store.refreshExpiredBan(user);
+				if (!user) { await this.store.recordRisk(known?.id || "", this.prefix(req), "login-failed", identity); json(res, 401, { error: "invalid_credentials" }); return; }
+				if (!await this.requireRiskClearance(user.id, "login", req, res)) return;
+				const current = await this.store.refreshExpiredBan(user);
 				if (current.status === "banned") { json(res, 403, { error: "account_banned", reason: current.banReason, until: current.banUntil }); return; }
 				if (current.status !== "active") { json(res, 403, { error: "account_disabled" }); return; }
 				const existingDevice = cookies(req).get(DEVICE_COOKIE) || "";
-				const trusted = this.store.isTrustedDevice(current.id, existingDevice, this.prefix(req), this.userAgent(req));
+				const trusted = await this.store.isTrustedDevice(current.id, existingDevice, this.prefix(req), this.userAgent(req));
 				if (!current.mustChangePassword && !trusted) {
 					const codeId = String(body.codeId || "");
 					const code = String(body.code || "").trim();
 					if (!codeId || !code) { json(res, 428, { error: "email_verification_required", email: current.email }); return; }
-					if (!this.store.verifyCode(codeId, current.email, "login", code)) { json(res, 401, { error: "verification_invalid" }); return; }
+					if (!await this.store.verifyCode(codeId, current.email, "login", code)) { json(res, 401, { error: "verification_invalid" }); return; }
 				}
-				const device = trusted ? existingDevice : this.store.createTrustedDevice(current.id, this.prefix(req), this.userAgent(req), Number(this.config.trusted_device_days || 90));
-				const session = this.store.createSession(current, { sessionDays: Number(this.config.session_days || 30), deviceToken: device, ipPrefix: this.prefix(req), userAgent: this.userAgent(req) });
-				this.setAuthCookies(req, res, session, device); this.store.audit(current.id, "account.login", current.id);
-				json(res, 200, { user: this.publicUser(current), csrfToken: session.csrfToken });
+				const device = trusted ? existingDevice : await this.store.createTrustedDevice(current.id, this.prefix(req), this.userAgent(req), Number(this.config.trusted_device_days || 90));
+				const session = await this.store.createSession(current, { sessionDays: Number(this.config.session_days || 30), deviceToken: device, ipPrefix: this.prefix(req), userAgent: this.userAgent(req) });
+				this.setAuthCookies(req, res, session, device); await this.store.audit(current.id, "account.login", current.id);
+				json(res, 200, { user: await this.publicUser(current), csrfToken: session.csrfToken });
 			} catch { json(res, 400, { error: "invalid_request" }); }
 		});
 
 		app.post("/api/account/login/code", async (req, res) => {
 			try {
-				const body = readJson(req); const email = normalizeEmail(body.email); const user = this.store.getUserByEmail(email);
+				const body = readJson(req); const email = normalizeEmail(body.email); const user = await this.store.getUserByEmail(email);
 				if (!user) { json(res, 401, { error: "verification_invalid" }); return; }
 				const codeId = String(body.codeId || ""); const code = String(body.code || "");
-				if (!this.store.verifyCode(codeId, email, "login", code, false)) { json(res, 401, { error: "verification_invalid" }); return; }
-				if (!this.requireRiskClearance(user.id, "login-code", req, res)) return;
-				if (!this.store.verifyCode(codeId, email, "login", code)) { json(res, 401, { error: "verification_invalid" }); return; }
-				const current = this.store.refreshExpiredBan(user);
+				if (!await this.store.verifyCode(codeId, email, "login", code, false)) { json(res, 401, { error: "verification_invalid" }); return; }
+				if (!await this.requireRiskClearance(user.id, "login-code", req, res)) return;
+				if (!await this.store.verifyCode(codeId, email, "login", code)) { json(res, 401, { error: "verification_invalid" }); return; }
+				const current = await this.store.refreshExpiredBan(user);
 				if (current.status === "banned") { json(res, 403, { error: "account_banned", reason: current.banReason, until: current.banUntil }); return; }
 				if (current.status !== "active") { json(res, 403, { error: "account_disabled" }); return; }
-				const device = this.store.createTrustedDevice(current.id, this.prefix(req), this.userAgent(req), Number(this.config.trusted_device_days || 90));
-				const session = this.store.createSession(current, { sessionDays: Number(this.config.session_days || 30), deviceToken: device, ipPrefix: this.prefix(req), userAgent: this.userAgent(req) });
-				this.setAuthCookies(req, res, session, device); this.store.audit(current.id, "account.login-code", current.id);
-				json(res, 200, { user: this.publicUser(current), csrfToken: session.csrfToken });
+				const device = await this.store.createTrustedDevice(current.id, this.prefix(req), this.userAgent(req), Number(this.config.trusted_device_days || 90));
+				const session = await this.store.createSession(current, { sessionDays: Number(this.config.session_days || 30), deviceToken: device, ipPrefix: this.prefix(req), userAgent: this.userAgent(req) });
+				this.setAuthCookies(req, res, session, device); await this.store.audit(current.id, "account.login-code", current.id);
+				json(res, 200, { user: await this.publicUser(current), csrfToken: session.csrfToken });
 			} catch { json(res, 400, { error: "invalid_request" }); }
 		});
 
-		app.get("/api/account/me", (req, res) => {
-			const session = this.getSession(req); json(res, 200, session ? { authenticated: true, user: this.publicUser(session.user), storage: this.storageUsage(session.user) } : { authenticated: false });
+		app.get("/api/account/me", async (req, res) => {
+			const session = await this.getSession(req); json(res, 200, session ? { authenticated: true, user: await this.publicUser(session.user), storage: await this.storageUsage(session.user) } : { authenticated: false });
 		});
 
-		app.patch("/api/account/onboarding", (req, res) => {
-			const session = this.requireSession(req, res, true, true); if (!session) return;
+		app.patch("/api/account/onboarding", async (req, res) => {
+			const session = await this.requireSession(req, res, true, true); if (!session) return;
 			try {
 				const body = readJson(req);
-				const user = this.store.markOnboarding(session.user.id, {
+				const user = await this.store.markOnboarding(session.user.id, {
 					tutorialPromptSeen: body.tutorialPromptSeen === true,
 					manualPlaybackHintSeen: body.manualPlaybackHintSeen === true,
 					tutorialPlaybackCoachSeen: body.tutorialPlaybackCoachSeen === true,
 					recordingGuideSeen: body.recordingGuideSeen === true,
 					legacyLinkHintSeen: body.legacyLinkHintSeen === true,
 				});
-				json(res, user ? 200 : 404, user ? { user: this.publicUser(user) } : { error: "account_not_found" });
+				json(res, user ? 200 : 404, user ? { user: await this.publicUser(user) } : { error: "account_not_found" });
 			} catch { json(res, 400, { error: "onboarding_invalid" }); }
 		});
 
-		app.patch("/api/account/profile", (req, res) => {
-			const session = this.requireSession(req, res, true); if (!session || !this.requireRiskClearance(session.user.id, "profile-change", req, res)) return;
+		app.patch("/api/account/profile", async (req, res) => {
+			const session = await this.requireSession(req, res, true); if (!session || !await this.requireRiskClearance(session.user.id, "profile-change", req, res)) return;
 			try {
 				const body = readJson(req); const nickname = String(body.nickname ?? session.user.nickname).trim(); const authorSignature = String(body.authorSignature ?? session.user.authorSignature).trim(); const email = normalizeEmail(body.email ?? session.user.email); const avatarUrl = String(body.avatarUrl ?? session.user.avatarUrl).trim();
 				if (!validNickname(nickname) || authorSignature.length > 120 || !validEmail(email) || !this.emailAllowed(email) || !validAvatarUrl(avatarUrl)) { json(res, 400, { error: "profile_invalid" }); return; }
-				if (email !== session.user.email && !this.store.verifyCode(String(body.codeId || ""), email, "change-email", String(body.code || ""))) { json(res, 400, { error: "verification_invalid" }); return; }
-				const duplicate = this.store.getUserByEmail(email); if (duplicate && duplicate.id !== session.user.id) { json(res, 409, { error: "account_exists" }); return; }
-				const user = this.store.updateUser(session.user.id, { email, nickname, authorSignature, avatarUrl });
-				this.store.audit(session.user.id, "account.profile-update", session.user.id, { emailChanged: email !== session.user.email, avatarChanged: avatarUrl !== session.user.avatarUrl, authorChanged: authorSignature !== session.user.authorSignature });
-				json(res, 200, { user: this.publicUser(user as AccountUser) });
+				if (email !== session.user.email && !await this.store.verifyCode(String(body.codeId || ""), email, "change-email", String(body.code || ""))) { json(res, 400, { error: "verification_invalid" }); return; }
+				const duplicate = await this.store.getUserByEmail(email); if (duplicate && duplicate.id !== session.user.id) { json(res, 409, { error: "account_exists" }); return; }
+				const user = await this.store.updateUser(session.user.id, { email, nickname, authorSignature, avatarUrl });
+				await this.store.audit(session.user.id, "account.profile-update", session.user.id, { emailChanged: email !== session.user.email, avatarChanged: avatarUrl !== session.user.avatarUrl, authorChanged: authorSignature !== session.user.authorSignature });
+				json(res, 200, { user: await this.publicUser(user as AccountUser) });
 			} catch { json(res, 400, { error: "profile_invalid" }); }
 		});
 
 		app.post("/api/account/bootstrap/complete", async (req, res) => {
-			const session = this.getSession(req);
+			const session = await this.getSession(req);
 			if (!session) { json(res, 401, { error: "authentication_required" }); return; }
-			if (!this.store.verifyCsrf(session, String(req.headers["x-csrf-token"] || ""))) { json(res, 403, { error: "csrf_failed" }); return; }
+			if (!await this.store.verifyCsrf(session, String(req.headers["x-csrf-token"] || ""))) { json(res, 403, { error: "csrf_failed" }); return; }
 			if (!session.user.mustChangePassword || session.user.role !== "admin") { json(res, 409, { error: "initial_credentials_already_replaced" }); return; }
 			try {
 				const body = readJson(req); const email = normalizeEmail(body.email); const username = String(body.username || "").trim(); const nickname = String(body.nickname || username).trim(); const password = String(body.password || "");
 				const checked = await this.store.verifyPassword(session.user.email, String(body.currentPassword || ""));
 				if (!checked || !validEmail(email) || !this.emailAllowed(email) || !isValidUsername(username) || !validNickname(nickname) || !validPassword(password)) { json(res, 400, { error: "initial_credentials_invalid" }); return; }
-				const duplicate = this.store.getUserByEmail(email); const duplicateName = this.store.getUserByIdentity(username); if ((duplicate && duplicate.id !== session.user.id) || (duplicateName && duplicateName.id !== session.user.id)) { json(res, 409, { error: "account_exists" }); return; }
+				const duplicate = await this.store.getUserByEmail(email); const duplicateName = await this.store.getUserByIdentity(username); if ((duplicate && duplicate.id !== session.user.id) || (duplicateName && duplicateName.id !== session.user.id)) { json(res, 409, { error: "account_exists" }); return; }
 				await this.store.completeInitialCredentials(session.user.id, { email, username, nickname, password });
-				this.clearAuthCookies(req, res); this.store.audit(session.user.id, "account.bootstrap-complete", session.user.id); json(res, 200, { reloginRequired: true });
+				this.clearAuthCookies(req, res); await this.store.audit(session.user.id, "account.bootstrap-complete", session.user.id); json(res, 200, { reloginRequired: true });
 			} catch { json(res, 400, { error: "initial_credentials_invalid" }); }
 		});
 
-		app.post("/api/account/logout", (req, res) => {
-			const session = this.requireSession(req, res, true, true); if (!session) return;
-			this.store.revokeSession(session.token); this.clearSessionCookies(req, res); json(res, 200, { authenticated: false });
+		app.post("/api/account/logout", async (req, res) => {
+			const session = await this.requireSession(req, res, true, true); if (!session) return;
+			await this.store.revokeSession(session.token); this.clearSessionCookies(req, res); json(res, 200, { authenticated: false });
 		});
 
 		app.post("/api/account/password/reset", async (req, res) => {
 			try {
-				const body = readJson(req); const email = normalizeEmail(body.email); const password = String(body.password || ""); const user = this.store.getUserByEmail(email);
-				if (!user || !validPassword(password) || !this.store.verifyCode(String(body.codeId || ""), email, "reset-password", String(body.code || ""))) { json(res, 400, { error: "reset_invalid" }); return; }
-				await this.store.updatePassword(user.id, password); this.store.audit(user.id, "account.password-reset", user.id); json(res, 200, { ok: true });
+				const body = readJson(req); const email = normalizeEmail(body.email); const password = String(body.password || ""); const user = await this.store.getUserByEmail(email);
+				if (!user || !validPassword(password) || !await this.store.verifyCode(String(body.codeId || ""), email, "reset-password", String(body.code || ""))) { json(res, 400, { error: "reset_invalid" }); return; }
+				await this.store.updatePassword(user.id, password); await this.store.audit(user.id, "account.password-reset", user.id); json(res, 200, { ok: true });
 			} catch { json(res, 400, { error: "reset_invalid" }); }
 		});
 
 		app.post("/api/account/password", async (req, res) => {
-			const session = this.requireSession(req, res, true, true); if (!session || !this.requireRiskClearance(session.user.id, "password-change", req, res)) return;
+			const session = await this.requireSession(req, res, true, true); if (!session || !await this.requireRiskClearance(session.user.id, "password-change", req, res)) return;
 			try {
 				const body = readJson(req); const checked = await this.store.verifyPassword(session.user.email, String(body.currentPassword || "")); const password = String(body.password || "");
 				if (!checked || !validPassword(password)) { json(res, 400, { error: "password_invalid" }); return; }
-				await this.store.updatePassword(session.user.id, password); this.clearAuthCookies(req, res); this.store.audit(session.user.id, "account.password-change", session.user.id); json(res, 200, { reloginRequired: true });
+				await this.store.updatePassword(session.user.id, password); this.clearAuthCookies(req, res); await this.store.audit(session.user.id, "account.password-change", session.user.id); json(res, 200, { reloginRequired: true });
 			} catch { json(res, 400, { error: "password_invalid" }); }
 		});
 
-		app.get("/api/account/projects", (req, res) => { const session = this.requireSession(req, res); if (session) json(res, 200, this.store.listProjects(session.user.id)); });
-		app.get("/api/shared-projects/:token", (req, res) => {
+		app.get("/api/account/projects", async (req, res) => { const session = await this.requireSession(req, res); if (session) json(res, 200, await this.store.listProjects(session.user.id)); });
+		app.get("/api/shared-projects/:token", async (req, res) => {
 			const token = String(req.params.token || "");
 			if (!/^[A-Za-z0-9_-]{20,40}$/.test(token)) { json(res, 404, { error: "share_not_found" }); return; }
-			const shared = this.store.getSharedProject(token) as unknown as Record<string, unknown> | null;
+			const shared = await this.store.getSharedProject(token) as unknown as Record<string, unknown> | null;
 			if (!shared) { json(res, 404, { error: "share_not_found" }); return; }
 			if (!this.sharedProjectIsActive(shared)) { json(res, 410, { error: "share_expired" }); return; }
 			sendProject(res, shared);
 		});
-		app.get("/api/account/effect-presets", (req, res) => { const session = this.requireSession(req, res); if (session) json(res, 200, { items: this.store.listEffectPresets(session.user.id), folders: this.store.listEffectFolders(session.user.id), limit: Number(this.config.max_effect_presets || 100) }); });
-		app.post("/api/account/effect-presets", (req, res) => { const session = this.requireSession(req, res, true); if (!session) return; if(this.store.effectPresetCount(session.user.id)>=Number(this.config.max_effect_presets||100)){json(res,413,{error:"effect_preset_limit"});return;} const body = readJson(req); const preset = sanitizeEffectPreset(body); if (!preset) { json(res, 400, { error: "effect_preset_invalid" }); return; } const folders=new Set(this.store.listEffectFolders(session.user.id).map((item)=>item.id));const folderId=folders.has(preset.folderId)?preset.folderId:"";json(res, 201, this.store.createEffectPreset(session.user.id, preset.name, preset.config,folderId,preset.kind)); });
-		app.put("/api/account/effect-presets/:id", (req, res) => { const session = this.requireSession(req, res, true); if (!session) return; const body = readJson(req); const preset = sanitizeEffectPreset(body); if (!preset) { json(res, 400, { error: "effect_preset_invalid" }); return; } const folders=new Set(this.store.listEffectFolders(session.user.id).map((item)=>item.id));const folderId=folders.has(preset.folderId)?preset.folderId:"";const saved = this.store.updateEffectPreset(session.user.id, req.params.id, preset.name, preset.config,folderId,preset.kind); json(res, saved ? 200 : 404, saved || { error: "effect_preset_not_found" }); });
-		app.delete("/api/account/effect-presets/:id", (req, res) => { const session = this.requireSession(req, res, true); if (!session) return; json(res, this.store.deleteEffectPreset(session.user.id, req.params.id) ? 200 : 404, { ok: true }); });
-		app.post("/api/account/effect-presets/:id/share",(req,res)=>{const session=this.requireSession(req,res,true);if(!session)return;const share=this.store.createEffectShare(session.user.id,req.params.id);json(res,share?201:404,share||{error:"effect_preset_not_found"});});
-		app.post("/api/account/effect-presets/import",(req,res)=>{const session=this.requireSession(req,res,true);if(!session)return;if(this.store.effectPresetCount(session.user.id)>=Number(this.config.max_effect_presets||100)){json(res,413,{error:"effect_preset_limit"});return;}const body=readJson(req),shared=this.store.getEffectShare(String(body.code||"").trim());if(!shared){json(res,404,{error:"effect_share_not_found"});return;}const safe=sanitizeEffectPreset({name:shared.name,kind:shared.kind,config:shared.config});if(!safe){json(res,400,{error:"effect_preset_invalid"});return;}let folder=this.store.listEffectFolders(session.user.id).find(item=>item.name==="导入的特效");if(!folder){if(this.store.effectFolderCount(session.user.id)>=100){json(res,413,{error:"effect_folder_limit"});return;}folder=this.store.createEffectFolder(session.user.id,"导入的特效");}json(res,201,this.store.createEffectPreset(session.user.id,safe.name,safe.config,folder.id,safe.kind));});
-		app.get("/api/account/effect-folders",(req,res)=>{const session=this.requireSession(req,res);if(session)json(res,200,this.store.listEffectFolders(session.user.id));});
-		app.post("/api/account/effect-folders",(req,res)=>{const session=this.requireSession(req,res,true);if(!session)return;if(this.store.effectFolderCount(session.user.id)>=100){json(res,413,{error:"effect_folder_limit"});return;}const name=String(readJson(req).name||"").trim();if(!name){json(res,400,{error:"effect_folder_invalid"});return;}json(res,201,this.store.createEffectFolder(session.user.id,name));});
-		app.put("/api/account/effect-folders/:id",(req,res)=>{const session=this.requireSession(req,res,true);if(!session)return;const name=String(readJson(req).name||"").trim();const saved=Boolean(name&&this.store.renameEffectFolder(session.user.id,req.params.id,name));json(res,saved?200:404,saved?{ok:true}:{error:"effect_folder_not_found"});});
-		app.delete("/api/account/effect-folders/:id",(req,res)=>{const session=this.requireSession(req,res,true);if(!session)return;json(res,this.store.deleteEffectFolder(session.user.id,req.params.id)?200:404,{ok:true});});
-		app.post("/api/account/projects", (req, res) => {
-			const session = this.requireSession(req, res, true); if (!session || !this.requireRiskClearance(session.user.id, "project-write", req, res)) return;
+		app.get("/api/account/effect-presets", async (req, res) => { const session = await this.requireSession(req, res); if (session) json(res, 200, { items: await this.store.listEffectPresets(session.user.id), folders: await this.store.listEffectFolders(session.user.id), limit: Number(this.config.max_effect_presets || 100) }); });
+		app.post("/api/account/effect-presets", async (req, res) => { const session = await this.requireSession(req, res, true); if (!session) return; if(await this.store.effectPresetCount(session.user.id)>=Number(this.config.max_effect_presets||100)){json(res,413,{error:"effect_preset_limit"});return;} const body = readJson(req); const preset = sanitizeEffectPreset(body); if (!preset) { json(res, 400, { error: "effect_preset_invalid" }); return; } const folders=new Set((await this.store.listEffectFolders(session.user.id)).map((item)=>item.id));const folderId=folders.has(preset.folderId)?preset.folderId:"";json(res, 201, await this.store.createEffectPreset(session.user.id, preset.name, preset.config,folderId,preset.kind)); });
+		app.put("/api/account/effect-presets/:id", async (req, res) => { const session = await this.requireSession(req, res, true); if (!session) return; const body = readJson(req); const preset = sanitizeEffectPreset(body); if (!preset) { json(res, 400, { error: "effect_preset_invalid" }); return; } const folders=new Set((await this.store.listEffectFolders(session.user.id)).map((item)=>item.id));const folderId=folders.has(preset.folderId)?preset.folderId:"";const saved = await this.store.updateEffectPreset(session.user.id, req.params.id, preset.name, preset.config,folderId,preset.kind); json(res, saved ? 200 : 404, saved || { error: "effect_preset_not_found" }); });
+		app.delete("/api/account/effect-presets/:id", async (req, res) => { const session = await this.requireSession(req, res, true); if (!session) return; json(res, await this.store.deleteEffectPreset(session.user.id, req.params.id) ? 200 : 404, { ok: true }); });
+		app.post("/api/account/effect-presets/:id/share",async (req,res) =>{const session=await this.requireSession(req,res,true);if(!session)return;const share=await this.store.createEffectShare(session.user.id,req.params.id);json(res,share?201:404,share||{error:"effect_preset_not_found"});});
+		app.post("/api/account/effect-presets/import",async (req,res) =>{const session=await this.requireSession(req,res,true);if(!session)return;if(await this.store.effectPresetCount(session.user.id)>=Number(this.config.max_effect_presets||100)){json(res,413,{error:"effect_preset_limit"});return;}const body=readJson(req),shared=await this.store.getEffectShare(String(body.code||"").trim());if(!shared){json(res,404,{error:"effect_share_not_found"});return;}const safe=sanitizeEffectPreset({name:shared.name,kind:shared.kind,config:shared.config});if(!safe){json(res,400,{error:"effect_preset_invalid"});return;}let folder=(await this.store.listEffectFolders(session.user.id)).find(item=>item.name==="导入的特效");if(!folder){if(await this.store.effectFolderCount(session.user.id)>=100){json(res,413,{error:"effect_folder_limit"});return;}folder=await this.store.createEffectFolder(session.user.id,"导入的特效");}json(res,201,await this.store.createEffectPreset(session.user.id,safe.name,safe.config,folder.id,safe.kind));});
+		app.get("/api/account/effect-folders",async (req,res) =>{const session=await this.requireSession(req,res);if(session)json(res,200,await this.store.listEffectFolders(session.user.id));});
+		app.post("/api/account/effect-folders",async (req,res) =>{const session=await this.requireSession(req,res,true);if(!session)return;if(await this.store.effectFolderCount(session.user.id)>=100){json(res,413,{error:"effect_folder_limit"});return;}const name=String(readJson(req).name||"").trim();if(!name){json(res,400,{error:"effect_folder_invalid"});return;}json(res,201,await this.store.createEffectFolder(session.user.id,name));});
+		app.put("/api/account/effect-folders/:id",async (req,res) =>{const session=await this.requireSession(req,res,true);if(!session)return;const name=String(readJson(req).name||"").trim();const saved=Boolean(name&&await this.store.renameEffectFolder(session.user.id,req.params.id,name));json(res,saved?200:404,saved?{ok:true}:{error:"effect_folder_not_found"});});
+		app.delete("/api/account/effect-folders/:id",async (req,res) =>{const session=await this.requireSession(req,res,true);if(!session)return;json(res,await this.store.deleteEffectFolder(session.user.id,req.params.id)?200:404,{ok:true});});
+		app.post("/api/account/projects", async (req, res) => {
+			const session = await this.requireSession(req, res, true); if (!session || !await this.requireRiskClearance(session.user.id, "project-write", req, res)) return;
 			try {
 				const { document, meta: body } = projectRequest(req); const sizeError = validateProjectDocument(document, this.config);
 				if (sizeError) { json(res, 413, { error: sizeError }); return; }
 				const encryptedSecret = body.sourceSecret ? AccountStore.encryptSecret(String(body.sourceSecret), String(this.config.encryption_key || "")) : "";
 				const policy = this.storagePolicy(session.user);
-				const project = this.store.createProject(session.user.id, String(body.title || "跑团记录"), document, { key: String(body.sourceKey || ""), revision: String(body.sourceRevision || ""), encryptedSecret }, policy);
-				this.store.audit(session.user.id, "project.create", project?.id || ""); json(res, 201, projectSummary(project as unknown as Record<string, unknown>));
+				const project = await this.store.createProject(session.user.id, String(body.title || "跑团记录"), document, { key: String(body.sourceKey || ""), revision: String(body.sourceRevision || ""), encryptedSecret }, policy);
+				await this.store.audit(session.user.id, "project.create", project?.id || ""); json(res, 201, projectSummary(project as unknown as Record<string, unknown>));
 			} catch (error) { const code = error instanceof Error ? error.message : ""; json(res, code === "storage_quota_exceeded" || code === "project_limit_reached" ? 413 : 400, { error: code || "project_invalid" }); }
 		});
-		app.get("/api/account/projects/:id", (req, res) => { const session = this.requireSession(req, res); if (!session) return; sendProject(res, this.store.getProject(session.user.id, req.params.id) as unknown as Record<string, unknown> | null); });
-		app.post("/api/account/projects/:id/share", (req, res) => {
-			const session = this.requireSession(req, res, true); if (!session) return;
+		app.get("/api/account/projects/:id", async (req, res) => { const session = await this.requireSession(req, res); if (!session) return; sendProject(res, await this.store.getProject(session.user.id, req.params.id) as unknown as Record<string, unknown> | null); });
+		app.post("/api/account/projects/:id/share", async (req, res) => {
+			const session = await this.requireSession(req, res, true); if (!session) return;
 			const body = readJson(req);
 			const requestedMode = String(body.expiryMode || "project");
 			if (requestedMode !== "project" && requestedMode !== "fixed") { json(res, 400, { error: "share_expiry_invalid" }); return; }
 			const expiryMode: "project" | "fixed" = requestedMode;
-			const project = this.store.getProjectShareInfo(session.user.id, req.params.id);
+			const project = await this.store.getProjectShareInfo(session.user.id, req.params.id);
 			if (!project) { json(res, 404, { error: "project_not_found" }); return; }
 			const retentionDays = this.storagePolicy(session.user).retentionDays;
 			const lastActivity = Date.parse(project.lastActivityAt);
@@ -641,12 +642,12 @@ export class AccountService {
 				if (requestedExpiry > projectExpires) { json(res, 400, { error: "share_expiry_exceeds_project", projectExpiresAt: new Date(projectExpires).toISOString() }); return; }
 				expiresAt = new Date(requestedExpiry).toISOString();
 			}
-			const share = this.store.shareProject(session.user.id, req.params.id, expiryMode, expiresAt);
+			const share = await this.store.shareProject(session.user.id, req.params.id, expiryMode, expiresAt);
 			json(res, share ? 200 : 404, share || { error: "project_not_found" });
 		});
 		app.get("/api/account/projects/:id/source", async (req, res) => {
-			const session = this.requireSession(req, res); if (!session) return;
-			const source = this.store.getProjectSource(session.user.id, req.params.id);
+			const session = await this.requireSession(req, res); if (!session) return;
+			const source = await this.store.getProjectSource(session.user.id, req.params.id);
 			if (!source?.key || !source.encryptedSecret || !this.logStore) { json(res, 404, { error: "source_unavailable" }); return; }
 			try {
 				const secret = AccountStore.decryptSecret(source.encryptedSecret, String(this.config.encryption_key || ""));
@@ -655,11 +656,11 @@ export class AccountService {
 				json(res, 200, { record: JSON.parse(stored), sourceKey: source.key, sourceRevision: source.revision });
 			} catch { json(res, 404, { error: "source_unavailable" }); }
 		});
-		app.put("/api/account/projects/:id", (req, res) => {
-			const session = this.requireSession(req, res, true); if (!session || !this.requireRiskClearance(session.user.id, "project-write", req, res)) return;
-			try { const { document, meta: body } = projectRequest(req); const sizeError = validateProjectDocument(document, this.config); if (sizeError) { json(res, 413, { error: sizeError }); return; } const project = this.store.updateProject(session.user.id, req.params.id, Number(body.revision || 0), document, body.title ? String(body.title) : undefined, this.storagePolicy(session.user)); json(res, project ? 200 : 409, project ? projectSummary(project as unknown as Record<string, unknown>) : { error: "revision_conflict" }); }
+		app.put("/api/account/projects/:id", async (req, res) => {
+			const session = await this.requireSession(req, res, true); if (!session || !await this.requireRiskClearance(session.user.id, "project-write", req, res)) return;
+			try { const { document, meta: body } = projectRequest(req); const sizeError = validateProjectDocument(document, this.config); if (sizeError) { json(res, 413, { error: sizeError }); return; } const project = await this.store.updateProject(session.user.id, req.params.id, Number(body.revision || 0), document, body.title ? String(body.title) : undefined, this.storagePolicy(session.user)); json(res, project ? 200 : 409, project ? projectSummary(project as unknown as Record<string, unknown>) : { error: "revision_conflict" }); }
 			catch (error) { const code = error instanceof Error ? error.message : ""; json(res, code === "storage_quota_exceeded" ? 413 : 400, { error: code || "project_invalid" }); }
 		});
-		app.delete("/api/account/projects/:id", (req, res) => { const session = this.requireSession(req, res, true); if (!session || !this.requireRiskClearance(session.user.id, "project-delete", req, res)) return; json(res, this.store.deleteProject(session.user.id, req.params.id) ? 200 : 404, { ok: true }); });
+		app.delete("/api/account/projects/:id", async (req, res) => { const session = await this.requireSession(req, res, true); if (!session || !await this.requireRiskClearance(session.user.id, "project-delete", req, res)) return; json(res, await this.store.deleteProject(session.user.id, req.params.id) ? 200 : 404, { ok: true }); });
 	}
 }

@@ -130,7 +130,10 @@ pm2 save
 
 ```bash
 cp config.toml.example config.toml
+chmod 600 config.toml # Linux：文件中填写秘密时必须仅服务账号可读
 ```
+
+Linux 上若配置文件直接包含密码、Token 或加密密钥，而组或其他用户仍可读，服务会拒绝启动。生产环境更推荐通过环境变量注入秘密。
 
 运行时也支持通过 `SCARDICE_CONFIG` 或 `CONFIG_FILE` 指定配置文件；未指定时会依次查找：
 
@@ -149,8 +152,14 @@ trusted_proxy_cidrs = ["127.0.0.1/32", "::1/128"] # 只有实际 TCP 对端命�
 allowed_hosts = ["localhost", "127.0.0.1", "::1"] # 加入用户实际访问的公开域名
 hsts_max_age_seconds = 0 # HTTPS 全站确认可用后建议设为 31536000
 
+[database]
+driver = "sqlite" # sqlite 或 postgres
+sqlite_path = "./data/scardice.db"
+postgres_url = "" # PostgreSQL 推荐改用 DATABASE_URL 注入
+pool_max = 10
+ssl = "disable" # 本机可用 disable；公网必须 verify-full；prefer 安全地等同 verify-full
+
 [storage]
-sqlite_path = "./data/scardice.db" # SQLite 数据库路径
 max_total_mb = 4096 # 公共传统日志数据库总容量硬上限（MB）
 
 [editor]
@@ -166,7 +175,8 @@ community_notice = "GitHub: https://github.com/Scardice/Lorana-Tales · QQ群：
 
 [resource_cache]
 enabled = false # 上传时归档 CQ 图片、语音和附件；视频仅保留【视频】占位且不下载
-path = "./data/cq-resources" # 本地媒体目录
+path = "./data/resources" # 分类资源目录
+index_sqlite_path = "" # SQLite 时可把索引 DB 单独放 SSD；留空则位于资源目录
 retention_days = 60 # 资源归档保留天数，和日志保留天数独立
 max_file_mb = 12 # 单个远程/内嵌资源的最大体积
 max_resources_per_log = 40 # 单份日志最多下载的 CQ 资源数，以及最多预取的唯一 QQ 头像数
@@ -178,7 +188,7 @@ allow_public_hosts = false # 不建议开启；true 时允许任意公网域名
 download_timeout_seconds = 15 # 单资源下载超时
 max_concurrent_jobs = 2 # 图片/音频/无损压缩后台并发；上限 4
 max_image_pixels = 40000000 # 图片像素总数硬限制
-max_total_mb = 4096 # CQ 资源目录硬盘总配额
+max_total_mb = 4096 # 资源目录硬盘总配额
 
 [accounts]
 enabled = false # 开启账号注册、登录与云端工程
@@ -238,8 +248,12 @@ admin_bruteforce_block_seconds = 60 # 触发后的封禁时长；期间访问会
 | `PORT`                            | 监听端口                                                   |
 | `TRUST_PROXY`                     | 是否信任反向代理/CDN IP 头；设为 `true` 后读取真实客户端 IP |
 | `ALLOWED_HOSTS`                   | 允许的 Host 头列表，逗号分隔                               |
+| `DATABASE_DRIVER`                | `sqlite` 或 `postgres`                                     |
 | `SQLITE_PATH`                     | SQLite 数据库路径                                          |
 | `DATABASE_PATH`                   | SQLite 数据库路径兼容变量；和 `SQLITE_PATH` 同时设置时优先 |
+| `DATABASE_URL`                    | PostgreSQL 连接 URL                                        |
+| `DATABASE_POOL_MAX`               | PostgreSQL 连接池上限                                      |
+| `DATABASE_SSL`                    | PostgreSQL TLS 模式                                        |
 | `EDITOR_DEFAULT_MODE`             | 裸路径默认编辑器：`story` 或 `legacy`                      |
 | `EDITOR_ENABLE_STORY_MODE`        | 是否开放并显示新版沉浸式染色器                             |
 | `SITE_TITLE`                      | 浏览器标题及上顶栏网站名                                   |
@@ -248,6 +262,8 @@ admin_bruteforce_block_seconds = 60 # 触发后的封禁时长；期间访问会
 | `SITE_FAVICON_PATH`               | ICO/PNG/SVG favicon 的本地路径                             |
 | `CQ_RESOURCE_CACHE_ENABLED`        | 是否归档 CQ 资源                                           |
 | `CQ_RESOURCE_CACHE_PATH`           | CQ 资源存储目录                                            |
+| `RESOURCE_PATH`                    | 新版统一资源目录；优先于旧兼容变量                         |
+| `RESOURCE_INDEX_SQLITE_PATH`       | SQLite 资源索引 DB 的独立路径                              |
 | `CQ_RESOURCE_CACHE_RETENTION_DAYS` | CQ 资源保留天数                                            |
 | `CQ_RESOURCE_CACHE_MAX_FILE_MB`    | 单资源体积限制                                             |
 | `CQ_RESOURCE_CACHE_MAX_RESOURCES_PER_LOG` | 单日志资源数量上限                                  |
@@ -338,13 +354,38 @@ trusted_proxy_cidrs = ["127.0.0.1/32", "::1/128"]
 
 如果使用 Cloudflare，通常保留 `CF-Connecting-IP`，并让 Cloudflare 转发到源站；如果使用普通反代，至少配置 `X-Forwarded-For` 或 `X-Real-IP`。真实 IP 会用于上传记录、限流、管理后台爆破防护和安全拦截关联。
 
-### CQ 资源本地归档
+### 资源本地归档
 
 开启 `[resource_cache].enabled` 后，服务会在上传时解压日志，提取 `CQ:image`、`face`、`record`、`voice`、`audio` 和 `file` 中的 URL 或 base64 资源，下载后将日志引用改为本站 `/cq-resources/...`。`CQ:video` 永远不会下载或写入硬盘，而会改成 `【视频】` 占位，避免视频耗尽服务端空间。默认只允许腾讯 QQ/QLogo/QPic/GTImg 域名；如日志确实使用其他图床，应将对应域名加入 `allowed_hosts`，而不是直接开启 `allow_public_hosts`。
 
 PNG、JPEG 和 WebP 会以 `image_quality` 重编码为 WebP；只有更小才替换原文件。GIF 会保持原格式和动画。语音会通过系统 FFmpeg 转为 128kbps（或 `audio_bitrate_kbps`）的 Ogg Opus；如果输出反而更大则保留较小的原文件。项目只调用运维环境提供的 FFmpeg，不捆绑其二进制，从而不把 GPL 分发义务混入 MIT 发布包。所有保存后的资源还会使用最高质量 Brotli 无损压缩；支持 Brotli 的浏览器直接得到压缩流，其他客户端由服务端即时解压。
 
-资源在有损处理后以 SHA-256 命名，相同内容只保存一份；编辑器上传重复文件时会提示并复用现有资源。处理任务受 `max_concurrent_jobs` 限制，图片同时受 `max_image_pixels` 限制，整个目录受 `max_total_mb` 硬配额限制。`retention_days` 从资源归档成功时计算，与日志的 `log_retention_days` 独立。未归档的 CQ 图片和语音在新版界面只显示 `【图片】` / `【语音】`，不会暴露 CQ 原文；用户也可以主动填写并验证一个 HTTP(S) 直链，这类资源直接由浏览器读取、不写入服务端。远程资源解析会锁定已校验的公网 IP，并在每次重定向后重新校验，避免 DNS 重绑定访问内网。被拒绝、超限、超时或下载失败的 CQ 资源不会导致日志上传失败。
+资源在有损处理后以 SHA-256 命名，相同内容只保存一份，并按 `cq-images/`、`cq-audio/`、`avatars/`、`uploads/`、`files/` 分类和哈希前缀分片。SQLite 模式使用独立资源索引 DB，`index_sqlite_path` 可放 SSD、资源目录可放机械盘；PostgreSQL 模式直接使用 PostgreSQL 索引。处理任务受 `max_concurrent_jobs` 限制，图片同时受 `max_image_pixels` 限制，整个目录受 `max_total_mb` 硬配额限制。`retention_days` 从最近访问计算，与日志的 `log_retention_days` 独立。未归档的 CQ 图片和语音在新版界面只显示 `【图片】` / `【语音】`，不会暴露 CQ 原文；用户也可以主动填写并验证一个 HTTP(S) 直链，这类资源直接由浏览器读取、不写入服务端。远程资源解析会锁定已校验的公网 IP，并在每次重定向后重新校验，避免 DNS 重绑定访问内网。被拒绝、超限、超时或下载失败的 CQ 资源不会导致日志上传失败。
+
+旧版扁平 `cq-resources` 目录不会自动迁移。新版发现未带布局标记的非空目录会拒绝启动，避免自动更新时静默漏读或重写数据。先停服务并备份，然后预检、再显式执行：
+
+```bash
+python3 migrate_storage.py resources --source-dir ./data/cq-resources --target-dir ./data/resources
+python3 migrate_storage.py resources --source-dir ./data/cq-resources --target-dir ./data/resources --execute
+# 资源放机械盘、SQLite 索引放 SSD：
+python3 migrate_storage.py resources --source-dir /mnt/hdd/cq-resources --target-dir /mnt/hdd/resources --index-driver sqlite --index /mnt/ssd/lorana/resource-index.sqlite --execute
+# 主数据库已经使用 PostgreSQL 时可直接把资源索引写入同一 PostgreSQL：
+python3 migrate_storage.py resources --source-dir ./data/cq-resources --target-dir ./data/resources --index-driver postgres --index env:DATABASE_URL --execute
+```
+
+工具只复制并逐项校验 SHA-256，不删除旧目录。旧索引只保存 URL 哈希，无法区分历史 QQ 头像和 CQ 图片，因此默认归入 `cq-images`；确认旧目录全是头像时可加 `--legacy-image-category avatars`。
+
+### SQLite 与 PostgreSQL 转换
+
+两种后端覆盖日志、账号、会话、验证码、工程、分享和特效预设；PostgreSQL 还承载资源索引。迁移工具默认 dry-run，目标表必须为空，不会覆盖已有数据：
+
+```bash
+python3 migrate_storage.py database --source-driver sqlite --source ./data/scardice.db --target-driver postgres --target env:DATABASE_URL
+python3 migrate_storage.py database --source-driver sqlite --source ./data/scardice.db --target-driver postgres --target env:DATABASE_URL --execute
+python3 migrate_storage.py resource-index --source-driver sqlite --source ./data/resources/resource-index.sqlite --target-driver postgres --target env:DATABASE_URL --execute
+```
+
+反向迁移把驱动和源/目标参数对调即可。PostgreSQL 转换需要 Python 包 `psycopg[binary]`；迁移 Brotli 压缩的旧资源需要 Python 包 `brotli`。迁移期间必须停止写入，并在切换配置前备份数据库与资源目录。
 
 ### QQ、Discord 与 KOOK 头像
 
@@ -370,7 +411,7 @@ PNG、JPEG 和 WebP 会以 `image_quality` 重编码为 WebP；只有更小才�
 - 只有启用反代时才打开 `trust_proxy`，并把 `trusted_proxy_cidrs` 收窄到实际直连源站的代理网段；不要使用全网 CIDR。
 - 通过环境变量注入 SMTP、Discord/KOOK、CAPTCHA、初始管理员和 `accounts.encryption_key` 等密钥，不提交真实 `config.toml`。
 - 开启 `/metrics` 时必须设置高强度 `metrics.token`；不需要指标时保持关闭。
-- 按硬盘容量设置日志、账号工程和 CQ 资源配额，定期备份 SQLite 数据库及资源目录，并实际演练恢复。
+- 按硬盘容量设置日志、账号工程和资源配额，定期备份 SQLite/PostgreSQL、资源索引及资源目录，并实际演练恢复。
 - 首次登录后立即更换引导管理员凭据；管理员必须同时具有 `admin` 角色并处于 `admin` 组。
 - 分享地址是公开只读播放器链接，不支持永久有效；链接只能跟随工程到期或设置为更短的固定期限，删除/到期的工程无法再通过分享访问。
 - 上线前运行 `pnpm audit`、`pnpm test:security`、`pnpm lint`、`pnpm test:story-format`、`pnpm test:account-groups` 与 `pnpm build`。
@@ -392,8 +433,7 @@ PNG、JPEG 和 WebP 会以 `image_quality` 重编码为 WebP；只有更小才�
 
 ## 数据存储
 
-日志默认存储于 SQLite 数据库 `./data/scardice.db`（可通过 `storage.sqlite_path` 配置）。
-服务启动时会自动创建 schema，并启用 WAL 模式。
+默认使用 SQLite 数据库 `./data/scardice.db`（`database.sqlite_path`）；也可设置 `database.driver = "postgres"` 与 `DATABASE_URL` 使用 PostgreSQL。SQLite 启用 WAL，PostgreSQL 使用受限连接池与事务级配额锁。
 
 当前表结构把列表元数据和正文分开：
 
@@ -410,7 +450,7 @@ src/bin/                     # TypeScript 可执行入口源码
 src/api/                     # HTTP API 业务处理
 src/config/                  # 配置加载
 src/server/                  # Express 服务启动
-src/storage/                 # SQLite 存储和日志解析
+src/storage/                 # SQLite/PostgreSQL 存储、资源索引和日志解析
 scripts/                     # 本地开发辅助脚本
 web/                         # Vue/Vite 前端源码和静态管理页
 dist/                        # 服务端 TypeScript 编译产物，生成目录

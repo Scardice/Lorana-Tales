@@ -8,6 +8,7 @@ import { createRequire } from "node:module";
 import net from "node:net";
 import path from "node:path";
 import { promisify } from "node:util";
+import type { ResourceCategory, ResourceIndex, ResourceObjectRecord } from "./resource-index.js";
 import {
 	constants as zlibConstants,
 	brotliCompress,
@@ -67,6 +68,7 @@ type NormalizedOptions = {
 type ResourceCandidate = {
 	source: string;
 	kind: ResourceKind;
+	category: ResourceCategory;
 	remoteUrl?: string;
 	base64?: string;
 };
@@ -182,7 +184,7 @@ async function loadImageCodecs() {
 function normalizeOptions(options: CqResourceCacheOptions = {}): NormalizedOptions {
 	return {
 		enabled: parseBoolean(options.enabled, false),
-		storagePath: path.resolve(String(options.path || "./data/cq-resources")),
+		storagePath: path.resolve(String(options.path || "./data/resources")),
 		retentionDays: clampNumber(options.retention_days, 60, 1, 3650),
 		maxFileBytes: clampNumber(options.max_file_mb, 12, 1, 128) * 1024 * 1024,
 		maxResourcesPerLog: clampNumber(options.max_resources_per_log, 40, 1, 200),
@@ -219,15 +221,16 @@ function resourceCandidates(message: string): ResourceCandidate[] {
 		// Video archives grow without a practical upper bound. Keep a readable
 		// placeholder in the stored log, but never download or persist the video.
 		if (kind === "video") continue;
+		const category: ResourceCategory = kind === "image" ? "cq-images" : kind === "audio" ? "cq-audio" : "files";
 		const attrs = match[2];
 		for (const value of attrs.matchAll(/\burl=\[(https?:\/\/[^\]]+)\]/gi)) {
-			candidates.push({ source: value[1], kind, remoteUrl: value[1] });
+			candidates.push({ source: value[1], kind, category, remoteUrl: value[1] });
 		}
 		for (const value of attrs.matchAll(/\b(?:url|file|data|path)=(https?:\/\/[^,\]\s]+)/gi)) {
-			candidates.push({ source: value[1], kind, remoteUrl: value[1] });
+			candidates.push({ source: value[1], kind, category, remoteUrl: value[1] });
 		}
 		for (const value of attrs.matchAll(/\b(?:file|data)=base64:\/\/([A-Za-z0-9+/=\s]+)/gi)) {
-			candidates.push({ source: `base64://${value[1]}`, kind, base64: value[1] });
+			candidates.push({ source: `base64://${value[1]}`, kind, category, base64: value[1] });
 		}
 		if (kind === "image") {
 			for (const value of attrs.matchAll(/\bfile=([A-Fa-f0-9]{32,64})(?:\.[A-Za-z0-9]+)?/g)) {
@@ -235,6 +238,7 @@ function resourceCandidates(message: string): ResourceCandidate[] {
 				candidates.push({
 					source: value[1],
 					kind,
+					category,
 					remoteUrl: `https://gchat.qpic.cn/gchatpic_new/0/0-0-${id}/0?term=2,subType=1`,
 				});
 			}
@@ -243,6 +247,7 @@ function resourceCandidates(message: string): ResourceCandidate[] {
 				candidates.push({
 					source: value[1],
 					kind,
+					category,
 					remoteUrl: `https://gchat.qpic.cn/gchatpic_new/0/0-0-${id}/0?term=2`,
 				});
 			}
@@ -488,12 +493,26 @@ export class CqResourceCache {
 	private lastCleanupAt = 0;
 	private readonly jobs: WorkQueue;
 	private readonly writes = new WorkQueue(1);
-	private knownStorageBytes: number | null = null;
-	private sourceIndex: Map<string,string> | null = null;
+	private readonly recentTouches = new Map<string, number>();
 
-	constructor(options: CqResourceCacheOptions = {}) {
+	constructor(options: CqResourceCacheOptions = {}, private readonly index: ResourceIndex) {
 		this.options = normalizeOptions(options);
 		this.jobs = new WorkQueue(this.options.maxConcurrentJobs);
+	}
+
+	async initialize() {
+		await fs.mkdir(this.options.storagePath, { recursive: true, mode: 0o700 });
+		if (process.platform !== "win32") await fs.chmod(this.options.storagePath, 0o700);
+		const marker = path.join(this.options.storagePath, ".lorana-resource-layout-v2");
+		try { await fs.access(marker); }
+		catch {
+			const entries = await fs.readdir(this.options.storagePath);
+			if (entries.length) {
+				throw new Error(`legacy or unmarked resource directory detected at ${this.options.storagePath}; run migrate_storage.py resources before starting this version`);
+			}
+			await fs.writeFile(marker, "lorana-resource-layout=2\n", { flag: "wx", mode: 0o600 });
+		}
+		await this.index.initialize();
 	}
 
 	get enabled() {
@@ -501,7 +520,7 @@ export class CqResourceCache {
 	}
 
 	async cacheRemoteImage(remoteUrl: string): Promise<string> {
-		const { resourceId } = await this.cacheCandidate({ source: remoteUrl, remoteUrl, kind: "image" });
+		const { resourceId } = await this.cacheCandidate({ source: remoteUrl, remoteUrl, kind: "image", category: "avatars" });
 		this.cleanupExpired().catch((error) => console.warn(`[resource-cache] Cleanup failed: ${error instanceof Error ? error.message : String(error)}`));
 		return resourceId;
 	}
@@ -509,7 +528,7 @@ export class CqResourceCache {
 	async cacheUploadedResource(bytes: Buffer, kind: "image" | "audio", declaredMime = ""): Promise<{ resourceId: string; reused: boolean }> {
 		if (!this.enabled) throw new Error("resource cache is disabled");
 		if (!bytes.byteLength || bytes.byteLength > this.options.maxFileBytes) throw new Error("resource exceeds configured size limit");
-		return this.cacheCandidate({ source: "upload", kind }, { bytes, mime: declaredMime });
+		return this.cacheCandidate({ source: "upload", kind, category: "uploads" }, { bytes, mime: declaredMime });
 	}
 
 	resourceUrl(resourceId: string, resourceBaseUrl = ""): string {
@@ -533,7 +552,7 @@ export class CqResourceCache {
 		let avatarCount = 0;
 		const avatarResults = await Promise.allSettled(qqAvatarIds(payload).slice(0, this.options.maxResourcesPerLog).map((id) => {
 			const remoteUrl = `https://q1.qlogo.cn/g?b=qq&nk=${id}&s=100`;
-			return this.cacheCandidate({ source: remoteUrl, remoteUrl, kind: "image" });
+			return this.cacheCandidate({ source: remoteUrl, remoteUrl, kind: "image", category: "avatars" });
 		}));
 		for (const result of avatarResults) {
 			if (result.status === "fulfilled") avatarCount += 1;
@@ -632,73 +651,59 @@ export class CqResourceCache {
 		mime = normalized.mime;
 		const extension = extensionForMime(mime, candidate.kind);
 		const resourceId = `${crypto.createHash("sha256").update(normalized.bytes).digest("hex")}.${extension}`;
-		const reused = await this.writeResource(resourceId, normalized.bytes);
-		if (!supplied && candidate.source) await this.rememberSourceResource(candidate.source, resourceId);
+		const reused = await this.writeResource(resourceId, normalized.bytes, mime, candidate.category);
+		if (!supplied && candidate.source) {
+			const record = await this.index.findObject(resourceId);
+			if (record) await this.index.remember(record, this.sourceIndexKey(candidate.source));
+		}
 		return { resourceId, reused };
 		});
 	}
 
-	private sourceIndexPath(){return path.join(this.options.storagePath,"source-index.json")}
 	private sourceIndexKey(source:string){return crypto.createHash("sha256").update(source).digest("hex")}
-	private async loadSourceIndex(){if(this.sourceIndex)return this.sourceIndex;let parsed:Record<string,string>={};try{parsed=JSON.parse(await fs.readFile(this.sourceIndexPath(),"utf-8"))}catch(error){if((error as NodeJS.ErrnoException).code!=="ENOENT")console.warn(`[resource-cache] Source index ignored: ${error instanceof Error?error.message:String(error)}`)}this.sourceIndex=new Map(Object.entries(parsed).filter(([key,value])=>/^[a-f0-9]{64}$/.test(key)&&RESOURCE_ID_RE.test(value)));return this.sourceIndex}
-	private async lookupSourceResource(source:string){const index=await this.loadSourceIndex();const key=this.sourceIndexKey(source),resourceId=index.get(key);if(!resourceId)return"";const raw=path.join(this.options.storagePath,resourceId);for(const candidate of [raw,`${raw}.br`])try{await fs.access(candidate);await fs.utimes(candidate,new Date(),new Date());return resourceId}catch{/* try next */}index.delete(key);return""}
-	private async rememberSourceResource(source:string,resourceId:string){await this.writes.run(async()=>{const index=await this.loadSourceIndex();index.set(this.sourceIndexKey(source),resourceId);await fs.mkdir(this.options.storagePath,{recursive:true});await fs.writeFile(this.sourceIndexPath(),JSON.stringify(Object.fromEntries(index)))})}
+	private absoluteResourcePath(record: Pick<ResourceObjectRecord,"relativePath">){const root=path.resolve(this.options.storagePath),target=path.resolve(root,record.relativePath);if(target!==root&&!target.startsWith(`${root}${path.sep}`))throw new Error("invalid resource index path");return target}
+	private async touch(record: ResourceObjectRecord){const now=Date.now(),previous=this.recentTouches.get(record.resourceId)||record.lastAccessedAtMs;if(now-previous<60*60*1000)return;this.recentTouches.set(record.resourceId,now);if(this.recentTouches.size>10000)this.recentTouches.delete(this.recentTouches.keys().next().value as string);await this.index.touch(record.resourceId,now)}
+	private async lookupSourceResource(source:string){const record=await this.index.findBySource(this.sourceIndexKey(source));if(!record)return"";try{await fs.access(this.absoluteResourcePath(record));await this.touch(record);return record.resourceId}catch{await this.index.deleteObject(record.resourceId);return""}}
 
-	private async writeResource(resourceId: string, bytes: Buffer): Promise<boolean> {
+	private async writeResource(resourceId: string, bytes: Buffer, mime: string, category: ResourceCategory): Promise<boolean> {
 		return this.writes.run(async () => {
-		await fs.mkdir(this.options.storagePath, { recursive: true });
-		const rawPath = path.join(this.options.storagePath, resourceId);
-		const brPath = `${rawPath}.br`;
-		try { await fs.access(rawPath); await fs.utimes(rawPath, new Date(), new Date()); return true; } catch { /* try Brotli path */ }
-		try { await fs.access(brPath); await fs.utimes(brPath, new Date(), new Date()); return true; } catch { /* write below */ }
+		const existing=await this.index.findObject(resourceId);
+		if(existing)try{await fs.access(this.absoluteResourcePath(existing));await this.touch(existing);return true}catch{await this.index.deleteObject(resourceId)}
 		const compressed = await brotliCompressAsync(bytes, { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 11 } });
-		const target = compressed.byteLength < bytes.byteLength ? brPath : rawPath;
 		const body = compressed.byteLength < bytes.byteLength ? compressed : bytes;
-		const storedBytes = await this.storageBytes();
+		const suffix=compressed.byteLength < bytes.byteLength ? ".br" : "";
+		const relativePath=path.join(category,resourceId.slice(0,2),`${resourceId}${suffix}`);
+		const target=path.join(this.options.storagePath,relativePath);
+		await fs.mkdir(path.dirname(target),{recursive:true,mode:0o700});
+		const storedBytes = await this.index.totalBytes();
 		if (storedBytes + body.byteLength > this.options.maxTotalBytes) throw new Error("resource cache storage quota exceeded");
 		const temporary = `${target}.${crypto.randomUUID()}.tmp`;
-		await fs.writeFile(temporary, body, { flag: "wx" });
-		try { await fs.rename(temporary, target); this.knownStorageBytes = storedBytes + body.byteLength; return false; } catch (error) { await fs.unlink(temporary).catch(() => undefined); if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; return true; }
+		await fs.writeFile(temporary, body, { flag: "wx", mode: 0o600 });
+		let reused=false;
+		try { await fs.rename(temporary, target); } catch (error) { await fs.unlink(temporary).catch(() => undefined); if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; reused=true; }
+		const now=Date.now();
+		await this.index.remember({resourceId,relativePath,category,mime,byteSize:body.byteLength,createdAtMs:now,lastAccessedAtMs:now});
+		return reused;
 		});
-	}
-
-	private async storageBytes(): Promise<number> {
-		if (this.knownStorageBytes !== null) return this.knownStorageBytes;
-		let entries: string[];
-		try { entries = await fs.readdir(this.options.storagePath); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0; throw error; }
-		let total = 0;
-		for (const entry of entries) {
-			if (!isStoredResourceEntry(entry)) continue;
-			try { const stat = await fs.stat(path.join(this.options.storagePath, entry)); if (stat.isFile()) total += stat.size; } catch { /* file changed during scan */ }
-		}
-		this.knownStorageBytes = total;
-		return total;
 	}
 
 	async readResource(resourceId: string, acceptsBrotli: boolean): Promise<ResourceResponse | null> {
 		if (!RESOURCE_ID_RE.test(resourceId)) return null;
-		const rawPath = path.join(this.options.storagePath, resourceId);
+		const record=await this.index.findObject(resourceId);
+		if(!record)return null;
+		const resourcePath=this.absoluteResourcePath(record);
 		const extension = resourceId.slice(resourceId.lastIndexOf(".") + 1);
-		try {
-			const compressedPath=`${rawPath}.br`;const compressed = await fs.readFile(compressedPath);void fs.utimes(compressedPath,new Date(),new Date()).catch(()=>undefined);
-			return { body: acceptsBrotli ? compressed : await brotliDecompressAsync(compressed), contentType: mimeForExtension(extension), contentEncoding: acceptsBrotli ? "br" : undefined };
-		} catch { /* try raw file */ }
-		try { const body=await fs.readFile(rawPath);void fs.utimes(rawPath,new Date(),new Date()).catch(()=>undefined);return { body, contentType: mimeForExtension(extension) }; } catch { return null; }
+		try {const body=await fs.readFile(resourcePath);void this.touch(record).catch(()=>undefined);if(record.relativePath.endsWith(".br"))return{body:acceptsBrotli?body:await brotliDecompressAsync(body),contentType:mimeForExtension(extension),contentEncoding:acceptsBrotli?"br":undefined};return{body,contentType:mimeForExtension(extension)}}catch{await this.index.deleteObject(resourceId);return null}
 	}
 
 	async cleanupExpired(): Promise<number> {
 		if (Date.now() - this.lastCleanupAt < cleanupIntervalMs) return 0;
 		this.lastCleanupAt = Date.now();
-		let entries: string[];
-		try { entries = await fs.readdir(this.options.storagePath); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0; throw error; }
 		const cutoff = Date.now() - this.options.retentionDays * 24 * 60 * 60 * 1000;
 		let deleted = 0;
-		for (const entry of entries) {
-			if (!isStoredResourceEntry(entry)) continue;
-			const target = path.join(this.options.storagePath, entry);
-			try { const stat = await fs.stat(target); if (stat.isFile() && stat.mtimeMs < cutoff) { await fs.unlink(target); deleted += 1; } } catch { /* another request may have removed it */ }
-		}
-		if (deleted) this.knownStorageBytes = null;
+		for(;;){const expired=await this.index.listExpired(cutoff,500);if(!expired.length)break;for(const record of expired){await fs.unlink(this.absoluteResourcePath(record)).catch((error)=>{if((error as NodeJS.ErrnoException).code!=="ENOENT")throw error});await this.index.deleteObject(record.resourceId);this.recentTouches.delete(record.resourceId);deleted+=1}if(expired.length<500)break}
 		return deleted;
 	}
+
+	async close(){await this.index.close()}
 }

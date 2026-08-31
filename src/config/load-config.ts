@@ -32,8 +32,14 @@ const DEFAULT_CONFIG = {
 		allowed_hosts: ["localhost", "127.0.0.1", "::1"],
 		hsts_max_age_seconds: 0,
 	},
-	storage: {
+	database: {
+		driver: "sqlite",
 		sqlite_path: "./data/scardice.db",
+		postgres_url: "",
+		pool_max: 10,
+		ssl: "disable",
+	},
+	storage: {
 		max_total_mb: 4096,
 	},
 	editor: {
@@ -55,7 +61,8 @@ const DEFAULT_CONFIG = {
 	},
 	resource_cache: {
 		enabled: false,
-		path: "./data/cq-resources",
+		path: "./data/resources",
+		index_sqlite_path: "",
 		cq_face_path: "",
 		retention_days: 60,
 		max_file_mb: 12,
@@ -223,9 +230,26 @@ export function loadConfig() {
 		try {
 			const raw = fs.readFileSync(configPath, "utf-8");
 			fileConfig = toml.parse(raw);
+			if (process.platform !== "win32") {
+				const configuredSecrets = [
+					fileConfig.accounts?.encryption_key,
+					fileConfig.accounts?.initial_admin_password,
+					fileConfig.accounts?.smtp?.password,
+					fileConfig.accounts?.altcha?.hmac_key,
+					fileConfig.accounts?.turnstile?.secret_key,
+					fileConfig.accounts?.hcaptcha?.secret_key,
+					fileConfig.avatar_providers?.discord_bot_token,
+					fileConfig.avatar_providers?.kook_bot_token,
+					fileConfig.metrics?.token,
+					fileConfig.admin?.password,
+				].some((value) => String(value || "").length > 0);
+				if (configuredSecrets && (fs.statSync(configPath).mode & 0o077) !== 0) {
+					throw new Error("configuration contains secrets but is readable by group or other users; run chmod 600 on the file");
+				}
+			}
 			console.error(`[config] Loaded ${configPath}`);
 		} catch (err) {
-			throw new Error(`[config] Failed to parse ${configPath}: ${err.message}`);
+			throw new Error(`[config] Failed to load ${configPath}: ${err.message}`);
 		}
 	} else {
 		console.error(`[config] No config file found, using defaults`);
@@ -233,6 +257,12 @@ export function loadConfig() {
 
 	// Merge: defaults ← file config
 	const config = deepMerge(DEFAULT_CONFIG, fileConfig);
+	// Accept the pre-v2 location long enough for an operator to run the explicit
+	// migration command. New configuration is always written under [database].
+	if (fileConfig.storage?.sqlite_path && !fileConfig.database?.sqlite_path) {
+		config.database.sqlite_path = fileConfig.storage.sqlite_path;
+		console.error("[config] storage.sqlite_path is deprecated; move it to database.sqlite_path");
+	}
 	config.accounts.smtp = {
 		...DEFAULT_CONFIG.accounts.smtp,
 		...(fileConfig.accounts?.smtp || {}),
@@ -283,10 +313,20 @@ export function loadConfig() {
 		const value = parseInt(process.env.HSTS_MAX_AGE_SECONDS, 10);
 		if (!Number.isNaN(value)) config.server.hsts_max_age_seconds = value;
 	}
+	if (process.env.DATABASE_DRIVER)
+		config.database.driver = process.env.DATABASE_DRIVER;
 	if (process.env.SQLITE_PATH)
-		config.storage.sqlite_path = process.env.SQLITE_PATH;
+		config.database.sqlite_path = process.env.SQLITE_PATH;
 	if (process.env.DATABASE_PATH)
-		config.storage.sqlite_path = process.env.DATABASE_PATH;
+		config.database.sqlite_path = process.env.DATABASE_PATH;
+	if (process.env.DATABASE_URL)
+		config.database.postgres_url = process.env.DATABASE_URL;
+	if (process.env.DATABASE_POOL_MAX) {
+		const value = Number(process.env.DATABASE_POOL_MAX);
+		if (Number.isFinite(value)) config.database.pool_max = value;
+	}
+	if (process.env.DATABASE_SSL)
+		config.database.ssl = process.env.DATABASE_SSL;
 	if (process.env.MAX_LOG_STORAGE_MB) {
 		const value = Number(process.env.MAX_LOG_STORAGE_MB);
 		if (Number.isFinite(value) && value > 0) config.storage.max_total_mb = value;
@@ -325,6 +365,10 @@ export function loadConfig() {
 		);
 	if (process.env.CQ_RESOURCE_CACHE_PATH)
 		config.resource_cache.path = process.env.CQ_RESOURCE_CACHE_PATH;
+	if (process.env.RESOURCE_PATH)
+		config.resource_cache.path = process.env.RESOURCE_PATH;
+	if (process.env.RESOURCE_INDEX_SQLITE_PATH !== undefined)
+		config.resource_cache.index_sqlite_path = process.env.RESOURCE_INDEX_SQLITE_PATH;
 	if (process.env.CQ_FACE_RESOURCE_PATH !== undefined)
 		config.resource_cache.cq_face_path = process.env.CQ_FACE_RESOURCE_PATH;
 	if (process.env.CQ_RESOURCE_CACHE_RETENTION_DAYS) {
@@ -487,10 +531,15 @@ export function loadConfig() {
 	config.accounts.allowed_email_domains = parseList(config.accounts.allowed_email_domains);
 	config.security.warning_quotes = parseList(config.security.warning_quotes);
 
-	if (!path.isAbsolute(config.storage.sqlite_path)) {
-		config.storage.sqlite_path = path.resolve(
+	config.database.driver = String(config.database.driver || "sqlite").trim().toLowerCase();
+	if (!['sqlite', 'postgres'].includes(config.database.driver)) throw new Error("database.driver must be sqlite or postgres");
+	config.database.pool_max = Math.max(1, Math.min(100, Math.floor(Number(config.database.pool_max || 10))));
+	config.database.ssl = ['disable', 'require', 'verify-full'].includes(String(config.database.ssl).toLowerCase()) ? String(config.database.ssl).toLowerCase() : 'prefer';
+	if (config.database.driver === 'postgres' && !String(config.database.postgres_url || '').trim()) throw new Error("database.postgres_url or DATABASE_URL is required when database.driver=postgres");
+	if (!path.isAbsolute(config.database.sqlite_path)) {
+		config.database.sqlite_path = path.resolve(
 			RUNTIME_ROOT,
-			config.storage.sqlite_path,
+			config.database.sqlite_path,
 		);
 	}
 	if (!path.isAbsolute(config.security.audit_log_path)) {
@@ -501,6 +550,11 @@ export function loadConfig() {
 	}
 	if (!path.isAbsolute(config.resource_cache.path)) {
 		config.resource_cache.path = path.resolve(RUNTIME_ROOT, config.resource_cache.path);
+	}
+	if (!String(config.resource_cache.index_sqlite_path || '').trim()) {
+		config.resource_cache.index_sqlite_path = path.join(config.resource_cache.path, 'resource-index.sqlite');
+	} else if (!path.isAbsolute(config.resource_cache.index_sqlite_path)) {
+		config.resource_cache.index_sqlite_path = path.resolve(RUNTIME_ROOT, config.resource_cache.index_sqlite_path);
 	}
 	if (config.resource_cache.cq_face_path && !path.isAbsolute(config.resource_cache.cq_face_path)) {
 		config.resource_cache.cq_face_path = path.resolve(RUNTIME_ROOT, config.resource_cache.cq_face_path);

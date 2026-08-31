@@ -96,7 +96,7 @@ export interface LogStore {
 	maintainDatabase(options?: {
 		vacuum?: boolean;
 	}): Promise<DatabaseMaintenanceResult>;
-	close(): void;
+	close(): void | Promise<void>;
 }
 
 function formatUnknown(value: unknown): string {

@@ -8,6 +8,15 @@ import { isPublicIp, qqAvatarIds } from "../src/storage/cq-resource-cache.js";
 import { inflateTextBounded, InflateLimitError } from "../src/security/bounded-inflate.js";
 import { decodeBase64UploadLimited, handleDiceApiRequest } from "../src/api/dice.js";
 import { SqliteLogStore } from "../src/storage/sqlite-log-store.js";
+import { createPostgresPool } from "../src/storage/postgres-log-store.js";
+
+const verifiedPool = createPostgresPool({ url: "postgresql://user:pass@db.example.test/app?sslmode=disable", ssl: "verify-full" });
+assert.deepEqual(verifiedPool.options.ssl, { rejectUnauthorized: true }, "URL parameters must not weaken the configured PostgreSQL TLS policy");
+assert.doesNotMatch(String(verifiedPool.options.connectionString), /sslmode=/, "conflicting PostgreSQL URL TLS parameters must be removed");
+await verifiedPool.end();
+const localPool = createPostgresPool({ url: "postgresql://user:pass@127.0.0.1/app", ssl: "disable" });
+assert.equal(localPool.options.ssl, false);
+await localPool.end();
 
 const compressed = deflateSync(Buffer.alloc(8 * 1024, 65));
 assert.throws(

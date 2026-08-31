@@ -57,7 +57,8 @@ async function main() {
 	config.server.trust_proxy = false;
 	config.server.allowed_hosts = ["127.0.0.1", "localhost"];
 	config.server.hsts_max_age_seconds = 0;
-	config.storage.sqlite_path = path.join(tempRoot, "audit.sqlite");
+	config.database.driver = "sqlite";
+	config.database.sqlite_path = path.join(tempRoot, "audit.sqlite");
 	config.storage.max_total_mb = 128;
 	config.app.cleanup_on_start = false;
 	config.resource_cache.enabled = false;

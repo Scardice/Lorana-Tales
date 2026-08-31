@@ -109,7 +109,7 @@ export function createAdminRouter({
 	const bruteForceMaxAttempts = Math.max(1, Number(security.maxAttempts || 8));
 	const bruteForceWindowMs = Math.max(1000, Number(security.windowMs || 60_000));
 
-	app.use("/admin", (_req, res, next) => {
+	app.use("/admin", async (_req, res, next) => {
 		res.setHeader("Cache-Control", "no-store");
 		res.setHeader("Pragma", "no-cache");
 		next();
@@ -134,30 +134,30 @@ export function createAdminRouter({
 		return { token, session };
 	}
 
-	function isAuthenticated(req) {
-		return !!getSession(req) || !!accountService?.isAdmin(req);
+	async function isAuthenticated(req) {
+		return !!getSession(req) || !!(accountService && await accountService.isAdmin(req));
 	}
 
 	function capMap(map: Map<unknown, unknown>, maximum = 5000) {
 		while (map.size > maximum) map.delete(map.keys().next().value);
 	}
 
-	function requireAuth(req, res) {
-		if (isAuthenticated(req)) return true;
+	async function requireAuth(req, res) {
+		if (await isAuthenticated(req)) return true;
 		sendJson(res, 401, { error: "admin authentication required" });
 		return false;
 	}
 
-	function requireMutationAuth(req, res) {
+	async function requireMutationAuth(req, res) {
 		if (getSession(req)) return true;
-		const session = accountService?.getSession(req);
-		if (accountService?.isAdmin(req) && session && accountService.store.verifyCsrf(session, String(req.headers["x-csrf-token"] || ""))) return true;
+		const session = accountService ? await accountService.getSession(req) : null;
+		if (accountService && await accountService.isAdmin(req) && session && await accountService.store.verifyCsrf(session, String(req.headers["x-csrf-token"] || ""))) return true;
 		sendJson(res, session ? 403 : 401, { error: session ? "csrf_failed" : "admin authentication required" });
 		return false;
 	}
 
-	function actor(req) {
-		return getSession(req) ? "root" : accountService?.getSession(req)?.user.id || "unknown";
+	async function actor(req) {
+		return getSession(req) ? "root" : (accountService ? (await accountService.getSession(req))?.user.id : "") || "unknown";
 	}
 
 	function setSessionCookie(req, res, token) {
@@ -229,7 +229,7 @@ export function createAdminRouter({
 		failedLogins.delete(getClientIp(req, trustProxy));
 	}
 
-	app.get(["/admin", "/admin/"], (_req, res) => {
+	app.get(["/admin", "/admin/"], async (_req, res) => {
 		if (adminFilePath && fs.existsSync(adminFilePath)) {
 			return res.sendFile(adminFilePath);
 		}
@@ -239,10 +239,10 @@ export function createAdminRouter({
 			.send("Admin console has not been built yet");
 	});
 
-	app.get("/admin/api/session", (req, res) => {
-		const account = accountService?.getSession(req);
-		const accountAdmin = !!accountService?.isAdmin(req);
-		sendJson(res, 200, { authenticated: isAuthenticated(req), accountMode: !!accountService, mode: getSession(req) ? "root" : accountAdmin ? "account" : "none", user: accountAdmin ? account?.user : null });
+	app.get("/admin/api/session", async (req, res) => {
+		const account = accountService ? await accountService.getSession(req) : null;
+		const accountAdmin = !!(accountService && await accountService.isAdmin(req));
+		sendJson(res, 200, { authenticated: await isAuthenticated(req), accountMode: !!accountService, mode: getSession(req) ? "root" : accountAdmin ? "account" : "none", user: accountAdmin ? account?.user : null });
 	});
 
 	app.post("/admin/api/login", async (req, res) => {
@@ -285,22 +285,22 @@ export function createAdminRouter({
 		sendJson(res, 200, { authenticated: true });
 	});
 
-	app.post("/admin/api/logout", (req, res) => {
+	app.post("/admin/api/logout", async (req, res) => {
 		const active = getSession(req);
 		if (active) sessions.delete(active.token);
 		clearSessionCookie(res);
 		sendJson(res, 200, { authenticated: false });
 	});
 
-	app.get("/admin/api/users", (req, res) => {
-		if (!requireAuth(req, res)) return;
+	app.get("/admin/api/users", async (req, res) => {
+		if (!await requireAuth(req, res)) return;
 		if (!accountService) { sendJson(res, 404, { error: "accounts_disabled" }); return; }
-		const result = accountService.store.listUsers(String(req.query.q || ""), clampInt(req.query.page, 1, 1, Number.MAX_SAFE_INTEGER), clampInt(req.query.pageSize, 20, 1, 100));
-		sendJson(res, 200, { ...result, items: result.items.map((user) => ({ ...user, storage: accountService.storageUsage(user) })) });
+		const result = await accountService.store.listUsers(String(req.query.q || ""), clampInt(req.query.page, 1, 1, Number.MAX_SAFE_INTEGER), clampInt(req.query.pageSize, 20, 1, 100));
+		sendJson(res, 200, { ...result, items: await Promise.all(result.items.map(async (user) => ({ ...user, storage: await accountService.storageUsage(user) }))) });
 	});
 
-	app.get("/admin/api/account-policies", (req, res) => {
-		if (!requireAuth(req, res)) return;
+	app.get("/admin/api/account-policies", async (req, res) => {
+		if (!await requireAuth(req, res)) return;
 		if (!accountService) { sendJson(res, 404, { error: "accounts_disabled" }); return; }
 		const groups = accountService.config.storage_groups && typeof accountService.config.storage_groups === "object" ? accountService.config.storage_groups : {};
 		sendJson(res, 200, {
@@ -310,22 +310,22 @@ export function createAdminRouter({
 		});
 	});
 
-	app.get("/admin/api/account-audit", (req, res) => {
-		if (!requireAuth(req, res)) return;
+	app.get("/admin/api/account-audit", async (req, res) => {
+		if (!await requireAuth(req, res)) return;
 		if (!accountService) { sendJson(res, 404, { error: "accounts_disabled" }); return; }
-		sendJson(res, 200, accountService.store.listAudit(clampInt(req.query.page, 1, 1, Number.MAX_SAFE_INTEGER), clampInt(req.query.pageSize, 50, 1, 100)));
+		sendJson(res, 200, await accountService.store.listAudit(clampInt(req.query.page, 1, 1, Number.MAX_SAFE_INTEGER), clampInt(req.query.pageSize, 50, 1, 100)));
 	});
 
-	app.get("/admin/api/projects", (req, res) => {
-		if (!requireAuth(req, res)) return;
+	app.get("/admin/api/projects", async (req, res) => {
+		if (!await requireAuth(req, res)) return;
 		if (!accountService) { sendJson(res, 404, { error: "accounts_disabled" }); return; }
-		sendJson(res, 200, accountService.store.listAllProjects(clampInt(req.query.page, 1, 1, Number.MAX_SAFE_INTEGER), clampInt(req.query.pageSize, 50, 1, 100)));
+		sendJson(res, 200, await accountService.store.listAllProjects(clampInt(req.query.page, 1, 1, Number.MAX_SAFE_INTEGER), clampInt(req.query.pageSize, 50, 1, 100)));
 	});
 
-	app.get("/admin/api/projects/:id", (req, res) => {
-		if (!requireAuth(req, res)) return;
+	app.get("/admin/api/projects/:id", async (req, res) => {
+		if (!await requireAuth(req, res)) return;
 		if (!accountService) { sendJson(res, 404, { error: "accounts_disabled" }); return; }
-		const project = accountService.store.getProjectAsAdmin(req.params.id);
+		const project = await accountService.store.getProjectAsAdmin(req.params.id);
 		if (project && Buffer.isBuffer(project.document)) {
 			const { document, ...meta } = project;
 			res.status(200).set({ "Cache-Control": "no-store", "Content-Type": "application/vnd.lorana-tales.story+zip", "Content-Length": String(document.length), "X-Lorana-Project-Meta": Buffer.from(JSON.stringify(meta), "utf-8").toString("base64url") }).send(document);
@@ -335,29 +335,29 @@ export function createAdminRouter({
 	});
 
 	app.post("/admin/api/users", async (req, res) => {
-		if (!requireMutationAuth(req, res)) return;
+		if (!await requireMutationAuth(req, res)) return;
 		if (!accountService) { sendJson(res, 404, { error: "accounts_disabled" }); return; }
 		try {
 			const body = readJsonBody(req); const email = String(body.email || ""); const newPassword = String(body.password || ""); const username = String(body.username || body.displayName || email.split("@")[0]).trim(); const nickname = String(body.nickname || body.displayName || username).trim();
 			if (!email.includes("@") || newPassword.length < 10 || newPassword.length > 256) { sendJson(res, 400, { error: "invalid_user" }); return; }
-			if (accountService.store.getUserByIdentity(username)) { sendJson(res, 409, { error: "user_exists" }); return; }
+			if (await accountService.store.getUserByIdentity(username)) { sendJson(res, 409, { error: "user_exists" }); return; }
 			const role = body.role === "admin" ? "admin" : "user";
 			const adminGroup = String(accountService.config.admin_group || "admin");
 			const defaultGroup = String(accountService.config.default_group || "default");
 			const group = role === "admin" ? adminGroup : String(body.group || defaultGroup) === adminGroup ? defaultGroup : String(body.group || defaultGroup);
 			const user = await accountService.store.createUser({ email, password: newPassword, username, nickname, role, group, mustChangePassword: body.mustChangePassword !== false });
-			accountService.store.audit(actor(req), "admin.user-create", user.id, { email: user.email, role: user.role }); sendJson(res, 201, user);
+			await accountService.store.audit(await actor(req), "admin.user-create", user.id, { email: user.email, role: user.role }); sendJson(res, 201, user);
 		} catch (error) { console.error("[admin] create user failed", error); sendJson(res, 409, { error: "user_exists" }); }
 	});
 
-	app.patch("/admin/api/users/:id", (req, res) => {
-		if (!requireMutationAuth(req, res)) return;
+	app.patch("/admin/api/users/:id", async (req, res) => {
+		if (!await requireMutationAuth(req, res)) return;
 		if (!accountService) { sendJson(res, 404, { error: "accounts_disabled" }); return; }
 		try {
-			const current = accountService.store.getUserById(req.params.id); if (!current) { sendJson(res, 404, { error: "user_not_found" }); return; }
+			const current = await accountService.store.getUserById(req.params.id); if (!current) { sendJson(res, 404, { error: "user_not_found" }); return; }
 			const body = readJsonBody(req);
-			if (current.role === "admin" && body.role === "user" && current.status === "active" && accountService.store.activeAdminCount() <= 1) { sendJson(res, 409, { error: "last_admin" }); return; }
-			const nextRole = body.role === "admin" || body.role === "user" ? body.role : current.role; const nextName = typeof body.username === "string" ? body.username.trim() : current.username; const duplicateName = accountService.store.getUserByIdentity(nextName);
+			if (current.role === "admin" && body.role === "user" && current.status === "active" && await accountService.store.activeAdminCount() <= 1) { sendJson(res, 409, { error: "last_admin" }); return; }
+			const nextRole = body.role === "admin" || body.role === "user" ? body.role : current.role; const nextName = typeof body.username === "string" ? body.username.trim() : current.username; const duplicateName = await accountService.store.getUserByIdentity(nextName);
 			if (duplicateName && duplicateName.id !== current.id) { sendJson(res, 409, { error: "user_update_failed" }); return; }
 			const retentionDaysOverride = body.retentionDaysOverride === null
 				? null
@@ -371,40 +371,40 @@ export function createAdminRouter({
 			const defaultGroup = String(accountService.config.default_group || "default");
 			const requestedGroup = typeof body.group === "string" ? body.group.trim() : current.group;
 			const nextGroup = nextRole === "admin" ? adminGroup : requestedGroup === adminGroup ? defaultGroup : requestedGroup;
-			const user = accountService.store.updateUser(current.id, { email: typeof body.email === "string" ? body.email : undefined, username: typeof body.username === "string" ? body.username : undefined, nickname: typeof body.nickname === "string" ? body.nickname : typeof body.displayName === "string" ? body.displayName : undefined, role: nextRole, group: nextGroup, quotaMbOverride, retentionDaysOverride });
-			accountService.store.audit(actor(req), "admin.user-update", current.id, body); sendJson(res, 200, user);
+			const user = await accountService.store.updateUser(current.id, { email: typeof body.email === "string" ? body.email : undefined, username: typeof body.username === "string" ? body.username : undefined, nickname: typeof body.nickname === "string" ? body.nickname : typeof body.displayName === "string" ? body.displayName : undefined, role: nextRole, group: nextGroup, quotaMbOverride, retentionDaysOverride });
+			await accountService.store.audit(await actor(req), "admin.user-update", current.id, body); sendJson(res, 200, user);
 		} catch { sendJson(res, 409, { error: "user_update_failed" }); }
 	});
 
 	app.post("/admin/api/users/:id/password", async (req, res) => {
-		if (!requireMutationAuth(req, res)) return;
+		if (!await requireMutationAuth(req, res)) return;
 		if (!accountService) { sendJson(res, 404, { error: "accounts_disabled" }); return; }
-		try { const body = readJsonBody(req); const newPassword = String(body.password || ""); if (newPassword.length < 10 || newPassword.length > 256 || !accountService.store.getUserById(req.params.id)) { sendJson(res, 400, { error: "invalid_password" }); return; } await accountService.store.updatePassword(req.params.id, newPassword, body.mustChangePassword !== false); accountService.store.audit(actor(req), "admin.password-reset", req.params.id); sendJson(res, 200, { ok: true }); }
+		try { const body = readJsonBody(req); const newPassword = String(body.password || ""); if (newPassword.length < 10 || newPassword.length > 256 || !await accountService.store.getUserById(req.params.id)) { sendJson(res, 400, { error: "invalid_password" }); return; } await accountService.store.updatePassword(req.params.id, newPassword, body.mustChangePassword !== false); await accountService.store.audit(await actor(req), "admin.password-reset", req.params.id); sendJson(res, 200, { ok: true }); }
 		catch { sendJson(res, 400, { error: "password_update_failed" }); }
 	});
 
-	app.post("/admin/api/users/:id/status", (req, res) => {
-		if (!requireMutationAuth(req, res)) return;
+	app.post("/admin/api/users/:id/status", async (req, res) => {
+		if (!await requireMutationAuth(req, res)) return;
 		if (!accountService) { sendJson(res, 404, { error: "accounts_disabled" }); return; }
-		const current = accountService.store.getUserById(req.params.id); if (!current) { sendJson(res, 404, { error: "user_not_found" }); return; }
+		const current = await accountService.store.getUserById(req.params.id); if (!current) { sendJson(res, 404, { error: "user_not_found" }); return; }
 		const body = readJsonBody(req); const status = String(body.status || "active"); const reason = String(body.reason || "").trim();
 		if (!["active", "disabled", "banned"].includes(status) || (status === "banned" && !reason)) { sendJson(res, 400, { error: "ban_reason_required" }); return; }
-		if (current.role === "admin" && current.status === "active" && status !== "active" && accountService.store.activeAdminCount() <= 1) { sendJson(res, 409, { error: "last_admin" }); return; }
-		const user = accountService.store.setStatus(current.id, status as "active" | "disabled" | "banned", reason, String(body.until || "")); accountService.store.audit(actor(req), `admin.user-${status}`, current.id, { reason, until: body.until || "" }); sendJson(res, 200, user);
+		if (current.role === "admin" && current.status === "active" && status !== "active" && await accountService.store.activeAdminCount() <= 1) { sendJson(res, 409, { error: "last_admin" }); return; }
+		const user = await accountService.store.setStatus(current.id, status as "active" | "disabled" | "banned", reason, String(body.until || "")); await accountService.store.audit(await actor(req), `admin.user-${status}`, current.id, { reason, until: body.until || "" }); sendJson(res, 200, user);
 	});
 
-	app.delete("/admin/api/users/:id", (req, res) => {
-		if (!requireMutationAuth(req, res)) return;
+	app.delete("/admin/api/users/:id", async (req, res) => {
+		if (!await requireMutationAuth(req, res)) return;
 		if (!accountService) { sendJson(res, 404, { error: "accounts_disabled" }); return; }
-		const current = accountService.store.getUserById(req.params.id); if (!current) { sendJson(res, 404, { error: "user_not_found" }); return; }
-		if (current.role === "admin" && current.status === "active" && accountService.store.activeAdminCount() <= 1) { sendJson(res, 409, { error: "last_admin" }); return; }
+		const current = await accountService.store.getUserById(req.params.id); if (!current) { sendJson(res, 404, { error: "user_not_found" }); return; }
+		if (current.role === "admin" && current.status === "active" && await accountService.store.activeAdminCount() <= 1) { sendJson(res, 409, { error: "last_admin" }); return; }
 		const body = readJsonBody(req); const action = String(body.projectAction || "archive");
-		if (!["delete", "archive", "transfer"].includes(action) || (action === "transfer" && !accountService.store.getUserById(String(body.transferUserId || "")))) { sendJson(res, 400, { error: "invalid_project_action" }); return; }
-		const ok = accountService.store.deleteUser(current.id, action as "delete" | "archive" | "transfer", String(body.transferUserId || "")); accountService.store.audit(actor(req), "admin.user-delete", current.id, { projectAction: action, transferUserId: body.transferUserId || "" }); sendJson(res, ok ? 200 : 404, { ok });
+		if (!["delete", "archive", "transfer"].includes(action) || (action === "transfer" && !await accountService.store.getUserById(String(body.transferUserId || "")))) { sendJson(res, 400, { error: "invalid_project_action" }); return; }
+		const ok = await accountService.store.deleteUser(current.id, action as "delete" | "archive" | "transfer", String(body.transferUserId || "")); await accountService.store.audit(await actor(req), "admin.user-delete", current.id, { projectAction: action, transferUserId: body.transferUserId || "" }); sendJson(res, ok ? 200 : 404, { ok });
 	});
 
 	app.get("/admin/api/logs", async (req, res) => {
-		if (!requireAuth(req, res)) return;
+		if (!await requireAuth(req, res)) return;
 
 		const page = clampInt(req.query.page, 1, 1, Number.MAX_SAFE_INTEGER);
 		const pageSize = clampInt(
@@ -425,7 +425,7 @@ export function createAdminRouter({
 	});
 
 	app.post("/admin/api/logs/delete", async (req, res) => {
-		if (!requireMutationAuth(req, res)) return;
+		if (!await requireMutationAuth(req, res)) return;
 
 		let keys: string[];
 		try {
@@ -449,7 +449,7 @@ export function createAdminRouter({
 	});
 
 	app.get("/admin/api/logs/:key/raw", async (req, res) => {
-		if (!requireAuth(req, res)) return;
+		if (!await requireAuth(req, res)) return;
 
 		try {
 			const key = req.params.key;
@@ -480,7 +480,7 @@ export function createAdminRouter({
 	});
 
 	app.delete("/admin/api/logs/:key", async (req, res) => {
-		if (!requireMutationAuth(req, res)) return;
+		if (!await requireMutationAuth(req, res)) return;
 
 		try {
 			const key = String(req.params.key || "");
@@ -496,7 +496,7 @@ export function createAdminRouter({
 	});
 
 	app.get("/admin/api/logs/:key", async (req, res) => {
-		if (!requireAuth(req, res)) return;
+		if (!await requireAuth(req, res)) return;
 
 		try {
 			const key = req.params.key;
@@ -519,7 +519,7 @@ export function createAdminRouter({
 	});
 
 	app.post("/admin/api/cleanup", async (req, res) => {
-		if (!requireMutationAuth(req, res)) return;
+		if (!await requireMutationAuth(req, res)) return;
 
 		let requestedRetentionDays = retentionDays;
 		try {
@@ -546,7 +546,7 @@ export function createAdminRouter({
 	});
 
 	app.post("/admin/api/database/maintenance", async (req, res) => {
-		if (!requireMutationAuth(req, res)) return;
+		if (!await requireMutationAuth(req, res)) return;
 
 		let vacuum = false;
 		try {

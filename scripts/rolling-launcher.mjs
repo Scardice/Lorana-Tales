@@ -9,6 +9,8 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import toml from "toml";
 
+if (process.platform !== "win32") process.umask(0o077);
+
 const OFFICIAL_REPOSITORY = "Scardice/Lorana-Tales";
 const MAX_API_BYTES = 2 * 1024 * 1024;
 const MAX_CHECKSUM_BYTES = 64 * 1024;

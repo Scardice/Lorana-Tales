@@ -3,7 +3,7 @@ import { inflateRawSync } from "node:zlib";
 import type Database from "better-sqlite3";
 
 const PASSWORD_PREFIX = "scrypt-v1";
-const MAX_EFFECT_SHARES_PER_USER = 500;
+export const MAX_EFFECT_SHARES_PER_USER = 500;
 
 class WorkQueue {
 	private active = 0;
@@ -29,7 +29,7 @@ const passwordWork = new WorkQueue(
 	Math.max(1, Math.min(4, Number(process.env.ACCOUNT_KDF_CONCURRENCY || 2) || 2)),
 	Math.max(8, Math.min(256, Number(process.env.ACCOUNT_KDF_QUEUE_LIMIT || 64) || 64)),
 );
-const DUMMY_PASSWORD_HASH = [PASSWORD_PREFIX, crypto.randomBytes(16).toString("base64url"), crypto.randomBytes(64).toString("base64url")].join("$");
+export const DUMMY_PASSWORD_HASH = [PASSWORD_PREFIX, crypto.randomBytes(16).toString("base64url"), crypto.randomBytes(64).toString("base64url")].join("$");
 
 function scryptAsync(password: string, salt: Buffer, length: number): Promise<Buffer> {
 	return passwordWork.run(() => new Promise((resolve, reject) => crypto.scrypt(password, salt, length, {
@@ -86,15 +86,15 @@ export interface EditorProjectSummary {
 
 type SqlRow = Record<string, unknown>;
 
-function nowIso() {
+export function nowIso() {
 	return new Date().toISOString();
 }
 
-function sha256(value: string | Buffer): string {
+export function sha256(value: string | Buffer): string {
 	return crypto.createHash("sha256").update(value).digest("hex");
 }
 
-function randomToken(bytes = 32): string {
+export function randomToken(bytes = 32): string {
 	return crypto.randomBytes(bytes).toString("base64url");
 }
 
@@ -116,7 +116,7 @@ function fallbackUsername(value: unknown, id: string): string {
 	return `${base}_${id.replace(/-/g, "").slice(0, 7)}`.slice(0, 32);
 }
 
-function rowToUser(row: SqlRow): AccountUser {
+export function rowToUser(row: SqlRow): AccountUser {
 	return {
 		id: String(row.id || ""),
 		email: String(row.email || ""),
@@ -148,13 +148,13 @@ function rowToUser(row: SqlRow): AccountUser {
 	};
 }
 
-async function passwordHash(password: string): Promise<string> {
+export async function passwordHash(password: string): Promise<string> {
 	const salt = crypto.randomBytes(16);
 	const derived = await scryptAsync(password, salt, 64);
 	return [PASSWORD_PREFIX, salt.toString("base64url"), derived.toString("base64url")].join("$");
 }
 
-async function passwordMatches(password: string, encoded: string): Promise<boolean> {
+export async function passwordMatches(password: string, encoded: string): Promise<boolean> {
 	const [prefix, saltText, expectedText] = encoded.split("$");
 	if (prefix !== PASSWORD_PREFIX || !saltText || !expectedText) return false;
 	const expected = Buffer.from(expectedText, "base64url");
@@ -167,7 +167,7 @@ const SSP_BINARY_PREFIX = Buffer.from("LORANA_SSP2\0", "ascii");
 const JSON_BINARY_PREFIX = Buffer.from("LORANA_JSON2\0", "ascii");
 const MAX_LEGACY_JSON_BYTES = 64 * 1024 * 1024;
 
-function compressDocument(value: unknown): Buffer {
+export function compressDocument(value: unknown): Buffer {
 	if (Buffer.isBuffer(value)) return Buffer.concat([SSP_BINARY_PREFIX, value]);
 	// New JSON records are stored directly. SQLite already accounts for their
 	// size, and avoiding synchronous level-9 deflate keeps large saves off the
@@ -175,7 +175,7 @@ function compressDocument(value: unknown): Buffer {
 	return Buffer.concat([JSON_BINARY_PREFIX, Buffer.from(JSON.stringify(value), "utf-8")]);
 }
 
-function decompressDocument(value: Buffer): unknown {
+export function decompressDocument(value: Buffer): unknown {
 	if (value.subarray(0, SSP_BINARY_PREFIX.length).equals(SSP_BINARY_PREFIX)) return value.subarray(SSP_BINARY_PREFIX.length);
 	if (value.subarray(0, JSON_BINARY_PREFIX.length).equals(JSON_BINARY_PREFIX)) return JSON.parse(value.subarray(JSON_BINARY_PREFIX.length).toString("utf-8"));
 	return JSON.parse(inflateRawSync(value, { maxOutputLength: MAX_LEGACY_JSON_BYTES }).toString("utf-8"));
@@ -468,6 +468,7 @@ export class AccountStore {
 	updateUser(userId: string, input: Partial<{ email: string; username: string; nickname: string; authorSignature: string; displayName: string; avatarUrl: string; role: AccountRole; group: string; quotaMbOverride: number | null; retentionDaysOverride: number | null }>) {
 		const current = this.getUserById(userId);
 		if (!current) return null;
+		if (current.role === "admin" && current.status === "active" && input.role === "user" && this.activeAdminCount() <= 1) throw new Error("last_admin");
 		const email = input.email ? normalizeEmail(input.email) : current.email;
 		const username = input.username === undefined ? current.username : String(input.username).trim();
 		const nicknameInput = input.nickname === undefined ? input.displayName : input.nickname;
@@ -502,6 +503,8 @@ export class AccountStore {
 	}
 
 	setStatus(userId: string, status: AccountStatus, reason = "", until = "") {
+		const current = this.getUserById(userId);
+		if (current?.role === "admin" && current.status === "active" && status !== "active" && this.activeAdminCount() <= 1) throw new Error("last_admin");
 		this.db.prepare("UPDATE account_users SET status = ?, ban_reason = ?, ban_until = ?, updated_at = ? WHERE id = ?")
 			.run(status, status === "banned" ? reason.slice(0, 500) : "", status === "banned" ? until : "", nowIso(), userId);
 		if (status !== "active") this.revokeSessions(userId);
@@ -859,6 +862,8 @@ export class AccountStore {
 
 	deleteUser(userId: string, projectAction: "delete" | "archive" | "transfer", transferUserId = "") {
 		const transaction = this.db.transaction(() => {
+			const current = this.getUserById(userId);
+			if (current?.role === "admin" && current.status === "active" && this.activeAdminCount() <= 1) throw new Error("last_admin");
 			if (projectAction === "delete") this.db.prepare("DELETE FROM editor_projects WHERE user_id = ?").run(userId);
 			if (projectAction === "archive") this.db.prepare("UPDATE editor_projects SET user_id = NULL, archived = 1 WHERE user_id = ?").run(userId);
 			if (projectAction === "transfer") {
