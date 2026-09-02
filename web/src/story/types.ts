@@ -198,6 +198,12 @@ export interface StorySettings {
   hideOffTopic: boolean;
   /** Hide player dice commands such as .ra or /roll while keeping dice results. */
   hideDiceCommands: boolean;
+  /** Hide image messages without deleting their original data. */
+  hideImages: boolean;
+  /** Hide voice/audio messages without deleting their original data. */
+  hideAudio: boolean;
+  /** Hide every message represented by, or containing, a CQ code. */
+  hideCqCodes: boolean;
   /** Enter key behavior in the editor composer. */
   enterKeyBehavior: "auto" | "send" | "newline";
   preserveLineBreaks: boolean;
@@ -282,6 +288,9 @@ export const defaultStorySettings = (): StorySettings => ({
   showTime: false,
   hideOffTopic: false,
   hideDiceCommands: false,
+  hideImages: false,
+  hideAudio: false,
+  hideCqCodes: false,
   enterKeyBehavior: "auto",
   preserveLineBreaks: true,
   theme: "auto",

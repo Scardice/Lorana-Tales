@@ -14,7 +14,7 @@ const effectColors = new Set<StoryEffectColor>(["auto", "neutral", "red", "orang
 const settingKeys = new Set<keyof StorySettings>([
 	"enabled", "mergeMessages", "mergeNarration", "showAvatars", "stickyGroupAvatar", "avatarAlignment", "showNarratorAvatar",
   "previewOnly", "showQqInEditor", "showQqInPreview", "showNames", "showNarratorNames",
-  "showTime", "hideOffTopic", "hideDiceCommands", "enterKeyBehavior", "preserveLineBreaks", "theme", "density", "fontSize", "avatarSize",
+  "showTime", "hideOffTopic", "hideDiceCommands", "hideImages", "hideAudio", "hideCqCodes", "enterKeyBehavior", "preserveLineBreaks", "theme", "density", "fontSize", "avatarSize",
   "narratorAvatarSize", "bubbleMaxWidth", "canvasWidth", "centerGutterPercent",
   "imageMaxWidthPercent", "imageMaxHeightVh", "animation", "animationDurationMs",
   "autoplay", "playbackTiming", "fixedDelayMs", "chineseCharsPerMinute", "englishWordsPerMinute",
@@ -213,5 +213,8 @@ export const STORY_SCRIPT_HELP = `<!-- Lorana Tales Story Language 2 -->
 • <set name="streamSpeedJitterPercent" value="25"> 可修改全局设置。
 • <set name="hideOffTopic" value="on"> 隐藏以 ( 或 （ 开头的场外发言，不删除原消息。
 • <set name="hideDiceCommands" value="on"> 隐藏以 .、。或 / 开头的骰子指令，保留骰子结果。
+• <set name="hideImages" value="on"> 隐藏图片消息，不删除原消息。
+• <set name="hideAudio" value="on"> 隐藏语音消息，不删除原消息。
+• <set name="hideCqCodes" value="on"> 隐藏所有 CQ 码消息，包括图片、语音和其他 CQ 消息。
 • <set name="enterKeyBehavior" value="auto"> 编辑器回车按设备决定；也可写 send 或 newline。
 • id 和 at 可省略；导出时自动写入稳定 id，以保留演出编排。`;

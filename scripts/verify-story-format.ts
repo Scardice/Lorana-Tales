@@ -11,10 +11,10 @@ import { AccountStore } from "../src/accounts/account-store";
 import { AccountService } from "../src/accounts/router";
 import { getClientIp } from "../src/server/client-ip";
 import { storyFromLogItems, storyStreamingText } from "../web/src/story/model";
-import { isStoryOffTopicText } from "../web/src/story/message-filter";
+import { isStoryAudioMessage, isStoryCqMessage, isStoryImageMessage, isStoryMessageFiltered, isStoryOffTopicText } from "../web/src/story/message-filter";
 import { createStoryPackage, readStoryPackage } from "../web/src/story/package";
 import { createPerformanceHtml } from "../web/src/story/standalone-performance";
-import type { StoryArchive, StoryCharacter } from "../web/src/story/types";
+import type { StoryArchive, StoryCharacter, StoryMessage } from "../web/src/story/types";
 
 const forwardedRequest = (remoteAddress: string, forwardedFor: string) => ({
 	headers: { "x-forwarded-for": forwardedFor },
@@ -30,6 +30,18 @@ assert.equal(isStoryOffTopicText("[CQ:face,id=14](场外)"),true);
 assert.equal(isStoryOffTopicText("[CQ:at,qq=123] （场外）"),true);
 assert.equal(isStoryOffTopicText("[CQ:face,id=14] [CQ:image,file=a]   (off topic)"),true);
 assert.equal(isStoryOffTopicText("[CQ:face,id=14] 正文"),false);
+const cqText = (text: string): StoryMessage => ({ id: `cq-${text}`, characterId: "character-narrator", kind: "text", text });
+const imageMessage: StoryMessage = { id: "filter-image", characterId: "character-narrator", kind: "image", asset: { id: "image", mime: "image/png", name: "image.png" } };
+const audioMessage: StoryMessage = { id: "filter-audio", characterId: "character-narrator", kind: "audio", asset: { id: "audio", mime: "audio/ogg", name: "audio.ogg" } };
+assert.equal(isStoryImageMessage(imageMessage), true);
+assert.equal(isStoryImageMessage(cqText("说明 [CQ:image,file=a]")), true);
+assert.equal(isStoryAudioMessage(audioMessage), true);
+assert.equal(isStoryAudioMessage(cqText("[CQ:record,file=a] 转写")), true);
+assert.equal(isStoryCqMessage(cqText("正文 [CQ:at,qq=123]")), true);
+assert.equal(isStoryCqMessage(cqText("普通正文")), false);
+assert.equal(isStoryCqMessage(imageMessage), true, "所有 CQ 过滤应覆盖导入后已结构化的图片");
+assert.equal(isStoryMessageFiltered(audioMessage, { hideAudio: true }), true);
+assert.equal(isStoryMessageFiltered(cqText("[CQ:face,id=14]"), { hideCqCodes: true }), true);
 assert.equal(
 	getClientIp(forwardedRequest("127.0.0.1", "198.51.100.20") as never, ["127.0.0.1/32"]),
 	"198.51.100.20",
