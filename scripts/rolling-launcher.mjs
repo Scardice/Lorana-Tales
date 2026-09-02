@@ -132,7 +132,9 @@ export function sanitizedProxyHeaders(source) {
 }
 
 function spawnWorker(entry, port, marker) {
-	return spawn(process.execPath, [entry], { cwd: launcherRoot, env: { ...process.env, SCARDICE_CONFIG: configPath, LORANA_RUNTIME_ROOT: launcherRoot, LORANA_INTERNAL_PORT: String(port), LORANA_UPDATE_WORKER: "1", LORANA_BUILD_VERSION: String(marker?.version || ""), LORANA_BUILD_COMMIT: String(marker?.commit || "") }, stdio: "inherit", windowsHide: true });
+	const child=spawn(process.execPath, [entry], { cwd: launcherRoot, env: { ...process.env, SCARDICE_CONFIG: configPath, LORANA_RUNTIME_ROOT: launcherRoot, LORANA_INTERNAL_PORT: String(port), LORANA_UPDATE_WORKER: "1", LORANA_BUILD_VERSION: String(marker?.version || ""), LORANA_BUILD_COMMIT: String(marker?.commit || "") }, stdio: "inherit", windowsHide: true });
+	child.once("error",error=>console.error(`[updater] Worker process failed to start: ${error instanceof Error?error.message:String(error)}`));
+	return child;
 }
 function waitForExit(child) { return new Promise((resolve) => child.once("exit", resolve)); }
 async function readBoundedBody(response, maxBytes) {
@@ -158,7 +160,15 @@ async function requestJson(url) {
 }
 function availablePort() { return new Promise((resolve, reject) => { const probe=http.createServer();probe.once("error",reject);probe.listen(0,"127.0.0.1",()=>{const address=probe.address();const port=typeof address==="object"&&address?address.port:0;probe.close(error=>error?reject(error):resolve(port))}) }); }
 export function healthCheckHost(allowedHosts) { return Array.isArray(allowedHosts) && allowedHosts.length ? String(allowedHosts[0]) : "127.0.0.1"; }
-async function healthy(port, expectedMarker, host) { for(let attempt=0;attempt<40;attempt+=1){try{const response=await fetch(`http://127.0.0.1:${port}/healthz`,{headers:{Host:healthCheckHost([host])},signal:AbortSignal.timeout(1200)});if(response.ok){const body=await response.json();if(body?.ok===true&&String(body.version||"")===String(expectedMarker?.version||"")&&String(body.commit||"")===String(expectedMarker?.commit||""))return true}}catch{}await new Promise(resolve=>setTimeout(resolve,500))}return false }
+async function healthy(port, expectedMarker, host) {
+	const probe=async()=>{try{const response=await fetch(`http://127.0.0.1:${port}/healthz`,{headers:{Host:healthCheckHost([host])},signal:AbortSignal.timeout(1200)});if(!response.ok)return false;const body=await response.json();return body?.ok===true&&String(body.version||"")===String(expectedMarker?.version||"")&&String(body.commit||"")===String(expectedMarker?.commit||"")}catch{return false}};
+	let consecutive=0;
+	for(let attempt=0;attempt<40;attempt+=1){if(await probe()){consecutive+=1;if(consecutive>=3)break}else consecutive=0;await new Promise(resolve=>setTimeout(resolve,500))}
+	if(consecutive<3)return false;
+	await new Promise(resolve=>setTimeout(resolve,5000));
+	for(let confirmation=0;confirmation<3;confirmation+=1){if(!await probe())return false;if(confirmation<2)await new Promise(resolve=>setTimeout(resolve,500))}
+	return true;
+}
 
 export function parseSemver(value) {
 	const match = /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(String(value || ""));
@@ -271,6 +281,7 @@ async function main(){
 	const internalHealthHost=healthCheckHost(config.allowedHosts);
 	let activePort=await availablePort();let worker=spawnWorker(serverEntry,activePort,{version:currentVersion,commit:currentCommit});if(!await healthy(activePort,{version:currentVersion,commit:currentCommit},internalHealthHost)){worker.kill("SIGTERM");throw new Error("初始服务健康检查失败")}
 	let stopping=false;
+	const activeRequestsByPort=new Map();
 	const proxy=http.createServer((request,response)=>{
 		if(!request.url?.startsWith("/")||request.url.startsWith("//")){response.writeHead(400,{"content-type":"text/plain;charset=utf-8"});response.end("Bad Request");return}
 		if(!isAllowedHostHeader(request.headers.host,config.allowedHosts)){response.writeHead(400,{"content-type":"text/plain;charset=utf-8"});response.end("Invalid Host header");return}
@@ -281,7 +292,9 @@ async function main(){
 		headers["x-forwarded-host"]=String(request.headers.host||"");
 		headers["x-forwarded-proto"]=protocol;
 		headers.host=request.headers.host;
-		const upstream=http.request({host:"127.0.0.1",port:activePort,path:request.url,method:request.method,headers},upstreamResponse=>{response.writeHead(upstreamResponse.statusCode||502,upstreamResponse.headers);upstreamResponse.pipe(response)});
+		const upstreamPort=activePort;activeRequestsByPort.set(upstreamPort,(activeRequestsByPort.get(upstreamPort)||0)+1);
+		const upstream=http.request({host:"127.0.0.1",port:upstreamPort,path:request.url,method:request.method,headers},upstreamResponse=>{response.writeHead(upstreamResponse.statusCode||502,upstreamResponse.headers);upstreamResponse.pipe(response)});
+		upstream.once("close",()=>{const remaining=Math.max(0,(activeRequestsByPort.get(upstreamPort)||1)-1);if(remaining)activeRequestsByPort.set(upstreamPort,remaining);else activeRequestsByPort.delete(upstreamPort)});
 		upstream.setTimeout(120_000,()=>upstream.destroy(new Error("Upstream timeout")));
 		request.once("aborted",()=>upstream.destroy());
 		response.once("close",()=>{if(!response.writableEnded)upstream.destroy()});
@@ -324,7 +337,8 @@ async function main(){
 		const previous=worker,previousPort=activePort,previousVersion=currentVersion,previousCommit=currentCommit;
 		let retirement=null;
 		nextWorker.once("exit",(code,signal)=>{if(stopping||worker!==nextWorker)return;if(previous.exitCode===null&&!previous.killed){worker=previous;activePort=previousPort;currentVersion=previousVersion;currentCommit=previousCommit;if(retirement)clearTimeout(retirement);console.error(`[updater] New version exited during rollback window (${code??signal}); restored ${currentVersion}+${currentCommit.slice(0,7)}`)}else{console.error(`[updater] Active worker exited (${code??signal}); public listener remains available with 503 responses`)}});
-		worker=nextWorker;activePort=nextPort;currentVersion=String(nextMarker.version);currentCommit=String(nextMarker.commit);console.log(`[updater] Switched to ${currentVersion}+${currentCommit.slice(0,7)} without closing public listener`);retirement=setTimeout(()=>previous.kill("SIGTERM"),30_000);retirement.unref()
+		worker=nextWorker;activePort=nextPort;currentVersion=String(nextMarker.version);currentCommit=String(nextMarker.commit);console.log(`[updater] Switched to ${currentVersion}+${currentCommit.slice(0,7)} without closing public listener`);
+		const retirementStarted=Date.now();const retirePrevious=()=>{if(previous.exitCode!==null||previous.killed)return;const active=activeRequestsByPort.get(previousPort)||0;if(active===0||Date.now()-retirementStarted>=5*60_000){previous.kill("SIGTERM");return}retirement=setTimeout(retirePrevious,1000);retirement.unref()};retirement=setTimeout(retirePrevious,60_000);retirement.unref()
 	}catch(error){console.error("[updater]",error)}finally{updating=false}};
 	const timer=setInterval(check,config.intervalSeconds*1000);timer.unref();setTimeout(check,10_000).unref();
 	const stop=signal=>{if(stopping)return;stopping=true;clearInterval(timer);proxy.close(()=>worker.kill(signal));setTimeout(()=>worker.kill(signal),5000).unref()};process.on("SIGTERM",()=>stop("SIGTERM"));process.on("SIGINT",()=>stop("SIGINT"));

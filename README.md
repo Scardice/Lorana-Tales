@@ -179,7 +179,7 @@ path = "./data/resources" # 分类资源目录
 index_sqlite_path = "" # SQLite 时可把索引 DB 单独放 SSD；留空则位于资源目录
 retention_days = 60 # 资源归档保留天数，和日志保留天数独立
 max_file_mb = 12 # 单个远程/内嵌资源的最大体积
-max_resources_per_log = 40 # 单份日志最多下载的 CQ 资源数，以及最多预取的唯一 QQ 头像数
+max_resources_per_log = 40 # 单次后台批次最多新增的 CQ 资源数，以及最多新增的唯一 QQ 头像数
 image_quality = 65 # PNG/JPEG/WebP 转 WebP 时的有损质量（1-100）
 audio_bitrate_kbps = 128 # 语音转为 Ogg Opus 的目标码率
 ffmpeg_path = "ffmpeg" # 系统 FFmpeg 路径；项目不捆绑 GPL 二进制
@@ -360,7 +360,7 @@ trusted_proxy_cidrs = ["127.0.0.1/32", "::1/128"]
 
 PNG、JPEG 和 WebP 会以 `image_quality` 重编码为 WebP；只有更小才替换原文件。GIF 会保持原格式和动画。语音会通过系统 FFmpeg 转为 128kbps（或 `audio_bitrate_kbps`）的 Ogg Opus；如果输出反而更大则保留较小的原文件。项目只调用运维环境提供的 FFmpeg，不捆绑其二进制，从而不把 GPL 分发义务混入 MIT 发布包。所有保存后的资源还会使用最高质量 Brotli 无损压缩；支持 Brotli 的浏览器直接得到压缩流，其他客户端由服务端即时解压。
 
-资源在有损处理后以 SHA-256 命名，相同内容只保存一份，并按 `cq-images/`、`cq-audio/`、`avatars/`、`uploads/`、`files/` 分类和哈希前缀分片。SQLite 模式使用独立资源索引 DB，`index_sqlite_path` 可放 SSD、资源目录可放机械盘；PostgreSQL 模式直接使用 PostgreSQL 索引。处理任务受 `max_concurrent_jobs` 限制，图片同时受 `max_image_pixels` 限制，整个目录受 `max_total_mb` 硬配额限制。`retention_days` 从最近访问计算，与日志的 `log_retention_days` 独立。未归档的 CQ 图片和语音在新版界面只显示 `【图片】` / `【语音】`，不会暴露 CQ 原文；用户也可以主动填写并验证一个 HTTP(S) 直链，这类资源直接由浏览器读取、不写入服务端。远程资源解析会锁定已校验的公网 IP，并在每次重定向后重新校验，避免 DNS 重绑定访问内网。被拒绝、超限、超时或下载失败的 CQ 资源不会导致日志上传失败。
+资源在有损处理后以 SHA-256 命名，相同内容只保存一份，并按 `cq-images/`、`cq-audio/`、`avatars/`、`uploads/`、`files/` 分类和哈希前缀分片。SQLite 模式使用独立资源索引 DB，`index_sqlite_path` 可放 SSD、资源目录可放机械盘；PostgreSQL 模式直接使用 PostgreSQL 索引。上传和打开日志只负责持久化/读取正文，资源归档在响应后按日志串行、资源有界并发执行，因此过期 CDN 链接不会拖住 API 响应。来源完整链接的 SHA-256、最终内容 SHA-256 和首次完整尝试的失败状态都会落入资源索引：已有来源直接跳过且不占新增额度；同一完整链接在带网络容错的归档尝试后仍失败，后续永久跳过，新签名链接仍会作为新来源尝试。超长日志优先扫描通常追加在末尾的新消息，已缓存或已失败来源会把批次额度让给其他未处理资源。处理任务受 `max_concurrent_jobs` 限制，图片同时受 `max_image_pixels` 限制，整个目录受 `max_total_mb` 硬配额限制。`retention_days` 从最近访问计算，与日志的 `log_retention_days` 独立。未归档的 CQ 图片和语音在新版界面只显示 `【图片】` / `【语音】`，不会暴露 CQ 原文；用户也可以主动填写并验证一个 HTTP(S) 直链，这类资源直接由浏览器读取、不写入服务端。远程资源解析会锁定已校验的公网 IP，并在每次重定向后重新校验，避免 DNS 重绑定访问内网。被拒绝、超限、超时或下载失败的 CQ 资源不会导致日志上传失败。
 
 旧版扁平 `cq-resources` 目录不会自动迁移。新版发现未带布局标记的非空目录会拒绝启动，避免自动更新时静默漏读或重写数据。先停服务并备份，然后预检、再显式执行：
 

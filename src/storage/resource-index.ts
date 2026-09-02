@@ -21,6 +21,10 @@ export type ResourceObjectRecord = {
 export interface ResourceIndex {
 	initialize(): Promise<void>;
 	findBySource(sourceHash: string): Promise<ResourceObjectRecord | null>;
+	findBySources(sourceHashes: string[]): Promise<Map<string, ResourceObjectRecord>>;
+	findDeferredSources(sourceHashes: string[], atMs: number): Promise<Set<string>>;
+	rememberFailure(sourceHash: string, reason: string, retryAfterMs: number): Promise<void>;
+	clearFailure(sourceHash: string): Promise<void>;
 	findObject(resourceId: string): Promise<ResourceObjectRecord | null>;
 	remember(record: ResourceObjectRecord, sourceHash?: string): Promise<void>;
 	touch(resourceId: string, atMs: number): Promise<void>;
@@ -89,10 +93,18 @@ export class SqliteResourceIndex implements ResourceIndex {
 				resource_id TEXT NOT NULL,
 				last_seen_at_ms INTEGER NOT NULL,
 				FOREIGN KEY(resource_id) REFERENCES resource_objects(resource_id) ON DELETE CASCADE
-			);
-			CREATE INDEX IF NOT EXISTS idx_resource_objects_access ON resource_objects(last_accessed_at_ms);
-			CREATE INDEX IF NOT EXISTS idx_resource_sources_resource ON resource_sources(resource_id);
-		`);
+				);
+				CREATE INDEX IF NOT EXISTS idx_resource_objects_access ON resource_objects(last_accessed_at_ms);
+				CREATE INDEX IF NOT EXISTS idx_resource_sources_resource ON resource_sources(resource_id);
+				CREATE TABLE IF NOT EXISTS resource_source_failures (
+					source_hash TEXT PRIMARY KEY,
+					reason TEXT NOT NULL,
+					attempts INTEGER NOT NULL DEFAULT 1,
+					last_failed_at_ms INTEGER NOT NULL,
+					retry_after_ms INTEGER NOT NULL
+				);
+				CREATE INDEX IF NOT EXISTS idx_resource_failures_retry ON resource_source_failures(retry_after_ms);
+			`);
 	}
 
 	private database() {
@@ -103,6 +115,39 @@ export class SqliteResourceIndex implements ResourceIndex {
 	async findBySource(sourceHash: string) {
 		return rowToResource(this.database().prepare(`SELECT o.* FROM resource_sources s JOIN resource_objects o ON o.resource_id=s.resource_id WHERE s.source_hash=?`).get(sourceHash) as Record<string, unknown> | undefined);
 	}
+
+	async findBySources(sourceHashes: string[]) {
+		const unique = [...new Set(sourceHashes.filter((value) => SOURCE_HASH_RE.test(value)))];
+		const found = new Map<string, ResourceObjectRecord>();
+		for (let offset = 0; offset < unique.length; offset += 500) {
+			const chunk = unique.slice(offset, offset + 500);
+			if (!chunk.length) continue;
+			const rows = this.database().prepare(`SELECT s.source_hash,o.* FROM resource_sources s JOIN resource_objects o ON o.resource_id=s.resource_id WHERE s.source_hash IN (${chunk.map(() => "?").join(",")})`).all(...chunk) as Record<string, unknown>[];
+			for (const row of rows) {
+				const record = rowToResource(row);
+				if (record) found.set(String(row.source_hash), record);
+			}
+		}
+		return found;
+	}
+
+	async findDeferredSources(sourceHashes: string[], atMs: number) {
+		const unique = [...new Set(sourceHashes.filter((value) => SOURCE_HASH_RE.test(value)))];
+		const deferred = new Set<string>();
+		for (let offset = 0; offset < unique.length; offset += 500) {
+			const chunk = unique.slice(offset, offset + 500);
+			if (!chunk.length) continue;
+			const rows = this.database().prepare(`SELECT source_hash FROM resource_source_failures WHERE retry_after_ms>? AND source_hash IN (${chunk.map(() => "?").join(",")})`).all(atMs, ...chunk) as Array<{ source_hash: string }>;
+			for (const row of rows) deferred.add(String(row.source_hash));
+		}
+		return deferred;
+	}
+	async rememberFailure(sourceHash: string, reason: string, retryAfterMs: number) {
+		if (!SOURCE_HASH_RE.test(sourceHash)) throw new Error("invalid resource source hash");
+		this.database().prepare(`INSERT INTO resource_source_failures(source_hash,reason,attempts,last_failed_at_ms,retry_after_ms) VALUES(?,?,1,?,?)
+			ON CONFLICT(source_hash) DO UPDATE SET reason=excluded.reason,attempts=resource_source_failures.attempts+1,last_failed_at_ms=excluded.last_failed_at_ms,retry_after_ms=excluded.retry_after_ms`).run(sourceHash, reason.slice(0, 240), Date.now(), retryAfterMs);
+	}
+	async clearFailure(sourceHash: string) { this.database().prepare("DELETE FROM resource_source_failures WHERE source_hash=?").run(sourceHash); }
 
 	async findObject(resourceId: string) {
 		return rowToResource(this.database().prepare("SELECT * FROM resource_objects WHERE resource_id=?").get(resourceId) as Record<string, unknown> | undefined);
@@ -116,6 +161,7 @@ export class SqliteResourceIndex implements ResourceIndex {
 				VALUES(?,?,?,?,?,?,?) ON CONFLICT(resource_id) DO UPDATE SET last_accessed_at_ms=excluded.last_accessed_at_ms`).run(record.resourceId, record.relativePath, record.category, record.mime, record.byteSize, record.createdAtMs, record.lastAccessedAtMs);
 			if (sourceHash) db.prepare(`INSERT INTO resource_sources(source_hash,resource_id,last_seen_at_ms) VALUES(?,?,?)
 				ON CONFLICT(source_hash) DO UPDATE SET resource_id=excluded.resource_id,last_seen_at_ms=excluded.last_seen_at_ms`).run(sourceHash, record.resourceId, record.lastAccessedAtMs);
+			if (sourceHash) db.prepare("DELETE FROM resource_source_failures WHERE source_hash=?").run(sourceHash);
 		})();
 	}
 
@@ -147,10 +193,18 @@ export class PostgresResourceIndex implements ResourceIndex {
 				source_hash TEXT PRIMARY KEY,
 				resource_id TEXT NOT NULL REFERENCES resource_objects(resource_id) ON DELETE CASCADE,
 				last_seen_at_ms BIGINT NOT NULL
-			);
-			CREATE INDEX IF NOT EXISTS idx_resource_objects_access ON resource_objects(last_accessed_at_ms);
-			CREATE INDEX IF NOT EXISTS idx_resource_sources_resource ON resource_sources(resource_id);
-			`);
+				);
+				CREATE INDEX IF NOT EXISTS idx_resource_objects_access ON resource_objects(last_accessed_at_ms);
+				CREATE INDEX IF NOT EXISTS idx_resource_sources_resource ON resource_sources(resource_id);
+				CREATE TABLE IF NOT EXISTS resource_source_failures (
+					source_hash TEXT PRIMARY KEY,
+					reason TEXT NOT NULL,
+					attempts INTEGER NOT NULL DEFAULT 1,
+					last_failed_at_ms BIGINT NOT NULL,
+					retry_after_ms BIGINT NOT NULL
+				);
+				CREATE INDEX IF NOT EXISTS idx_resource_failures_retry ON resource_source_failures(retry_after_ms);
+				`);
 		} finally {
 			await client.query("SELECT pg_advisory_unlock(hashtext('lorana-tales-schema-v2'))").catch(() => undefined);
 			client.release();
@@ -158,6 +212,25 @@ export class PostgresResourceIndex implements ResourceIndex {
 	}
 
 	async findBySource(sourceHash: string) { return rowToResource((await this.pool.query(`SELECT o.* FROM resource_sources s JOIN resource_objects o ON o.resource_id=s.resource_id WHERE s.source_hash=$1`, [sourceHash])).rows[0]); }
+	async findBySources(sourceHashes: string[]) {
+		const unique = [...new Set(sourceHashes.filter((value) => SOURCE_HASH_RE.test(value)))];
+		if (!unique.length) return new Map<string, ResourceObjectRecord>();
+		const rows = (await this.pool.query(`SELECT s.source_hash,o.* FROM resource_sources s JOIN resource_objects o ON o.resource_id=s.resource_id WHERE s.source_hash=ANY($1::text[])`, [unique])).rows;
+		const found = new Map<string, ResourceObjectRecord>();
+		for (const row of rows) { const record = rowToResource(row); if (record) found.set(String(row.source_hash), record); }
+		return found;
+	}
+	async findDeferredSources(sourceHashes: string[], atMs: number) {
+		const unique = [...new Set(sourceHashes.filter((value) => SOURCE_HASH_RE.test(value)))];
+		if (!unique.length) return new Set<string>();
+		return new Set<string>((await this.pool.query("SELECT source_hash FROM resource_source_failures WHERE retry_after_ms>$1 AND source_hash=ANY($2::text[])", [atMs, unique])).rows.map((row) => String(row.source_hash)));
+	}
+	async rememberFailure(sourceHash: string, reason: string, retryAfterMs: number) {
+		if (!SOURCE_HASH_RE.test(sourceHash)) throw new Error("invalid resource source hash");
+		await this.pool.query(`INSERT INTO resource_source_failures(source_hash,reason,attempts,last_failed_at_ms,retry_after_ms) VALUES($1,$2,1,$3,$4)
+			ON CONFLICT(source_hash) DO UPDATE SET reason=EXCLUDED.reason,attempts=resource_source_failures.attempts+1,last_failed_at_ms=EXCLUDED.last_failed_at_ms,retry_after_ms=EXCLUDED.retry_after_ms`, [sourceHash, reason.slice(0, 240), Date.now(), retryAfterMs]);
+	}
+	async clearFailure(sourceHash: string) { await this.pool.query("DELETE FROM resource_source_failures WHERE source_hash=$1", [sourceHash]); }
 	async findObject(resourceId: string) { return rowToResource((await this.pool.query("SELECT * FROM resource_objects WHERE resource_id=$1", [resourceId])).rows[0]); }
 
 	async remember(record: ResourceObjectRecord, sourceHash = "") {
@@ -169,6 +242,7 @@ export class PostgresResourceIndex implements ResourceIndex {
 				VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(resource_id) DO UPDATE SET last_accessed_at_ms=EXCLUDED.last_accessed_at_ms`, [record.resourceId, record.relativePath, record.category, record.mime, record.byteSize, record.createdAtMs, record.lastAccessedAtMs]);
 			if (sourceHash) await client.query(`INSERT INTO resource_sources(source_hash,resource_id,last_seen_at_ms) VALUES($1,$2,$3)
 				ON CONFLICT(source_hash) DO UPDATE SET resource_id=EXCLUDED.resource_id,last_seen_at_ms=EXCLUDED.last_seen_at_ms`, [sourceHash, record.resourceId, record.lastAccessedAtMs]);
+			if (sourceHash) await client.query("DELETE FROM resource_source_failures WHERE source_hash=$1", [sourceHash]);
 			await client.query("COMMIT");
 		} catch (error) { await client.query("ROLLBACK").catch(() => undefined); throw error; }
 		finally { client.release(); }

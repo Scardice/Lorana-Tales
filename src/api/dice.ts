@@ -429,6 +429,36 @@ async function archiveCqResources(
 	}
 }
 
+const activeResourceArchives = new Set<string>();
+
+function archiveCqResourcesInBackground(
+	env,
+	store: LogStore,
+	publicKey: string,
+	logContent: string,
+	request: Request,
+): void {
+	const resourceCache = env?.CQ_RESOURCE_CACHE as CqResourceCache | undefined;
+	if (!resourceCache?.enabled) return;
+	if (activeResourceArchives.has(publicKey)) return;
+	activeResourceArchives.add(publicKey);
+	let retryWithLatest = "";
+	void archiveCqResources(env, logContent, request).then(async (storedText) => {
+		if (storedText === logContent) return;
+		const replaced = await store.replaceStoredLog(publicKey, logContent, storedText);
+		if (!replaced) {
+			const latest = await store.readRawLog(publicKey);
+			if (latest && latest !== logContent) retryWithLatest = latest;
+			console.warn(`[resource-cache] Log ${publicKey} changed or disappeared before background archival completed`);
+		}
+	}).catch((error) => {
+		console.warn(`[resource-cache] Background log archival failed: ${error instanceof Error ? error.message : String(error)}`);
+	}).finally(() => {
+		activeResourceArchives.delete(publicKey);
+		if (retryWithLatest) archiveCqResourcesInBackground(env, store, publicKey, retryWithLatest, request);
+	});
+}
+
 async function uploadToBackupApi(
 	backupApiUrl: string,
 	uniformId: string,
@@ -502,13 +532,13 @@ async function persistLogOrBackup({
 	corsHeaders,
 }) {
 	try {
-		const storedText = await archiveCqResources(env, logContent, request);
 		await store.addLogRecord({
 			publicKey: key,
 			password,
 			uniformId,
-			storedText,
+			storedText: logContent,
 		});
+		archiveCqResourcesInBackground(env, store, key, logContent, request);
 		maybeCleanupAfterUpload(store, env);
 		return jsonResponse(
 			{ url: `${frontendUrl}?key=${key}#${password}` },
@@ -777,9 +807,9 @@ export async function handleDiceApiRequest({ request, env }) {
 				return jsonResponse({ error: "Data not found" }, 404, corsHeaders);
 			}
 			clearRateLimit(loadDataFailures, loadFailureKey);
-			const hydratedData = await archiveCqResources(env, storedData, request);
+			archiveCqResourcesInBackground(env, store, key, storedData, request);
 
-			return new Response(hydratedData, {
+			return new Response(storedData, {
 				status: 200,
 				headers: {
 					...corsHeaders,
@@ -885,13 +915,13 @@ export async function handleDiceApiRequest({ request, env }) {
 			);
 
 			try {
-				const storedText = await archiveCqResources(env, logContent, request);
 				await store.addLogRecord({
 					publicKey: key,
 					password,
 					uniformId,
-					storedText,
+					storedText: logContent,
 				});
+				archiveCqResourcesInBackground(env, store, key, logContent, request);
 				maybeCleanupAfterUpload(store, env);
 				return jsonResponse(
 					{ url: `${frontendUrl}?key=${key}#${password}` },
@@ -1118,13 +1148,13 @@ export async function handleDiceApiRequest({ request, env }) {
 				),
 			);
 
-			const storedText = await archiveCqResources(env, logContent, request);
 			await store.addLogRecord({
 				publicKey: key,
 				password,
 				uniformId,
-				storedText,
+				storedText: logContent,
 			});
+			archiveCqResourcesInBackground(env, store, key, logContent, request);
 			maybeCleanupAfterUpload(store, env);
 
 			return jsonResponse(

@@ -265,6 +265,32 @@ export class SqliteLogStore implements LogStore {
 		});
 	}
 
+	async replaceStoredLog(publicKey: string, expectedStoredText: string, storedText: string): Promise<boolean> {
+		const expectedHash = sha256(expectedStoredText);
+		const nextHash = sha256(storedText);
+		const next = deriveLogRecord(publicKey, storedText);
+		const replace = this.db.transaction(() => {
+			const row = this.db.prepare("SELECT id, stored_bytes, payload_sha256, updated_at FROM log_records WHERE public_key = ?").get(publicKey) as SqlRow | undefined;
+			if (!row || String(row.payload_sha256) !== expectedHash) return false;
+			if (expectedHash === nextHash) return true;
+			const oldBytes = Number(row.stored_bytes || 0);
+			const usage = Number((this.db.prepare("SELECT COALESCE(SUM(stored_bytes), 0) AS total FROM log_records").get() as SqlRow).total || 0);
+			const pageCount = Number(this.db.pragma("page_count", { simple: true }));
+			const pageSize = Number(this.db.pragma("page_size", { simple: true }));
+			const growth = Math.max(0, next.metadata.size.storedBytes - oldBytes);
+			if (Math.max(usage - oldBytes + next.metadata.size.storedBytes, pageCount * pageSize + growth) > this.maxTotalBytes) throw new Error("log_storage_quota_exceeded");
+			this.db.prepare("UPDATE log_payloads SET stored_json = ? WHERE log_id = ?").run(storedText, row.id);
+			this.db.prepare(`UPDATE log_records SET name=?,client=?,note=?,uploader_ip=?,updated_at=?,updated_at_ms=?,message_count=?,stored_bytes=?,encoded_bytes=?,compressed_bytes=?,decoded_bytes=?,decode_error=?,payload_sha256=? WHERE id=?`).run(
+				next.metadata.name, next.metadata.client, next.metadata.note, next.metadata.uploaderIp,
+				next.metadata.updatedAt || String(row.updated_at || ""), timestampMs(next.metadata.updatedAt || String(row.updated_at || "")),
+				next.metadata.messageCount, next.metadata.size.storedBytes, next.metadata.size.encodedBytes,
+				next.metadata.size.compressedBytes, next.metadata.size.decodedBytes, next.metadata.decodeError, nextHash, row.id,
+			);
+			return true;
+		});
+		return replace();
+	}
+
 	async readPublicLog(
 		publicKey: string,
 		password: string,

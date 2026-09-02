@@ -25,9 +25,17 @@ const inflateAsync = promisify(inflate);
 
 class WorkQueue {
 	private active = 0;
-	private waiting: Array<() => void> = [];
-	constructor(private readonly limit: number) {}
-	async run<T>(task: () => Promise<T>) { if (this.active >= this.limit) await new Promise<void>((resolve) => this.waiting.push(resolve)); this.active += 1; try { return await task(); } finally { this.active -= 1; this.waiting.shift()?.(); } }
+	private waiting: Array<{ resolve: () => void; reject: (error: Error) => void }> = [];
+	constructor(private readonly limit: number, private readonly maxWaiting = Number.MAX_SAFE_INTEGER) {}
+	async run<T>(task: () => Promise<T>) {
+		if (this.active >= this.limit) {
+			if (this.waiting.length >= this.maxWaiting) throw new Error("resource work queue is full");
+			await new Promise<void>((resolve, reject) => this.waiting.push({ resolve, reject }));
+		}
+		this.active += 1;
+		try { return await task(); }
+		finally { this.active -= 1; this.waiting.shift()?.resolve(); }
+	}
 }
 
 type ResourceKind = "image" | "audio" | "video" | "file";
@@ -95,7 +103,15 @@ function isStoredResourceEntry(entry: string) {
 }
 
 const MAX_DECODED_LOG_BYTES = 32 * 1024 * 1024;
+const MAX_CANDIDATES_PER_ARCHIVE = 50_000;
 const cleanupIntervalMs = 60 * 60 * 1000;
+
+function retryableResourceFailure(error: unknown): boolean {
+	const message = error instanceof Error ? error.message : String(error);
+	const status = Number(/resource download returned (\d{3})/.exec(message)?.[1] || 0);
+	if (status) return status === 408 || status === 425 || status === 429 || status >= 500;
+	return !/not allowed|private address|unsupported resource URL|redirect has no location|redirect limit|size limit|pixel count|MIME type|invalid resource/i.test(message);
+}
 
 let codecsPromise: Promise<{
 	decodePng: (data: ArrayBuffer) => Promise<ImageDataLike>;
@@ -259,11 +275,12 @@ function resourceCandidates(message: string): ResourceCandidate[] {
 
 const QQ_IDENTITY_KEYS = new Set(["imuserid", "im_user_id", "qq", "qqid", "qq_id", "uin"]);
 
-export function qqAvatarIds(value: unknown): string[] {
+export function qqAvatarIds(value: unknown, limit = Number.MAX_SAFE_INTEGER): string[] {
 	const result = new Set<string>();
 	const visit = (current: unknown) => {
+		if (result.size >= limit) return;
 		if (Array.isArray(current)) {
-			current.forEach(visit);
+			for (let index = current.length - 1; index >= 0 && result.size < limit; index -= 1) visit(current[index]);
 			return;
 		}
 		if (!current || typeof current !== "object") return;
@@ -272,7 +289,7 @@ export function qqAvatarIds(value: unknown): string[] {
 				const id = String(child ?? "").trim();
 				if (/^\d{5,12}$/.test(id)) result.add(id);
 			}
-			if (child && typeof child === "object") visit(child);
+			if (result.size < limit && child && typeof child === "object") visit(child);
 		}
 	};
 	visit(value);
@@ -490,6 +507,7 @@ export class CqResourceCache {
 	private lastCleanupAt = 0;
 	private readonly jobs: WorkQueue;
 	private readonly writes = new WorkQueue(1);
+	private readonly archives = new WorkQueue(1, 32);
 	private readonly recentTouches = new Map<string, number>();
 
 	constructor(options: CqResourceCacheOptions = {}, private readonly index: ResourceIndex) {
@@ -536,6 +554,13 @@ export class CqResourceCache {
 		storedText: string,
 		resourceBaseUrl = "",
 	): Promise<{ storedText: string; cachedCount: number; avatarCount: number }> {
+		return this.archives.run(() => this.archiveStoredLogNow(storedText, resourceBaseUrl));
+	}
+
+	private async archiveStoredLogNow(
+		storedText: string,
+		resourceBaseUrl = "",
+	): Promise<{ storedText: string; cachedCount: number; avatarCount: number }> {
 		if (!this.enabled) return { storedText, cachedCount: 0, avatarCount: 0 };
 		let stored: Record<string, unknown>;
 		try { stored = JSON.parse(storedText); } catch { return { storedText, cachedCount: 0, avatarCount: 0 }; }
@@ -547,62 +572,89 @@ export class CqResourceCache {
 		try { payload = JSON.parse(decoded.toString("utf-8")); } catch { return { storedText, cachedCount: 0, avatarCount: 0 }; }
 
 		let avatarCount = 0;
-		const avatarResults = await Promise.allSettled(qqAvatarIds(payload).slice(0, this.options.maxResourcesPerLog).map((id) => {
+		const avatarCandidates = new Map<string, ResourceCandidate>(qqAvatarIds(payload, MAX_CANDIDATES_PER_ARCHIVE).map((id) => {
 			const remoteUrl = `https://q1.qlogo.cn/g?b=qq&nk=${id}&s=100`;
-			return this.cacheCandidate({ source: remoteUrl, remoteUrl, kind: "image", category: "avatars" });
+			return [remoteUrl, { source: remoteUrl, remoteUrl, kind: "image", category: "avatars" }];
 		}));
+		const avatarHashes = new Map([...avatarCandidates.keys()].map((source) => [source, this.sourceIndexKey(source)]));
+		const existingAvatars = await this.lookupSourceResources(avatarCandidates, resourceBaseUrl);
+		const deferredAvatars = await this.index.findDeferredSources([...avatarHashes.values()], Date.now());
+		const avatarResults = await Promise.allSettled([...avatarCandidates.values()]
+			.filter((candidate) => !existingAvatars.has(candidate.source) && !deferredAvatars.has(avatarHashes.get(candidate.source) || ""))
+			.slice(0, this.options.maxResourcesPerLog)
+			.map(async (candidate) => {
+				try {
+					const result = await this.cacheCandidateForArchive(candidate);
+					await this.index.clearFailure(avatarHashes.get(candidate.source) || "");
+					return result;
+				} catch (error) {
+					await this.index.rememberFailure(avatarHashes.get(candidate.source) || "", error instanceof Error ? error.message : String(error), Number.MAX_SAFE_INTEGER);
+					throw error;
+				}
+			}));
 		for (const result of avatarResults) {
 			if (result.status === "fulfilled") avatarCount += 1;
 			else console.warn(`[resource-cache] QQ avatar skipped: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`);
 		}
 
 		let videoCount = 0;
-		const replaceVideos = (value: unknown): unknown => {
+		const candidates = new Map<string, ResourceCandidate>();
+		const collectAndReplaceVideos = (value: unknown): unknown => {
 			if (typeof value === "string") {
+				if (value.includes("[CQ:") && candidates.size < MAX_CANDIDATES_PER_ARCHIVE) {
+					for (const candidate of resourceCandidates(value)) {
+						if (candidate.remoteUrl?.includes("/cq-resources/")) continue;
+						if (!candidates.has(candidate.source)) candidates.set(candidate.source, candidate);
+						if (candidates.size >= MAX_CANDIDATES_PER_ARCHIVE) break;
+					}
+				}
 				return value.replace(/\[CQ:(?:video|shortvideo),(?:[^\[\]]|\[[^\]]*\])*\]/gi, () => {
 					videoCount += 1;
 					return "【视频】";
 				});
 			}
-			if (Array.isArray(value)) return value.map(replaceVideos);
+			if (Array.isArray(value)) {
+				for (let index = value.length - 1; index >= 0; index -= 1) value[index] = collectAndReplaceVideos(value[index]);
+				return value;
+			}
 			if (value && typeof value === "object") {
 				for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-					(value as Record<string, unknown>)[key] = replaceVideos(child);
+					(value as Record<string, unknown>)[key] = collectAndReplaceVideos(child);
 				}
 			}
 			return value;
 		};
-		payload = replaceVideos(payload);
+		payload = collectAndReplaceVideos(payload);
 
-		const messages: string[] = [];
-		const visit = (value: unknown) => {
-			if (typeof value === "string" && value.includes("[CQ:")) messages.push(value);
-			else if (Array.isArray(value)) value.forEach(visit);
-			else if (value && typeof value === "object") Object.values(value as Record<string, unknown>).forEach(visit);
-		};
-		visit(payload);
-		const candidates = messages.flatMap(resourceCandidates);
-		const replacements = new Map<string, string>();
-		for (const candidate of candidates) {
-			if (replacements.size >= this.options.maxResourcesPerLog || replacements.has(candidate.source)) continue;
+		const sourceHashes = new Map([...candidates.keys()].map((source) => [source, this.sourceIndexKey(source)]));
+		const replacements = await this.lookupSourceResources(candidates, resourceBaseUrl);
+		const deferred = await this.index.findDeferredSources([...sourceHashes.values()], Date.now());
+		const uncached = [...candidates.values()].filter((candidate) => !replacements.has(candidate.source) && !deferred.has(sourceHashes.get(candidate.source) || "")).slice(0, this.options.maxResourcesPerLog);
+		const results = await Promise.allSettled(uncached.map(async (candidate) => {
 			try {
-				replacements.set(
-					candidate.source,
-					this.publicResourceUrl(
-							(await this.cacheCandidate(candidate)).resourceId,
-						resourceBaseUrl,
-					),
-				);
+				const resourceId = (await this.cacheCandidateForArchive(candidate)).resourceId;
+				await this.index.clearFailure(sourceHashes.get(candidate.source) || "");
+				return { source: candidate.source, resourceId };
 			} catch (error) {
-				console.warn(`[resource-cache] Resource skipped: ${error instanceof Error ? error.message : String(error)}`);
+				await this.index.rememberFailure(sourceHashes.get(candidate.source) || "", error instanceof Error ? error.message : String(error), Number.MAX_SAFE_INTEGER);
+				throw error;
 			}
+		}));
+		for (const result of results) {
+			if (result.status === "fulfilled") replacements.set(result.value.source, this.publicResourceUrl(result.value.resourceId, resourceBaseUrl));
+			else console.warn(`[resource-cache] Resource skipped: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`);
 		}
 		if (!replacements.size && !videoCount) return { storedText, cachedCount: 0, avatarCount };
 
 		const rewrite = (value: unknown): unknown => {
 			if (typeof value === "string") {
 				let next = value;
-				for (const [source, replacement] of replacements) next = next.replaceAll(source, replacement);
+				if (next.includes("[CQ:")) {
+					for (const candidate of resourceCandidates(next)) {
+						const replacement = replacements.get(candidate.source);
+						if (replacement) next = next.replaceAll(candidate.source, replacement);
+					}
+				}
 				// A stable file/file_unique key can still resolve after a temporary URL
 				// expires. Once any attribute points at our cache, make every media URL
 				// in that CQ tag use the same local asset so clients never prefer stale upstream data.
@@ -657,10 +709,39 @@ export class CqResourceCache {
 		});
 	}
 
+	private async cacheCandidateForArchive(candidate: ResourceCandidate) {
+		for (let attempt = 1; ; attempt += 1) {
+			try { return await this.cacheCandidate(candidate); }
+			catch (error) {
+				if (attempt >= 2 || !candidate.remoteUrl || !retryableResourceFailure(error)) throw error;
+				await new Promise((resolve) => setTimeout(resolve, 300));
+			}
+		}
+	}
+
 	private sourceIndexKey(source:string){return crypto.createHash("sha256").update(source).digest("hex")}
 	private absoluteResourcePath(record: Pick<ResourceObjectRecord,"relativePath">){const root=path.resolve(this.options.storagePath),target=path.resolve(root,record.relativePath);if(target!==root&&!target.startsWith(`${root}${path.sep}`))throw new Error("invalid resource index path");return target}
 	private async touch(record: ResourceObjectRecord){const now=Date.now(),previous=this.recentTouches.get(record.resourceId)||record.lastAccessedAtMs;if(now-previous<60*60*1000)return;this.recentTouches.set(record.resourceId,now);if(this.recentTouches.size>10000)this.recentTouches.delete(this.recentTouches.keys().next().value as string);await this.index.touch(record.resourceId,now)}
 	private async lookupSourceResource(source:string){const record=await this.index.findBySource(this.sourceIndexKey(source));if(!record)return"";try{await fs.access(this.absoluteResourcePath(record));await this.touch(record);return record.resourceId}catch{await this.index.deleteObject(record.resourceId);return""}}
+	private async lookupSourceResources(candidates: Map<string, ResourceCandidate>, resourceBaseUrl: string) {
+		const sourceByHash = new Map<string, string>();
+		for (const source of candidates.keys()) sourceByHash.set(this.sourceIndexKey(source), source);
+		const indexed = await this.index.findBySources([...sourceByHash.keys()]);
+		const replacements = new Map<string, string>();
+		const entries = [...indexed.entries()];
+		for (let offset = 0; offset < entries.length; offset += 32) {
+			await Promise.all(entries.slice(offset, offset + 32).map(async ([sourceHash, record]) => {
+				const source = sourceByHash.get(sourceHash);
+				if (!source) return;
+				try {
+					await fs.access(this.absoluteResourcePath(record));
+					await this.touch(record);
+					replacements.set(source, this.publicResourceUrl(record.resourceId, resourceBaseUrl));
+				} catch { await this.index.deleteObject(record.resourceId); }
+			}));
+		}
+		return replacements;
+	}
 
 	private async writeResource(resourceId: string, bytes: Buffer, mime: string, category: ResourceCategory): Promise<boolean> {
 		return this.writes.run(async () => {

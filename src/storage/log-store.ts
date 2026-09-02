@@ -86,6 +86,7 @@ export interface AddLogRecordInput {
 
 export interface LogStore {
 	addLogRecord(input: AddLogRecordInput): Promise<LogMetadata>;
+	replaceStoredLog(publicKey: string, expectedStoredText: string, storedText: string): Promise<boolean>;
 	readPublicLog(publicKey: string, password: string): Promise<string | null>;
 	listLogMetadata(options?: LogListOptions): Promise<LogListResult>;
 	readLogDetail(publicKey: string): Promise<LogDetail | null>;

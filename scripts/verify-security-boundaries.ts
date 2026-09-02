@@ -31,24 +31,40 @@ assert.equal(decodeBase64UploadLimited("not base64!", 1024), null);
 assert.equal(decodeBase64UploadLimited("=", 1024), null);
 assert.equal(decodeBase64UploadLimited("YQ=", 1024), null);
 assert.equal(Buffer.from(decodeBase64UploadLimited("YQ==", 1024) || []).toString(), "a");
-assert.deepEqual(qqAvatarIds({ items: [{ IMUserId: "732899935" }, { imUserId: 3482215720 }, { message: "不要把正文 123456789 当作 QQ" }], nested: { qq: "10001", userId: "999999999" } }), ["732899935", "3482215720", "10001"]);
+assert.deepEqual(qqAvatarIds({ items: [{ IMUserId: "732899935" }, { imUserId: 3482215720 }, { message: "不要把正文 123456789 当作 QQ" }], nested: { qq: "10001", userId: "999999999" } }), ["3482215720", "732899935", "10001"]);
+assert.deepEqual(qqAvatarIds({ items: [{ IMUserId: "10001" }, { IMUserId: "10002" }, { IMUserId: "10003" }] }, 2), ["10003", "10002"], "huge append-oriented logs must bound avatar collection and prioritize the newest entries");
 assert.deepEqual(qqAvatarIds({ IMUserId: "1234", qq: "1234567890123", uin: "not-a-number" }), []);
 
 const oldStoredLog = JSON.stringify({ data: "old-log" });
 const hydratedStoredLog = JSON.stringify({ data: "hydrated-old-log" });
 let oldLogHydrated = 0;
+let oldLogReplaced = 0;
 const oldLogResponse = await handleDiceApiRequest({
 	request: new Request("http://localhost/api/dice/load_data?key=old-link&password=secret"),
 	env: {
-		LOG_STORE: { readPublicLog: async () => oldStoredLog },
+		LOG_STORE: {
+			readPublicLog: async () => oldStoredLog,
+			readRawLog: async () => oldStoredLog,
+			replaceStoredLog: async (_key: string, expected: string, replacement: string) => {
+				assert.equal(expected, oldStoredLog);
+				assert.equal(replacement, hydratedStoredLog);
+				oldLogReplaced += 1;
+				return true;
+			},
+		},
 		CQ_RESOURCE_CACHE: { enabled: true, archiveStoredLog: async (text: string) => { oldLogHydrated += 1; assert.equal(text, oldStoredLog); return { storedText: hydratedStoredLog, cachedCount: 1, avatarCount: 1 }; } },
 	},
 });
 assert.equal(oldLogResponse.status, 200);
-assert.equal(await oldLogResponse.text(), hydratedStoredLog);
+assert.equal(await oldLogResponse.text(), oldStoredLog, "opening a log must not wait for remote resource hydration");
+await new Promise((resolve) => setImmediate(resolve));
 assert.equal(oldLogHydrated, 1, "opening an old API link must retry CQ and QQ avatar hydration");
+assert.equal(oldLogReplaced, 1, "old API links must persist completed background hydration");
 
 const uploadOrder: string[] = [];
+let finishUploadArchival!: (value: { storedText: string; cachedCount: number; avatarCount: number }) => void;
+const delayedUploadArchival = new Promise<{ storedText: string; cachedCount: number; avatarCount: number }>((resolve) => { finishUploadArchival = resolve; });
+let initiallyStoredText = "";
 const uploadBody = new FormData();
 uploadBody.set("name", "resource hydration upload");
 uploadBody.set("uniform_id", "security:resource-hydration");
@@ -59,12 +75,19 @@ const uploadResponse = await handleDiceApiRequest({
 	env: {
 		CLEANUP_AFTER_UPLOAD: "false",
 		INJECTION_GUARD_ENABLED: "false",
-		LOG_STORE: { addLogRecord: async () => { uploadOrder.push("store"); } },
-		CQ_RESOURCE_CACHE: { enabled: true, archiveStoredLog: async (text: string) => { uploadOrder.push("resources"); return { storedText: text, cachedCount: 1, avatarCount: 1 }; } },
+			LOG_STORE: {
+				addLogRecord: async (input: { storedText: string }) => { initiallyStoredText = input.storedText; uploadOrder.push("store"); },
+				replaceStoredLog: async (_key: string, expected: string, stored: string) => { assert.equal(expected, initiallyStoredText); assert.equal(stored, hydratedStoredLog); uploadOrder.push("replace"); return true; },
+				readRawLog: async () => initiallyStoredText,
+			},
+		CQ_RESOURCE_CACHE: { enabled: true, archiveStoredLog: async () => { uploadOrder.push("resources"); return delayedUploadArchival; } },
 	},
 });
 assert.equal(uploadResponse.status, 200);
-assert.deepEqual(uploadOrder, ["resources", "store"], "API upload must prepare CQ resources and QQ avatars before persisting the link");
+assert.deepEqual(uploadOrder, ["store", "resources"], "API upload must persist and return without waiting for remote resources");
+finishUploadArchival({ storedText: hydratedStoredLog, cachedCount: 1, avatarCount: 1 });
+await new Promise((resolve) => setImmediate(resolve));
+assert.deepEqual(uploadOrder, ["store", "resources", "replace"], "background resource archival must update the stored log after it completes");
 
 const quotaStore = new SqliteLogStore(":memory:", { maxTotalBytes: 32 });
 await assert.rejects(
@@ -77,6 +100,10 @@ const writableQuotaStore = new SqliteLogStore(":memory:", { maxTotalBytes: 2 * 1
 const withinQuotaPayload = JSON.stringify({ data: "ok" });
 await writableQuotaStore.addLogRecord({ publicKey: "within-quota", password: "secret", uniformId: "test:within", storedText: withinQuotaPayload });
 assert.equal(await writableQuotaStore.readPublicLog("within-quota", "secret"), withinQuotaPayload);
+const hydratedQuotaPayload = JSON.stringify({ data: "hydrated" });
+assert.equal(await writableQuotaStore.replaceStoredLog("within-quota", withinQuotaPayload, hydratedQuotaPayload), true);
+assert.equal(await writableQuotaStore.readPublicLog("within-quota", "secret"), hydratedQuotaPayload);
+assert.equal(await writableQuotaStore.replaceStoredLog("within-quota", withinQuotaPayload, withinQuotaPayload), false, "stale background writes must not replace a newer payload");
 writableQuotaStore.close();
 
 for (const address of [
