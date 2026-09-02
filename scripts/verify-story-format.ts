@@ -109,6 +109,14 @@ document.messages.push(
 		performance: { imagePreview: { openAfterMs: 100, durationMs: 1500 }, replyPreview: { durationMs: 800 } },
 		replyToId: "message-text",
 	},
+	{
+		id: "message-reply-image",
+		characterId: "alice",
+		time: 789,
+		kind: "text",
+		text: "这张图可以直接在引用中预览。",
+		replyToId: "message-image",
+	},
 );
 document.effectTracks.push({ id: "effect-one", effect: "low-health", color: "orange", startMessageId: "message-text", endMessageId: "message-image" });
 document.characterStateEvents.push({ id: "state-one", characterId: "alice", state: "dead", afterMessageId: "message-text", label: "阵亡" });
@@ -307,6 +315,9 @@ assert.match(html, /persistent-layer/);
 assert.match(html, /characterStateByMessage/);
 assert.match(html, /reaction-affection/);
 assert.match(html, /typingDurationMs/);
+assert.match(html, /className='reply-image'/, "离线播放器应为被引用的图片生成缩略预览");
+assert.match(html, /\.typing\.right/, "离线播放器输入提示应支持右侧角色位置");
+assert.match(html, /\.typing\.narrator/, "离线播放器输入提示应支持旁白居中位置");
 assert.match(html, /function scheduleEffects\(m\)/, "离线播放器必须调度多段特效");
 assert.match(html, /v5-html-snow/, "离线播放器必须包含连续飘雪动画");
 assert.match(html, /lensRaindrops/, "离线播放器必须内嵌镜头雨痕资源");
