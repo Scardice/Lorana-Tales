@@ -69,7 +69,7 @@
 		"randomcolor": "^0.6.2",
 		"sortablejs": "1.15.7",
 		"svg-captcha": "1.4.0",
-		"toml": "^3.0.0",
+		"toml": "^4.2.0",
 		"ua-parser-js": "2.0.10",
 		"vue": "^3.5.12",
 		"vue3-virtual-scroll-list": "^0.2.1"
