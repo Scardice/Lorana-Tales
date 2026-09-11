@@ -11,6 +11,7 @@ import { AccountStore } from "../src/accounts/account-store";
 import { AccountService } from "../src/accounts/router";
 import { getClientIp } from "../src/server/client-ip";
 import { storyFromLogItems, storyStreamingText } from "../web/src/story/model";
+import { insertStoryArchive, suggestedCharacterImportChoices, type StoryCharacterImportChoice } from "../web/src/story/insert-import";
 import { isStoryAudioMessage, isStoryCqMessage, isStoryImageMessage, isStoryMessageFiltered, isStoryOffTopicText } from "../web/src/story/message-filter";
 import { createStoryPackage, readStoryPackage } from "../web/src/story/package";
 import { createPerformanceHtml } from "../web/src/story/standalone-performance";
@@ -121,6 +122,84 @@ document.messages.push(
 document.effectTracks.push({ id: "effect-one", effect: "low-health", color: "orange", startMessageId: "message-text", endMessageId: "message-image" });
 document.characterStateEvents.push({ id: "state-one", characterId: "alice", state: "dead", afterMessageId: "message-text", label: "阵亡" });
 const archive: StoryArchive = { document, assets: new Map([["avatar-one", bytes], ["image-two", bytes]]) };
+
+const insertionDocument = storyFromLogItems([], [], { title: "当前工程" });
+insertionDocument.characters.push({
+	id: "existing-alice",
+	name: "当前爱丽丝",
+	imUserId: "12345678",
+	position: "right",
+	color: "#336699",
+	paletteId: "deep-blue",
+	bubblePaletteId: "",
+	avatarSource: "platform",
+	narratorAvatar: false,
+	isNarrator: false,
+	isDice: false,
+	hidden: false,
+});
+insertionDocument.messages.push(
+	{ id: "anchor-before", characterId: "existing-alice", kind: "text", text: "插入点之前" },
+	{ id: "anchor-after", characterId: "existing-alice", kind: "text", text: "插入点之后" },
+);
+const incomingInsertionDocument = structuredClone(document);
+incomingInsertionDocument.characters.push(
+	{
+		id: "bob-source",
+		name: "文件里的 Bob",
+		imUserId: "87654321",
+		position: "left",
+		color: "#112233",
+		paletteId: "forest",
+		bubblePaletteId: "",
+		avatar: { id: "shared-avatar", mime: "image/png", name: "bob.png" },
+		avatarSource: "package",
+		narratorAvatar: false,
+		isNarrator: false,
+		isDice: false,
+		hidden: false,
+	},
+	{
+		id: "ignored-source",
+		name: "应忽略",
+		imUserId: "",
+		position: "left",
+		color: "#444444",
+		paletteId: "neutral",
+		bubblePaletteId: "",
+		avatarSource: "platform",
+		narratorAvatar: false,
+		isNarrator: false,
+		isDice: false,
+		hidden: false,
+	},
+);
+incomingInsertionDocument.messages.push(
+	{ id: "bob-message", characterId: "bob-source", kind: "text", text: "Bob 被插入" },
+	{ id: "ignored-message", characterId: "ignored-source", kind: "text", text: "这条不能出现" },
+);
+const currentInsertionArchive: StoryArchive = { document: insertionDocument, assets: new Map([["shared-avatar", new Uint8Array([1])]]) };
+const incomingInsertionArchive: StoryArchive = { document: incomingInsertionDocument, assets: new Map(archive.assets).set("shared-avatar", new Uint8Array([2])) };
+const suggestedChoices = suggestedCharacterImportChoices(currentInsertionArchive, incomingInsertionArchive);
+assert.equal(suggestedChoices.find((choice) => choice.sourceCharacterId === "alice")?.action, "merge", "相同 QQ 角色应默认合并");
+assert.equal(suggestedChoices.find((choice) => choice.sourceCharacterId === "bob-source")?.action, "new", "当前工程没有的角色应默认新建");
+const insertionChoices: StoryCharacterImportChoice[] = suggestedChoices.map((choice) => {
+	if (choice.sourceCharacterId === "bob-source") return { ...choice, action: "new", character: { name: "新建 Bob" } };
+	if (choice.sourceCharacterId === "ignored-source") return { sourceCharacterId: choice.sourceCharacterId, action: "ignore" };
+	return choice;
+});
+const inserted = insertStoryArchive(currentInsertionArchive, incomingInsertionArchive, insertionChoices, 1);
+assert.equal(inserted.insertedMessageIds.length, 4, "忽略角色的消息不应插入");
+assert.deepEqual(inserted.archive.document.messages.map((message) => message.kind === "text" ? message.text : message.alt), ["插入点之前", "你好，世界！", "测试图片", "这张图可以直接在引用中预览。", "Bob 被插入", "插入点之后"]);
+const insertedAliceMessages = inserted.archive.document.messages.filter((message) => inserted.insertedMessageIds.includes(message.id) && message.characterId === "existing-alice");
+assert.equal(insertedAliceMessages.length, 3, "相同 QQ 的导入消息应映射到当前角色");
+assert.equal(insertedAliceMessages[1]?.replyToId, insertedAliceMessages[0]?.id, "插入消息之间的引用关系应重映射");
+const createdBob = inserted.archive.document.characters.find((character) => character.name === "新建 Bob");
+assert.ok(createdBob?.avatar && createdBob.avatar.id !== "shared-avatar", "冲突的头像资源 ID 应安全重映射");
+assert.deepEqual(inserted.archive.assets.get(createdBob!.avatar!.id), new Uint8Array([2]));
+assert.equal(inserted.archive.document.effectTracks.at(-1)?.startMessageId, insertedAliceMessages[0]?.id, "区间特效起点应重映射");
+assert.equal(inserted.archive.document.characterStateEvents.at(-1)?.characterId, "existing-alice", "角色状态应跟随合并后的角色");
+assert.equal(insertedAliceMessages[0]?.performance?.effects?.[1]?.interaction?.targetCharacterId, insertionDocument.characters.find((character) => character.isNarrator)?.id, "叠加互动目标应重映射");
 
 assert.equal(
 	storyStreamingText("开始[CQ:at,qq=12345678] [CQ:face,id=14] [CQ:image,file=expired] [CQ:unknown,payload=very-long]结束", document.characters, true),
