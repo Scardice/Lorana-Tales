@@ -63,7 +63,7 @@
 		"hyparquet-compressors": "^1.1.1",
 		"hyperparam": "^0.2.49",
 		"lodash-es": "^4.17.21",
-		"nodemailer": "9.0.5",
+		"nodemailer": "9.1.1",
 		"pg": "8.23.0",
 		"pinia": "^2.2.6",
 		"randomcolor": "^0.6.2",
