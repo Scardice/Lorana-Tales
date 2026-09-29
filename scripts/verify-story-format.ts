@@ -12,7 +12,7 @@ import { AccountService } from "../src/accounts/router";
 import { getClientIp } from "../src/server/client-ip";
 import { storyFromLogItems, storyStreamingText } from "../web/src/story/model";
 import { insertStoryArchive, suggestedCharacterImportChoices, type StoryCharacterImportChoice } from "../web/src/story/insert-import";
-import { isStoryAudioMessage, isStoryCqMessage, isStoryImageMessage, isStoryMessageFiltered, isStoryOffTopicText } from "../web/src/story/message-filter";
+import { isStoryAudioMessage, isStoryCqMessage, isStoryImageMessage, isStoryMessageFiltered, isStoryOffTopicText, withoutStoryCqCodes } from "../web/src/story/message-filter";
 import { createStoryPackage, readStoryPackage } from "../web/src/story/package";
 import { createPerformanceHtml } from "../web/src/story/standalone-performance";
 import type { StoryArchive, StoryCharacter, StoryMessage } from "../web/src/story/types";
@@ -43,6 +43,15 @@ assert.equal(isStoryCqMessage(cqText("普通正文")), false);
 assert.equal(isStoryCqMessage(imageMessage), true, "所有 CQ 过滤应覆盖导入后已结构化的图片");
 assert.equal(isStoryMessageFiltered(audioMessage, { hideAudio: true }), true);
 assert.equal(isStoryMessageFiltered(cqText("[CQ:face,id=14]"), { hideCqCodes: true }), true);
+const quotedCqMessage: StoryMessage = { id: "quoted-cq", characterId: "character-narrator", kind: "text", text: "[CQ:reply,id=source-1][CQ:at,qq=123] 引用后的正文", replyToId: "source-1" };
+assert.deepEqual(withoutStoryCqCodes(quotedCqMessage), { ...quotedCqMessage, text: "引用后的正文" }, "清除 CQ 码必须保留引用消息本体及 replyToId");
+assert.equal(withoutStoryCqCodes(cqText("[CQ:face,id=14]")), null, "只有 CQ 码且没有正文的消息才应清除");
+assert.equal(withoutStoryCqCodes(imageMessage), null, "结构化 CQ 图片清除后没有消息正文");
+assert.equal(
+	(withoutStoryCqCodes(cqText("前文[CQ:image,summary=[动画表情],url=[https://example.invalid/a.png](https://example.invalid/a.png)]后文")) as StoryMessage & { text: string }).text,
+	"前文后文",
+	"包含嵌套方括号和 Markdown URL 的 CQ 码也应完整移除",
+);
 assert.equal(
 	getClientIp(forwardedRequest("127.0.0.1", "198.51.100.20") as never, ["127.0.0.1/32"]),
 	"198.51.100.20",
