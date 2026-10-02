@@ -81,6 +81,12 @@ export function isStoryMessageFiltered(message: StoryMessage, settings: {
 		(settings.hideDiceCommands && isStoryDiceCommandMessage(message)) ||
 		(settings.hideImages && isStoryImageMessage(message)) ||
 		(settings.hideAudio && isStoryAudioMessage(message)) ||
-		(settings.hideCqCodes && isStoryCqMessage(message))
+		(settings.hideCqCodes && isStoryCqMessage(message) && !withoutStoryCqCodes(message))
 	);
+}
+
+/** A display-only copy. Never use this value as the source for editing/saving. */
+export function storyMessageForDisplay(message: StoryMessage, settings: Parameters<typeof isStoryMessageFiltered>[1]): StoryMessage | null {
+	if (isStoryMessageFiltered(message, settings)) return null;
+	return settings.hideCqCodes && isStoryCqMessage(message) ? withoutStoryCqCodes(message) : message;
 }

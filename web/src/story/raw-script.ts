@@ -215,6 +215,6 @@ export const STORY_SCRIPT_HELP = `<!-- Lorana Tales Story Language 2 -->
 • <set name="hideDiceCommands" value="on"> 隐藏以 .、。或 / 开头的骰子指令，保留骰子结果。
 • <set name="hideImages" value="on"> 隐藏图片消息，不删除原消息。
 • <set name="hideAudio" value="on"> 隐藏语音消息，不删除原消息。
-• <set name="hideCqCodes" value="on"> 隐藏所有 CQ 码消息，包括图片、语音和其他 CQ 消息。
+• <set name="hideCqCodes" value="on"> 隐藏 CQ 内容，保留混合消息的普通正文与引用关系；纯 CQ、图片和语音消息隐藏。
 • <set name="enterKeyBehavior" value="auto"> 编辑器回车按设备决定；也可写 send 或 newline。
 • id 和 at 可省略；导出时自动写入稳定 id，以保留演出编排。`;

@@ -13,7 +13,7 @@ import { AccountService } from "../src/accounts/router";
 import { getClientIp } from "../src/server/client-ip";
 import { storyFromLogItems, storyStreamingText } from "../web/src/story/model";
 import { insertStoryArchive, suggestedCharacterImportChoices, type StoryCharacterImportChoice } from "../web/src/story/insert-import";
-import { isStoryAudioMessage, isStoryCqMessage, isStoryImageMessage, isStoryMessageFiltered, isStoryOffTopicText, withoutStoryCqCodes } from "../web/src/story/message-filter";
+import { isStoryAudioMessage, isStoryCqMessage, isStoryImageMessage, isStoryMessageFiltered, isStoryOffTopicText, withoutStoryCqCodes, storyMessageForDisplay } from "../web/src/story/message-filter";
 import { createStoryPackage, readStoryPackage } from "../web/src/story/package";
 import { createPerformanceHtml } from "../web/src/story/standalone-performance";
 import type { StoryArchive, StoryCharacter, StoryMessage } from "../web/src/story/types";
@@ -46,6 +46,11 @@ assert.equal(isStoryMessageFiltered(audioMessage, { hideAudio: true }), true);
 assert.equal(isStoryMessageFiltered(cqText("[CQ:face,id=14]"), { hideCqCodes: true }), true);
 const quotedCqMessage: StoryMessage = { id: "quoted-cq", characterId: "character-narrator", kind: "text", text: "[CQ:reply,id=source-1][CQ:at,qq=123] 引用后的正文", replyToId: "source-1" };
 assert.deepEqual(withoutStoryCqCodes(quotedCqMessage), { ...quotedCqMessage, text: "引用后的正文" }, "清除 CQ 码必须保留引用消息本体及 replyToId");
+assert.equal(isStoryMessageFiltered(quotedCqMessage,{hideCqCodes:true}),false,"CQ filtering must not hide a reply's body");
+assert.deepEqual(storyMessageForDisplay(quotedCqMessage,{hideCqCodes:true}),{...quotedCqMessage,text:"引用后的正文"});
+assert.equal(storyMessageForDisplay(quotedCqMessage,{hideCqCodes:false}),quotedCqMessage,"Turning filtering off restores the original without mutation");
+assert.ok(quotedCqMessage.text.startsWith("[CQ:reply"),"Display filtering must not modify source text");
+assert.equal(storyMessageForDisplay(cqText("[CQ:reply,id=1]（场外）"),{hideOffTopic:true,hideCqCodes:true}),null,"Off-topic filtering still evaluates original text");
 assert.equal(withoutStoryCqCodes(cqText("[CQ:face,id=14]")), null, "只有 CQ 码且没有正文的消息才应清除");
 assert.equal(withoutStoryCqCodes(imageMessage), null, "结构化 CQ 图片清除后没有消息正文");
 assert.equal(
@@ -423,6 +428,16 @@ new vm.Script(scripts.at(-1)![1], { filename: "lorana-offline-runtime.js" });
 if (process.env.LORANA_QA_HTML) await writeFile(process.env.LORANA_QA_HTML, html, "utf-8");
 
 const largeDocument = structuredClone(restored.document);
+const cqFilteredArchive: StoryArchive = {document:structuredClone(restored.document),assets:new Map()};
+cqFilteredArchive.document.settings.hideCqCodes=true;
+cqFilteredArchive.document.messages=[quotedCqMessage,cqText("[CQ:face,id=14]")];
+const cqFilteredHtml=await createPerformanceHtml(cqFilteredArchive,async()=>"",async()=>"");
+const cqPayload=JSON.parse(/<script id="lorana-performance" type="application\/json">([\s\S]*?)<\/script>/.exec(cqFilteredHtml)![1]);
+assert.equal(cqPayload.messages[0].hidden,false);
+assert.equal(cqPayload.messages[0].text,"引用后的正文");
+assert.equal(cqPayload.messages[0].replyToId,"source-1");
+assert.equal(cqPayload.messages[1].hidden,true,"Offline HTML must hide only the empty CQ-only message");
+assert.equal(cqPayload.messages[0].tokens.map((token:{text:string})=>token.text).join(""),"引用后的正文");
 largeDocument.messages = Array.from({ length: 10_000 }, (_, index) => ({
 	id: `large-${index}`,
 	characterId: "alice",

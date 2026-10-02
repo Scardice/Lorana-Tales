@@ -202,7 +202,7 @@ export interface StorySettings {
   hideImages: boolean;
   /** Hide voice/audio messages without deleting their original data. */
   hideAudio: boolean;
-  /** Hide every message represented by, or containing, a CQ code. */
+  /** Hide CQ content while preserving surrounding text and resolved replies. */
   hideCqCodes: boolean;
   /** Enter key behavior in the editor composer. */
   enterKeyBehavior: "auto" | "send" | "newline";
