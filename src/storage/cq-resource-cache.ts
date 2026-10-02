@@ -640,10 +640,16 @@ export class CqResourceCache {
 				throw error;
 			}
 		}));
+		const failures = new Map<string, number>();
 		for (const result of results) {
 			if (result.status === "fulfilled") replacements.set(result.value.source, this.publicResourceUrl(result.value.resourceId, resourceBaseUrl));
-			else console.warn(`[resource-cache] Resource skipped: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`);
+			else {
+				const status = /resource download returned (\d{3})/.exec(String(result.reason))?.[1];
+				const category = status ? `upstream HTTP ${status}` : "download or storage failure";
+				failures.set(category, (failures.get(category) || 0) + 1);
+			}
 		}
+		if (failures.size) console.warn(`[resource-cache] Skipped ${[...failures.values()].reduce((a,b)=>a+b,0)} resources after retries: ${[...failures].map(([reason,count])=>`${reason}: ${count}`).join(", ")}; failed source URLs recorded in index.`);
 		if (!replacements.size && !videoCount) return { storedText, cachedCount: 0, avatarCount };
 
 		const rewrite = (value: unknown): unknown => {

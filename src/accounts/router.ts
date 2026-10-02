@@ -357,6 +357,16 @@ export class AccountService {
 		return false;
 	}
 
+	private authSubject(req: Request) {
+		return `auth:${this.prefix(req)}:${crypto.createHash("sha256").update(this.userAgent(req)).digest("hex")}`;
+	}
+
+	private requireAuthCaptcha(scope: string, req: Request, res: Response) {
+		if (this.captcha.consumeClearance(String(req.headers["x-captcha-clearance"] || ""), this.authSubject(req), scope)) return true;
+		json(res, 428, { error: "captcha_required", scope });
+		return false;
+	}
+
 	private allowCaptchaChallenge(req: Request) {
 		const key = this.prefix(req);
 		const cutoff = Date.now() - 60000;
@@ -402,10 +412,11 @@ export class AccountService {
 				const scope = String(body.scope || "verification-send").slice(0, 80);
 				const email = normalizeEmail(body.email);
 				const account = scope === "verification-send" ? null : await this.store.getUserByEmail(email);
-				const subject = session ? `${session.user.id}:${this.prefix(req)}` : `${account?.id || email}:${this.prefix(req)}`;
+				const authScope = ["auth-login", "auth-register", "auth-reset"].includes(scope);
+				const subject = authScope ? this.authSubject(req) : session ? `${session.user.id}:${this.prefix(req)}` : `${account?.id || email}:${this.prefix(req)}`;
 				const valid = await this.captcha.verify({ id: String(body.id || ""), answer: String(body.answer || ""), payload: body.payload, token: String(body.token || ""), remoteIp: this.ip(req) });
 				if (!valid) { json(res, 400, { error: "captcha_invalid" }); return; }
-				json(res, 200, { clearance: this.captcha.issueClearance(subject, scope) });
+				json(res, 200, { clearance: this.captcha.issueClearance(subject, scope), ...(authScope ? { mailClearance: this.captcha.issueClearance(subject, scope + "-mail") } : {}) });
 			} catch (error) {
 				if (error instanceof Error && error.message === "password_work_queue_busy") { json(res, 503, { error: "authentication_busy" }); return; }
 				json(res, 400, { error: "invalid_request" });
@@ -421,7 +432,12 @@ export class AccountService {
 				if (purpose === "register" && this.config.registration_enabled === false) { json(res, 403, { error: "registration_disabled" }); return; }
 				const currentSession = await this.getSession(req);
 				const subject = currentSession ? `${currentSession.user.id}:${this.prefix(req)}` : `${email}:${this.prefix(req)}`;
-				if (!this.captcha.consumeClearance(String(body.captchaClearance || ""), subject, "verification-send")) { json(res, 428, { error: "captcha_required", scope: "verification-send" }); return; }
+				const mailScope = purpose === "register" ? "auth-register" : purpose === "reset-password" ? "auth-reset" : "auth-login";
+				const mailToken = String(body.captchaClearance || "");
+				const cleared = purpose === "change-email"
+					? !!currentSession && this.captcha.consumeClearance(mailToken, subject, "verification-send")
+					: this.captcha.consumeClearance(mailToken, this.authSubject(req), mailScope + "-mail");
+				if (!cleared) { json(res, 428, { error: "captcha_required", scope: purpose === "change-email" ? "verification-send" : mailScope }); return; }
 				if (!this.mailer) { json(res, 503, { error: "smtp_not_configured" }); return; }
 				// Do not disclose whether a registration email already exists. Return the
 				// same shaped success response after CAPTCHA without sending another mail.
@@ -461,6 +477,7 @@ export class AccountService {
 		});
 
 		app.post("/api/account/register", async (req, res) => {
+			if (!this.requireAuthCaptcha("auth-register", req, res)) return;
 			try {
 				const body = readJson(req); const email = normalizeEmail(body.email); const password = String(body.password || ""); const username = String(body.username || "").trim(); const nickname = String(body.nickname || "").trim();
 				if (this.config.registration_enabled === false) { json(res, 403, { error: "registration_disabled" }); return; }
@@ -479,10 +496,10 @@ export class AccountService {
 				if (!this.allowPasswordAttempt(req)) { json(res, 429, { error: "login_rate_limited" }); return; }
 				const body = readJson(req); const identity = String(body.email || body.username || "").trim(); const password = String(body.password || "");
 				if (identity.length > 254 || password.length > 256) { json(res, 401, { error: "invalid_credentials" }); return; }
+				if (!this.requireAuthCaptcha("auth-login", req, res)) return;
 				const known = await this.store.getUserByIdentity(identity);
 				const user = await this.store.verifyPasswordIdentity(identity, password);
 				if (!user) { await this.store.recordRisk(known?.id || "", this.prefix(req), "login-failed", identity); json(res, 401, { error: "invalid_credentials" }); return; }
-				if (!await this.requireRiskClearance(user.id, "login", req, res)) return;
 				const current = await this.store.refreshExpiredBan(user);
 				if (current.status === "banned") { json(res, 403, { error: "account_banned", reason: current.banReason, until: current.banUntil }); return; }
 				if (current.status !== "active") { json(res, 403, { error: "account_disabled" }); return; }
@@ -491,7 +508,7 @@ export class AccountService {
 				if (!current.mustChangePassword && !trusted) {
 					const codeId = String(body.codeId || "");
 					const code = String(body.code || "").trim();
-					if (!codeId || !code) { json(res, 428, { error: "email_verification_required", email: current.email }); return; }
+					if (!codeId || !code) { json(res, 428, { error: "email_verification_required", email: current.email, clearance: this.captcha.issueClearance(this.authSubject(req), "auth-login"), mailClearance: this.captcha.issueClearance(this.authSubject(req), "auth-login-mail") }); return; }
 					if (!await this.store.verifyCode(codeId, current.email, "login", code)) { json(res, 401, { error: "verification_invalid" }); return; }
 				}
 				const device = trusted ? existingDevice : await this.store.createTrustedDevice(current.id, this.prefix(req), this.userAgent(req), Number(this.config.trusted_device_days || 90));
@@ -502,12 +519,12 @@ export class AccountService {
 		});
 
 		app.post("/api/account/login/code", async (req, res) => {
+			if (!this.requireAuthCaptcha("auth-login", req, res)) return;
 			try {
 				const body = readJson(req); const email = normalizeEmail(body.email); const user = await this.store.getUserByEmail(email);
 				if (!user) { json(res, 401, { error: "verification_invalid" }); return; }
 				const codeId = String(body.codeId || ""); const code = String(body.code || "");
 				if (!await this.store.verifyCode(codeId, email, "login", code, false)) { json(res, 401, { error: "verification_invalid" }); return; }
-				if (!await this.requireRiskClearance(user.id, "login-code", req, res)) return;
 				if (!await this.store.verifyCode(codeId, email, "login", code)) { json(res, 401, { error: "verification_invalid" }); return; }
 				const current = await this.store.refreshExpiredBan(user);
 				if (current.status === "banned") { json(res, 403, { error: "account_banned", reason: current.banReason, until: current.banUntil }); return; }
@@ -572,6 +589,7 @@ export class AccountService {
 		});
 
 		app.post("/api/account/password/reset", async (req, res) => {
+			if (!this.requireAuthCaptcha("auth-reset", req, res)) return;
 			try {
 				const body = readJson(req); const email = normalizeEmail(body.email); const password = String(body.password || ""); const user = await this.store.getUserByEmail(email);
 				if (!user || !validPassword(password) || !await this.store.verifyCode(String(body.codeId || ""), email, "reset-password", String(body.code || ""))) { json(res, 400, { error: "reset_invalid" }); return; }

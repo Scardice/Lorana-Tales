@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { solveAccountCaptcha } from "./account-captcha-test-helper";
 import { once } from "node:events";
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -285,7 +286,7 @@ const accountService = new AccountService(accountStore, {
 	session_days: 30,
 	trusted_device_days: 90,
 	cookie_same_site: "lax",
-	captcha_provider: "image",
+	captcha_provider: "altcha",
 	encryption_key: "test-only-encryption-key-that-is-long-enough",
 });
 const accountApp = express();
@@ -360,6 +361,7 @@ try {
 			"content-type": "application/json",
 			"user-agent": trustedDeviceAgent,
 			cookie: `scardice_account_device=${trustedDevice}`,
+			"x-captcha-clearance": (await solveAccountCaptcha(accountBase, "auth-login", trustedDeviceAgent)).clearance,
 		},
 		body: JSON.stringify({ email: testUser.email, password: "not-a-real-password" }),
 	});

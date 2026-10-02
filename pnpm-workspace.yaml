@@ -1,5 +1,5 @@
 overrides:
-  "brace-expansion@>=2.0.0 <2.1.4": 2.1.4
+  "brace-expansion@>=2.0.0 <2.1.7": 2.1.7
   # 1.20.2/1.20.3 were newly published without the stronger provenance used by
   # an earlier release; retain the mature audited release until that is fixed.
   fastq: 1.20.1

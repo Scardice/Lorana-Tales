@@ -77,12 +77,15 @@ export class CaptchaService {
 		this.cleanup();
 		const record = this.challenges.get(input.id);
 		if (!record || record.used || record.expiresAt <= Date.now()) return false;
+		// Claim before awaiting a provider: concurrent submissions cannot reuse a challenge.
+		record.used = true;
 		let valid = false;
 		if (record.provider === "image") {
 			valid = hash(`${input.id}:${String(input.answer || "").trim().toLowerCase()}`) === record.answerHash;
 		} else if (record.provider === "altcha") {
 			try {
-				valid = await verifySolution(input.payload as string, String(this.config.altcha?.hmac_key || this.config.encryption_key || ""));
+				const payload = typeof input.payload === "string" ? JSON.parse(Buffer.from(input.payload, "base64").toString("utf8")) : null;
+				valid = payload?.signature === record.altchaSignature && await verifySolution(input.payload as string, String(this.config.altcha?.hmac_key || this.config.encryption_key || ""));
 			} catch {
 				valid = false;
 			}

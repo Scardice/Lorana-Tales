@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { solveAccountCaptcha } from "./account-captcha-test-helper.js";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -63,6 +64,7 @@ async function main() {
 	config.app.cleanup_on_start = false;
 	config.resource_cache.enabled = false;
 	config.accounts.enabled = true;
+	config.accounts.captcha_provider = "altcha";
 	config.accounts.registration_enabled = false;
 	config.accounts.initial_admin_username = "audit_admin";
 	config.accounts.initial_admin_password = "Audit-admin-password-2026";
@@ -101,14 +103,40 @@ async function main() {
 		assert.equal((await fetch(`${base}/metrics`, { headers: { authorization: "Bearer audit-metrics-token" } })).status, 200);
 		assert.equal((await jsonRequest(base, "/api/account/projects")).response.status, 401);
 
-		const firstLogin = await jsonRequest(base, "/api/account/login", { method: "POST", body: JSON.stringify({ username: userA.username, password: "Audit-user-password-A" }) });
+		let passwordChecks = 0;
+        const originalVerify = service.store.verifyPasswordIdentity.bind(service.store);
+        service.store.verifyPasswordIdentity = async (...args) => { passwordChecks++; return originalVerify(...args); };
+        const blocked = await jsonRequest(base, "/api/account/login", {method:"POST",body:JSON.stringify({username:userA.username,password:"wrong"})});
+        assert.equal(blocked.response.status,428);
+        assert.equal(passwordChecks,0,"CAPTCHA must be checked before any password verification");
+        const proof = await solveAccountCaptcha(base,"auth-login","lorana-security-audit");
+        const fresh = await jsonRequest(base,"/api/account/captcha/challenge",{method:"POST",body:"{}"});
+        for(const id of [proof.challengeId,(fresh.body as {id:string}).id]){
+            const replay=await jsonRequest(base,"/api/account/captcha/verify",{method:"POST",body:JSON.stringify({id,payload:proof.payload,scope:"auth-login"})});
+            assert.equal(replay.response.status,400,"A solved ALTCHA payload cannot be reused or paired with another challenge");
+        }
+        const wrong = await jsonRequest(base,"/api/account/login",{method:"POST",headers:{"x-captcha-clearance":proof.clearance},body:JSON.stringify({username:userA.username,password:"wrong"})});
+        assert.equal(wrong.response.status,401);
+        const replay = await jsonRequest(base,"/api/account/login",{method:"POST",headers:{"x-captcha-clearance":proof.clearance},body:JSON.stringify({username:userA.username,password:"wrong"})});
+        assert.equal(replay.response.status,428);
+        assert.equal(passwordChecks,1,"One CAPTCHA authorizes at most one password guess");
+        const loginHeaders=async()=>({"x-captcha-clearance":(await solveAccountCaptcha(base,"auth-login","lorana-security-audit")).clearance});
+        const firstLogin = await jsonRequest(base, "/api/account/login", { method: "POST", headers: await loginHeaders(), body: JSON.stringify({ username: userA.username, password: "Audit-user-password-A" }) });
 		assert.equal(firstLogin.response.status, 428, "new devices require email verification");
-		const codeId = service.store.createVerificationCode(userA.email, "login", "123456", "127.0.0.0/24", 10);
-		const invalidCode = await jsonRequest(base, "/api/account/login", { method: "POST", body: JSON.stringify({ username: userA.username, password: "Audit-user-password-A", codeId, code: "000000" }) });
+		const continuation = firstLogin.body as {error:string;clearance:string;mailClearance:string};
+		assert.equal(continuation.error,"email_verification_required");
+		let deliveredCode = "";
+		Object.defineProperty(service,"mailer",{value:{async sendCode(email:string,code:string){assert.equal(email,userA.email);deliveredCode=code;}}});
+		const mailBody=JSON.stringify({email:userA.email.toUpperCase(),purpose:"login",captchaClearance:continuation.mailClearance});
+		const mail=await jsonRequest(base,"/api/account/verification/send",{method:"POST",body:mailBody});
+		assert.equal(mail.response.status,200,"login CAPTCHA also permits sending device mail without a second challenge");
+		const codeId=(mail.body as {id:string}).id;
+		assert.equal((await jsonRequest(base,"/api/account/verification/send",{method:"POST",body:mailBody})).response.status,428,"mail clearance is single-use");
+		const invalidCode = await jsonRequest(base, "/api/account/login", { method: "POST", headers: await loginHeaders(), body: JSON.stringify({ username: userA.username, password: "Audit-user-password-A", codeId, code: "000000" }) });
 		assert.equal(invalidCode.response.status, 401);
 		assert.equal((invalidCode.body as { error?: string }).error, "verification_invalid", "an entered but invalid device code must not be reported as a missing verification step");
 		const jarA: CookieJar = new Map();
-		const loginA = await jsonRequest(base, "/api/account/login", { method: "POST", body: JSON.stringify({ username: userA.username, password: "Audit-user-password-A", codeId, code: "123456" }) }, jarA);
+		const loginA = await jsonRequest(base, "/api/account/login", { method: "POST", headers: {"x-captcha-clearance":continuation.clearance}, body: JSON.stringify({ username: userA.username, password: "Audit-user-password-A", codeId, code: deliveredCode }) }, jarA);
 		assert.equal(loginA.response.status, 200);
 		const loginBody = loginA.body as { csrfToken: string };
 		assert(loginBody.csrfToken && jarA.has("scardice_account_session") && jarA.has("scardice_account_device"));
@@ -157,8 +185,12 @@ async function main() {
 		const logout = await jsonRequest(base, "/api/account/logout", { method: "POST", headers: { "x-csrf-token": loginBody.csrfToken } }, jarA);
 		assert.equal(logout.response.status, 200);
 		assert(jarA.has("scardice_account_device"), "logout preserves the trusted-device cookie");
-		const relogin = await jsonRequest(base, "/api/account/login", { method: "POST", body: JSON.stringify({ username: userA.username, password: "Audit-user-password-A" }) }, jarA);
+		const relogin = await jsonRequest(base, "/api/account/login", { method: "POST", headers: await loginHeaders(), body: JSON.stringify({ username: userA.username, password: "Audit-user-password-A" }) }, jarA);
 		assert.equal(relogin.response.status, 200, "trusted browser and network can log in without another email code");
+		for(const route of ["/api/account/register","/api/account/login/code","/api/account/password/reset"]){
+			const blocked=await jsonRequest(base,route,{method:"POST",body:"{}"});
+			assert.equal(blocked.response.status,428,route+" must enforce CAPTCHA independently of the frontend");
+		}
 
 		console.log("Live deployment security checks passed.");
 	} finally {
