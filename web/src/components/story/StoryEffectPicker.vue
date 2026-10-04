@@ -2,18 +2,16 @@
   <section class="effect-picker" aria-label="特效选择">
     <header><div><strong>特效选择</strong><small>{{ activeKind==='text'?'文本特效使用示例气泡预览':activeKind==='interaction'?'双方头像会在独立动画层中互动，不推动消息布局':'屏幕特效在下方示例画布内预览' }}</small></div></header>
     <nav v-if="kindCount>1" class="effect-kind-tabs" :style="{'--kind-count':kindCount}"><button v-if="showText" type="button" :class="{active:activeKind==='text'}" @click="activeKind='text'">文本特效</button><button v-if="showScreen" type="button" :class="{active:activeKind==='screen'}" @click="activeKind='screen'">屏幕特效</button><button v-if="showInteraction" type="button" :class="{active:activeKind==='interaction'}" @click="chooseInteractionKind">互动特效</button></nav>
-	    <div v-if="showText||showScreen||showPersistent" :key="previewKey" class="effect-preview" :class="previewClass" :style="previewStyle">
+	    <button type="button" class="preview-collapse" :aria-expanded="!previewCollapsed" @click="previewCollapsed=!previewCollapsed">{{ previewCollapsed ? "展开预览" : "收起预览" }}</button>
+        <div v-if="!previewCollapsed&&activeKind!=='interaction'&&(showText||showScreen||showPersistent)" :key="previewKey" class="effect-preview" :class="previewClass" :style="previewStyle">
 	      <i class="effect-preview__screen"></i>
 	      <span v-if="persistentEffect==='storm'||persistentEffect==='snowfall'" class="preview-weather" :class="`preview-weather--${persistentEffect}`"><i v-for="particle in weatherParticles" :key="particle" :style="weatherParticleStyle(particle,persistentEffect)"></i></span>
       <div class="effect-preview__message"><span class="effect-preview__avatar">洛</span><div><small>示例角色</small><p><span v-for="(token,index) in previewTokens" :key="index" :class="`preview-token preview-token--${normalizedTextEffect}`">{{ token }}</span></p></div></div>
       <button class="effect-preview-replay" type="button" aria-label="重播特效" @click="requestPreview"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z" /></svg><span>预览</span></button>
     </div>
-    <div v-if="showInteraction&&activeKind==='interaction'" :key="`interaction-${previewKey}`" class="interaction-preview" :class="[`interaction-preview--${interactionEffect}`,`interaction-preview--reaction-${interactionReaction}`,{'interaction-preview--reverse':sourcePosition==='right','interaction-preview--source-only':!targetName}]" :style="interactionPreviewStyle">
+    <div v-if="!previewCollapsed&&showInteraction&&activeKind==='interaction'" :key="`interaction-${previewKey}`" class="interaction-preview">
+      <InteractionStage :visual="interactionVisual" />
       <button class="effect-preview-replay" type="button" aria-label="重播互动特效" @click="requestPreview"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z" /></svg><span>预览</span></button>
-      <span class="interaction-preview__actor interaction-preview__actor--source"><img v-if="sourceAvatar" :src="sourceAvatar" alt="发起角色头像" /><i v-else>{{ sourceName.slice(0,1) }}</i><small>{{ sourceName }}</small></span>
-      <span v-if="!interactionEmoji&&(interactionEffect==='magic'||interactionEffect==='magic-circle')" class="magic-array"><i></i><i></i><i></i></span>
-      <span v-if="interactionEffect!=='magic-circle'" class="interaction-preview__projectile" :class="{'interaction-preview__projectile--custom':interactionEmoji}" :style="interactionPreviewStyle"><template v-if="interactionEmoji">{{ interactionEmoji }}</template><template v-else-if="interactionEffect==='throw'">🪨</template><span v-else-if="interactionEffect==='heart'" class="interaction-heart-particles">♥</span><span v-else-if="interactionEffect==='surprise'" class="interaction-surprise-mark">!</span><span v-else-if="interactionEffect==='impact'" class="interaction-impact-burst"></span><span v-else-if="interactionEffect==='bullet'" class="interaction-bullet-core"></span><span v-else-if="interactionEffect==='magic'" class="interaction-magic-orb"></span><span v-else class="interaction-preview__sprite"></span></span>
-      <span v-if="targetName" class="interaction-preview__actor interaction-preview__actor--target"><img v-if="targetAvatar" :src="targetAvatar" alt="目标角色头像" /><i v-else>{{ targetName.slice(0,1) }}</i><small>{{ targetName }}</small></span>
     </div>
 
     <div v-if="showText&&activeKind==='text'" class="effect-picker__section"><h4>文字出现动画 <small>采用经过调校的预制节奏</small></h4><div class="effect-card-grid"><button v-for="option in textOptions" :key="option.value" type="button" :class="{active:textEffect===option.value}" @click="chooseText(option.value)"><b>{{ option.glyph }}</b><span>{{ option.label }}</span></button></div></div>
@@ -45,6 +43,8 @@
 </template>
 
 <script setup lang="ts">
+import InteractionStage from "./InteractionStage.vue";
+import { INTERACTION_BASE_DURATION_MS } from "~/story/message-effects";
 import { computed, onMounted, ref } from "vue";
 import { useEffectPresets, type EffectPreset, type InteractionEffectPresetConfig, type ScreenEffectPresetConfig } from "~/composables/useEffectPresets";
 import { INTERACTION_DEFAULT_REACTION } from "~/story/message-effects";
@@ -56,9 +56,10 @@ const emit=defineEmits<{text:["inherit"|StoryStreamTokenAnimation];screen:[Story
 const {presets,folders,loadEffectPresets}=useEffectPresets();onMounted(()=>loadEffectPresets());
 function groupPresets(kind:EffectPreset["kind"]){const groups=[{id:"",name:"未分类",items:presets.value.filter(item=>item.kind===kind&&!item.folderId)}];for(const folder of folders.value)groups.push({id:folder.id,name:folder.name,items:presets.value.filter(item=>item.kind===kind&&item.folderId===folder.id)});return groups.filter(group=>group.items.length)}
 const presetGroups=computed(()=>groupPresets("screen"));const interactionPresetGroups=computed(()=>groupPresets("interaction"));
-const previewKey=ref(0);const replay=()=>{previewKey.value+=1};
+const previewCollapsed=ref(false);const previewKey=ref(0);const replay=()=>{previewCollapsed.value=false;previewKey.value+=1};
 const kindCount=computed(()=>Number(props.showText)+Number(props.showScreen)+Number(props.showInteraction));
 const activeKind=ref<"text"|"screen"|"interaction">(props.showText?"text":props.showScreen||props.showPersistent?"screen":"interaction");
+const interactionVisual=computed(()=>({effect:props.interactionEffect,reaction:props.interactionReaction,emoji:props.interactionEmoji,color:colorOptions.find(option=>option.value===props.interactionColor)?.hex||"#6bcfc6",duration:(INTERACTION_BASE_DURATION_MS[props.interactionEffect as StoryInteractionEffect]||1900)*100/Math.max(25,props.interactionSpeedPercent),avatarSize:42,sourceName:props.sourceName,sourceAvatar:props.sourceAvatar,targetName:props.targetName,targetAvatar:props.targetAvatar,reverse:props.sourcePosition==="right",sprite:vfxAssets.crescentSlash,labels:true}));
 const previewTokens=["这", "是", "一段", "演出", "预览"];
 const weatherParticles=Array.from({length:24},(_,index)=>index);
 function weatherParticleStyle(index:number,effect:StoryPersistentEffect|null){const seed=(index*47+13)%101;const base=effect==="storm"?.72+(seed%13)/20:4.2+(seed%27)/10;const duration=base*100/Math.max(10,props.persistentSpeed);return{"--weather-left":`${(index*37+11)%100}%`,"--weather-delay":`${-((index*29)%73)/10}s`,"--weather-particle-duration":`${duration}s`,animationDuration:`${duration}s`,"--weather-size":`${effect==="storm"?14+(seed%24):2+(seed%4)*.7}px`,"--weather-drift":`${((seed%17)-8)*1.3}px`} as Record<string,string>}
@@ -288,3 +289,8 @@ function applyPreset(preset:EffectPreset){if(preset.kind==="interaction"){const 
 	.interaction-preview:is(.interaction-preview--magic,.interaction-preview--blade,.interaction-preview--surprise).interaction-preview--reaction-none .interaction-preview__actor--target{animation-name:v10-preview-target-still!important}.interaction-preview:is(.interaction-preview--magic,.interaction-preview--blade,.interaction-preview--surprise).interaction-preview--reaction-bounce .interaction-preview__actor--target{animation-name:v10-preview-target-bounce!important}.interaction-preview:is(.interaction-preview--magic,.interaction-preview--blade,.interaction-preview--surprise).interaction-preview--reaction-stagger .interaction-preview__actor--target{animation-name:v10-preview-target-stagger!important}.interaction-preview:is(.interaction-preview--magic,.interaction-preview--blade,.interaction-preview--surprise).interaction-preview--reaction-faint .interaction-preview__actor--target{animation-name:v10-preview-target-faint!important}.interaction-preview:is(.interaction-preview--magic,.interaction-preview--blade,.interaction-preview--surprise).interaction-preview--reaction-shatter .interaction-preview__actor--target{animation-name:v10-preview-target-shatter!important}.interaction-preview:is(.interaction-preview--magic,.interaction-preview--blade,.interaction-preview--surprise).interaction-preview--reaction-gray .interaction-preview__actor--target{animation-name:v10-preview-target-gray!important}
 	.interaction-preview--surprise .interaction-preview__projectile{animation-name:v10-preview-surprise!important}
 	</style>
+<style scoped>
+.preview-collapse{display:block;margin:.35rem 0 .45rem auto;padding:.25rem .55rem;border:1px solid var(--control-border);border-radius:8px;background:var(--control-surface);color:var(--muted-text);font:inherit;font-size:.75rem;cursor:pointer}
+.effect-kind-tabs{position:sticky;top:0;z-index:4;background:var(--panel-surface)}
+@media(max-width:650px){.effect-preview,.interaction-preview{height:144px;min-height:144px}.effect-picker>header{display:none}}
+</style>

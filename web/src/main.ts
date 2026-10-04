@@ -1,5 +1,6 @@
 import { createApp } from "vue";
 import App from "./App.vue";
+import { installDialogInteractions } from "./ui/dialog-interactions";
 
 import "~/styles/index.scss";
 import "./str.polyfill.ts";
@@ -16,3 +17,5 @@ app.use(createPinia());
 // app.component('RecycleScroller', RecycleScroller);
 // app.use(ElementPlus);
 app.mount("#app");
+const disposeDialogs = installDialogInteractions();
+if (import.meta.hot) import.meta.hot.dispose(disposeDialogs);

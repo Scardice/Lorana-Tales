@@ -204,33 +204,33 @@ test.describe("Lorana Tales story editor", () => {
 		await expect(effectPicker.getByRole("button", { name: /踉跄/ })).toHaveClass(/active/);
 		await effectPicker.getByRole("button", { name: "重播互动特效" }).click();
 		await effectPicker.locator(".interaction-preview").evaluate(element => {
-			const source = element.querySelector(".interaction-preview__actor--source") as HTMLElement;
-			const target = element.querySelector(".interaction-preview__actor--target") as HTMLElement;
-			const projectile = element.querySelector(".interaction-preview__projectile") as HTMLElement;
+			const source = element.querySelector(".lt-interaction-character--source") as HTMLElement;
+			const target = element.querySelector(".lt-interaction-character--target") as HTMLElement;
+			const projectile = element.querySelector(".lt-interaction-projectile") as HTMLElement;
 			for (const node of [source, target, projectile]) { const animation=node.getAnimations()[0]; if(animation){ animation.pause(); const duration=Number(animation.effect?.getTiming().duration)||2600; animation.currentTime=duration*.05; } }
 		});
 		await page.waitForTimeout(20);
 		const interactionLayers = await effectPicker.locator(".interaction-preview").evaluate(element => {
-			const source = element.querySelector(".interaction-preview__actor--source") as HTMLElement;
-			const target = element.querySelector(".interaction-preview__actor--target") as HTMLElement;
-			const projectile = element.querySelector(".interaction-preview__projectile") as HTMLElement;
+			const source = element.querySelector(".lt-interaction-character--source") as HTMLElement;
+			const target = element.querySelector(".lt-interaction-character--target") as HTMLElement;
+			const projectile = element.querySelector(".lt-interaction-projectile") as HTMLElement;
 			return { sourceOpacity:Number(getComputedStyle(source).opacity),targetOpacity:Number(getComputedStyle(target).opacity),sourceZ:getComputedStyle(source).zIndex,targetZ:getComputedStyle(target).zIndex,projectileZ:getComputedStyle(projectile).zIndex,sourceAnimation:getComputedStyle(source).animationName,targetAnimation:getComputedStyle(target).animationName,targetDelay:getComputedStyle(target).animationDelay };
 		});
-		expect(interactionLayers.sourceAnimation).toContain("v10-preview-source");
-		expect(interactionLayers.targetAnimation).toContain("v10-preview-target-stagger");
+		expect(interactionLayers.sourceAnimation).toContain("v10-player-source");
+		expect(interactionLayers.targetAnimation).toContain("v10-target-stagger");
 		expect(interactionLayers.targetDelay).toBe("0s");
 		expect(interactionLayers.sourceOpacity).toBeGreaterThan(.8);
 		expect(interactionLayers.targetOpacity).toBeGreaterThan(.8);
 		expect(interactionLayers.sourceZ).toBe(interactionLayers.targetZ);
 		expect(Number(interactionLayers.projectileZ)).toBeGreaterThan(Number(interactionLayers.targetZ));
-		const playerInteraction = page.locator(".interaction-scene");
+		const playerInteraction = page.locator(".player-interaction-layer .lt-interaction-scene").last();
 		await expect(playerInteraction).toBeVisible();
 		await playerInteraction.evaluate(element => {
-			for (const node of element.querySelectorAll<HTMLElement>(".interaction-character,.interaction-projectile")) { const animation=node.getAnimations()[0]; if(animation){ animation.pause(); const duration=Number(animation.effect?.getTiming().duration)||2600; animation.currentTime=duration*.05; } }
+			for (const node of element.querySelectorAll<HTMLElement>(".lt-interaction-character,.lt-interaction-projectile")) { const animation=node.getAnimations()[0]; if(animation){ animation.pause(); const duration=Number(animation.effect?.getTiming().duration)||2600; animation.currentTime=duration*.05; } }
 		});
 		await page.waitForTimeout(20);
 		const playerLayers = await playerInteraction.evaluate(element => {
-			const source=element.querySelector(".interaction-character--source") as HTMLElement,target=element.querySelector(".interaction-character--target") as HTMLElement,projectile=element.querySelector(".interaction-projectile") as HTMLElement;
+			const source=element.querySelector(".lt-interaction-character--source") as HTMLElement,target=element.querySelector(".lt-interaction-character--target") as HTMLElement,projectile=element.querySelector(".lt-interaction-projectile") as HTMLElement;
 			return {sourceOpacity:Number(getComputedStyle(source).opacity),targetOpacity:Number(getComputedStyle(target).opacity),sourceZ:getComputedStyle(source).zIndex,targetZ:getComputedStyle(target).zIndex,projectileZ:getComputedStyle(projectile).zIndex,sourceAnimation:getComputedStyle(source).animationName,targetAnimation:getComputedStyle(target).animationName};
 		});
 		expect(playerLayers.sourceOpacity).toBeGreaterThan(.8);
@@ -241,20 +241,20 @@ test.describe("Lorana Tales story editor", () => {
 		expect(playerLayers.targetAnimation).toContain("v10-target-stagger");
 		await effectPicker.getByRole("button", { name: "重播互动特效" }).click();
 		await page.waitForTimeout(120);
-		await effectPicker.locator(".interaction-preview__projectile").evaluate(element => { const animation=element.getAnimations()[0]; if(animation){animation.pause();const duration=Number(animation.effect?.getTiming().duration)||2600;animation.currentTime=duration*.21;} });
-		await expect(effectPicker.locator(".magic-array")).toBeVisible();
-		expect(Number(await effectPicker.locator(".magic-array").evaluate((element) => getComputedStyle(element).opacity))).toBeGreaterThan(0.5);
+		await effectPicker.locator(".interaction-preview").evaluate(element => { for(const animation of element.getAnimations({subtree:true})){animation.pause();const duration=Number(animation.effect?.getTiming().duration)||2600;animation.currentTime=duration*.21;} });
+		await expect(effectPicker.locator(".lt-interaction-magic-array")).toBeVisible();
+		expect(Number(await effectPicker.locator(".lt-interaction-magic-array").evaluate((element) => getComputedStyle(element).opacity))).toBeGreaterThan(0.5);
 		const magicGeometry = await effectPicker.locator(".interaction-preview").evaluate(element => {
-			const avatar = element.querySelector(".interaction-preview__actor--source img,.interaction-preview__actor--source>i")!.getBoundingClientRect();
-			const array = element.querySelector(".magic-array")!.getBoundingClientRect();
+			const avatar = element.querySelector(".lt-interaction-character--source .lt-avatar")!.getBoundingClientRect();
+			const array = element.querySelector(".lt-interaction-magic-array")!.getBoundingClientRect();
 			return { avatarHeight: avatar.height, arrayHeight: array.height, centerDelta: Math.abs((avatar.top + avatar.height / 2) - (array.top + array.height / 2)) };
 		});
 		expect(magicGeometry.arrayHeight).toBeLessThanOrEqual(magicGeometry.avatarHeight * 1.8);
 		expect(magicGeometry.centerDelta).toBeLessThan(10);
 		const magicLaunch = await effectPicker.locator(".interaction-preview").evaluate(element => {
-			const array = element.querySelector(".magic-array")!.getBoundingClientRect();
-			const orb = element.querySelector(".interaction-magic-orb")!.getBoundingClientRect();
-			const projectile = element.querySelector(".interaction-preview__projectile")!;
+			const array = element.querySelector(".lt-interaction-magic-array")!.getBoundingClientRect();
+			const orb = element.querySelector(".lt-interaction-magic-orb")!.getBoundingClientRect();
+			const projectile = element.querySelector(".lt-interaction-projectile")!;
 			return { distance: Math.hypot(array.left + array.width / 2 - (orb.left + orb.width / 2), array.top + array.height / 2 - (orb.top + orb.height / 2)), array:{left:array.left,top:array.top,width:array.width,height:array.height},orb:{left:orb.left,top:orb.top,width:orb.width,height:orb.height}, animationName: getComputedStyle(projectile).animationName, animationDuration: getComputedStyle(projectile).animationDuration, transform:getComputedStyle(projectile).transform,translate:getComputedStyle(projectile).translate,currentTime: projectile.getAnimations()[0]?.currentTime };
 		});
 		expect(magicLaunch.distance).toBeLessThan(16);
@@ -263,32 +263,32 @@ test.describe("Lorana Tales story editor", () => {
 		await expect(effectPicker.getByRole("button", { name: /贴近回应/ })).toHaveClass(/active/);
 		await effectPicker.getByRole("button", { name: "重播互动特效" }).click();
 		await page.waitForTimeout(1100);
-		await expect(effectPicker.locator(".interaction-heart-particles")).toHaveCount(1);
+		await expect(effectPicker.locator(".lt-interaction-heart-particles")).toHaveCount(1);
 		await effectPicker.locator(".interaction-preview").screenshot({ path: "test-results/story-interaction-heart-light.png" });
 		await interactionTargetSelect.click();
 		await page.locator(".n-base-select-option").filter({ hasText: "无目标" }).click();
 		await effectPicker.getByRole("button", { name: /突然惊吓/ }).click();
-		await expect(effectPicker.locator(".interaction-surprise-mark")).toHaveText("!");
-		await expect(effectPicker.locator(".interaction-preview")).toHaveClass(/interaction-preview--source-only/);
+		await expect(effectPicker.locator(".lt-interaction-surprise-mark")).toHaveText("!");
+		await expect(effectPicker.locator(".lt-interaction-scene")).toHaveClass(/lt-interaction-scene--source-only/);
 		const targetlessSurpriseOffset = await effectPicker.locator(".interaction-preview").evaluate(element => {
-			const sender = element.querySelector(".interaction-preview__actor--source img,.interaction-preview__actor--source>i")!.getBoundingClientRect();
-			const mark = element.querySelector(".interaction-preview__projectile")!.getBoundingClientRect();
+			const sender = element.querySelector(".lt-interaction-character--source .lt-avatar")!.getBoundingClientRect();
+			const mark = element.querySelector(".lt-interaction-projectile")!.getBoundingClientRect();
 			return Math.hypot(sender.left + sender.width / 2 - (mark.left + mark.width / 2), sender.top + sender.height / 2 - (mark.top + mark.height / 2));
 		});
 		expect(targetlessSurpriseOffset).toBeLessThan(26);
 		await effectPicker.getByRole("button", { name: /近身冲击/ }).click();
 		await effectPicker.getByRole("button", { name: "重播互动特效" }).click();
 		await page.waitForTimeout(260);
-		expect(await effectPicker.locator(".interaction-preview__actor--source").evaluate(element => getComputedStyle(element).animationName)).toContain("v8-preview-impact-dash");
-		expect(await effectPicker.locator(".interaction-preview__projectile").evaluate(element => getComputedStyle(element).animationName)).toContain("v8-preview-impact-contact");
+		expect(await effectPicker.locator(".lt-interaction-character--source").evaluate(element => getComputedStyle(element).animationName)).toContain("v8-player-impact-dash");
+		expect(await effectPicker.locator(".lt-interaction-projectile").evaluate(element => getComputedStyle(element).animationName)).toContain("v8-player-impact-contact");
 		await effectPicker.getByRole("button", { name: /高速子弹/ }).click();
-		const bulletShape = await effectPicker.locator(".interaction-bullet-core").evaluate(element => ({ width: element.getBoundingClientRect().width, clipPath: getComputedStyle(element).clipPath }));
+		const bulletShape = await effectPicker.locator(".lt-interaction-bullet-core").evaluate(element => ({ width: element.getBoundingClientRect().width, clipPath: getComputedStyle(element).clipPath }));
 		expect(bulletShape.width).toBeLessThan(50);
 		expect(bulletShape.clipPath).not.toBe("none");
 		await effectPicker.getByRole("button", { name: /飞掷刀刃/ }).click();
-		expect(await effectPicker.locator(".interaction-preview__actor--source").evaluate(element => getComputedStyle(element).animationName)).toContain("v10-preview-source");
-		expect(await effectPicker.locator(".interaction-preview__projectile").evaluate(element => getComputedStyle(element).animationName)).toContain("v9-preview-blade");
-		const bladeShape = await effectPicker.locator(".interaction-preview__sprite").evaluate(element => ({ background: getComputedStyle(element).backgroundImage, clipPath: getComputedStyle(element).clipPath }));
+		expect(await effectPicker.locator(".lt-interaction-character--source").evaluate(element => getComputedStyle(element).animationName)).toContain("v10-player-source");
+		expect(await effectPicker.locator(".lt-interaction-projectile").evaluate(element => getComputedStyle(element).animationName)).toContain("v9-player-blade");
+		const bladeShape = await effectPicker.locator(".lt-interaction-projectile__sprite").evaluate(element => ({ background: getComputedStyle(element).backgroundImage, clipPath: getComputedStyle(element).clipPath }));
 		expect(bladeShape.background).toContain("linear-gradient");
 		expect(bladeShape.clipPath).not.toBe("none");
 		await effectPicker.getByRole("button", { name: "重播互动特效" }).click();
