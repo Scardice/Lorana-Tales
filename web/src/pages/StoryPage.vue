@@ -7,7 +7,7 @@
 		  <header><div><strong>原始语法</strong><small :class="{ error: rawError }">{{ rawError || (rawPending ? '等待补全当前标签…' : '已实时同步到图形预览') }}</small></div><nav><button @click="downloadRaw">下载语法</button><button class="primary" @click="closeRawEditor">{{ rawContext === 'player' ? '返回演出编辑' : '返回图形编辑' }}</button></nav></header>
 		  <StoryScriptEditor v-model="rawText" :error="rawError" :focus-request="rawFocusRequest" />
 		</section></Transition>
-		<div class="story-visual"><StoryEditor :archive="archive" :workspace-epoch="workspaceEpoch" :draft-status="draftStatus" :asset-url="assetUrl" :raw-active="rawOpen && rawContext === 'editor'" :community-notice="communityNotice" :claimable="pageParams.has('key')" @change="onChange" @download="download" @legacy-text="downloadLegacyText" @html="downloadPerformanceHtml" @word="downloadWord" @long-image="openLongImageExport" @preview="playerVisible=true" @raw="toggleRawEditor" @source-message="focusRawMessage" @import="fileInput?.click()" @clear="clearDraft" @sync="syncStorySource" /></div>
+		<div class="story-visual"><StoryEditor :archive="archive" :workspace-epoch="workspaceEpoch" :draft-status="draftStatus" :asset-url="assetUrl" :raw-active="rawOpen && rawContext === 'editor'" :community-notice="communityNotice" :claimable="pageParams.has('key')" @change="onChange" @load="onCloudLoad" @download="download" @legacy-text="downloadLegacyText" @html="downloadPerformanceHtml" @word="downloadWord" @long-image="openLongImageExport" @preview="playerVisible=true" @raw="toggleRawEditor" @source-message="focusRawMessage" @import="fileInput?.click()" @clear="clearDraft" @sync="syncStorySource" /></div>
 	  </div>
 	  <StoryPlayer :show="playerVisible" :archive="archive" :asset-url="assetUrl" :image-export-request="imageExportRequest" :source-active="rawOpen && rawContext === 'player'" :community-notice="communityNotice" @change="onChange" @raw="openRawFromPlayer" @source-message="focusRawMessage" @close="closePlayer" @download="download" @legacy-text="downloadLegacyText" @html="downloadPerformanceHtml" @word="downloadWord" />
 	</template>
@@ -22,6 +22,7 @@ import { parquetReadObjects } from "hyparquet";
 import { compressors } from "hyparquet-compressors";
 import { asyncBufferFrom } from "hyperparam";
 import { debounce } from "lodash-es";
+import { createDraftWorkspace } from "../story/draft-workspace";
 import { onBeforeUnmount, onMounted, ref, shallowRef, toRaw, watch } from "vue";
 import StoryEditor from "~/components/story/StoryEditor.vue";
 import StoryPlayer from "~/components/story/StoryPlayer.vue";
@@ -51,12 +52,13 @@ const rawOpen = ref(false); const rawText = ref(""); const rawError = ref(""); c
 let rawMessagePositions = new Map<string,number>();
 const assetUrls=createStoryAssetUrls(()=>archive.value);
 const pageParams = new URLSearchParams(location.search); const sourceKey = pageParams.get("key") || (pageParams.get("adminProject") ? `admin-project:${pageParams.get("adminProject")}` : "local");
-const draftKey = `story:${location.origin}/story?key=${sourceKey}`;
+const draftWorkspace = createDraftWorkspace(sourceKey);
 let sourceFingerprint = "";
 function storyFingerprint(value:StoryArchive){return serializeStoryScript(value)}
-const saveDraft = debounce(async(value:StoryArchive,generation:number)=>{try{
-  draftStatus.value="正在保存本机草稿…";
-  await saveLocalStoryDraft(draftKey,value);
+const saveDraft = debounce(async(value:StoryArchive,generation:number,key:string)=>{try{
+  if(generation===draftGeneration)draftStatus.value="正在保存本机草稿…";
+  await saveLocalStoryDraft(key,value);
+  draftWorkspace.saved(key);
   if(generation===draftGeneration)draftStatus.value="本机草稿已保存";
 }catch(error){if(generation===draftGeneration)draftStatus.value="本机草稿保存失败，请下载 SSP 备份";console.error(error)}},500);
 function flushDraft(){void saveDraft.flush();}
@@ -66,8 +68,8 @@ let loadedAdvancedProject = false;
 
 const assetUrl=assetUrls.resolve;
 function publishCompatibility(){window.dispatchEvent(new CustomEvent('lorana-story-compatibility',{detail:{legacyCompatible:legacyCompatible.value}}))}
-async function discardForLegacy(event:Event){const detail=(event as CustomEvent<{resolve:()=>void;reject:(error:unknown)=>void}>).detail;try{saveDraft.cancel();validateRaw.cancel();await deleteLocalStoryDraft(draftKey);legacyCompatible.value=true;publishCompatibility();detail?.resolve()}catch(error){detail?.reject(error)}}
-function onChange(value:StoryArchive){archive.value=value;assetUrls.prune();legacyCompatible.value=false;publishCompatibility();draftStatus.value="本机草稿待保存";saveDraft(value,++draftGeneration);if(rawOpen.value&&!applyingRaw){rawText.value=serializeStoryScript(value);rebuildRawMessagePositions()}}
+async function discardForLegacy(event:Event){const detail=(event as CustomEvent<{resolve:()=>void;reject:(error:unknown)=>void}>).detail;try{saveDraft.cancel();validateRaw.cancel();await deleteLocalStoryDraft(draftWorkspace.key);draftWorkspace.cleared();legacyCompatible.value=true;publishCompatibility();detail?.resolve()}catch(error){detail?.reject(error)}}
+function onChange(value:StoryArchive,replace=false){if(replace||(archive.value&&archive.value.document.id!==value.document.id)){flushDraft();draftWorkspace.fork()}archive.value=value;assetUrls.prune();legacyCompatible.value=false;publishCompatibility();draftStatus.value="本机草稿待保存";saveDraft(value,++draftGeneration,draftWorkspace.key);if(rawOpen.value&&!applyingRaw){rawText.value=serializeStoryScript(value);rebuildRawMessagePositions()}}
 function reloadPage(){location.reload()}
 function openLongImageExport(){playerVisible.value=true;imageExportRequest.value+=1}
 async function applyRKey(text:string){if(!shouldApplyQQImageRKeyReplacement(text))return text;try{return applyQQImageRKeyReplacement(text,await store.tryFetchRKey())}catch{return text}}
@@ -103,13 +105,14 @@ function rawParseBase():StoryArchive{return{document:structuredClone(toRaw(archi
 const validateRaw=debounce(()=>{if(!archive.value||!rawOpen.value)return;if(!rawStructureComplete(rawText.value)){rawPending.value=true;rawError.value='';return}rawPending.value=false;try{const parsed=parseStoryScript(rawText.value,rawParseBase());applyingRaw=true;onChange(parsed);rebuildRawMessagePositions();rawError.value=''}catch(error){rawError.value=error instanceof Error?error.message:'语法校验失败'}finally{applyingRaw=false}},220)
 watch(rawText,()=>{if(rawOpen.value)validateRaw()})
 function downloadRaw(){const blob=new Blob([rawText.value||serializeStoryScript(archive.value!)],{type:'text/plain;charset=utf-8'});const url=URL.createObjectURL(blob);const link=document.createElement('a');link.href=url;link.download=`${archive.value?.document.title||'故事'}.story.txt`;link.click();setTimeout(()=>URL.revokeObjectURL(url),1000)}
-function replaceDocument(value:StoryArchive){workspaceEpoch.value+=1;onChange(value)}
+function replaceDocument(value:StoryArchive){workspaceEpoch.value+=1;onChange(value,true)}
+function onCloudLoad(value:StoryArchive){onChange(value,true)}
 async function importFile(event:Event){const input=event.target as HTMLInputElement;const file=input.files?.[0];if(!file||!archive.value)return;try{if(file.name.toLowerCase().endsWith('.ssp')){replaceDocument(await readStoryPackage(file));return}const text=await file.text();if(/<story\s|<role\s|<msg\s/.test(text)){replaceDocument(parseStoryScript(text,rawParseBase()));return}const parsed=logMan.parse(await applyRKey(text));if(!parsed)throw new Error('无法识别该文件；请使用旧版染色器日志、SSP 或 Lorana Tales Story Language');const assets=new Map<string,Uint8Array>();replaceDocument({document:storyFromLogItems(parsed.items,[...parsed.charInfo.values()],{title:file.name.replace(/\.[^.]+$/,''),assets}),assets})}catch(error){alert(error instanceof Error?error.message:'导入失败')}finally{input.value=''}}
-async function clearDraft(){if(!confirm('确定删除这个故事在本浏览器保存的全部修改吗？'))return;if(!confirm('再次确认：此操作无法从浏览器恢复，已下载 SSP 不受影响。'))return;saveDraft.cancel();draftGeneration+=1;await deleteLocalStoryDraft(draftKey);archive.value=await loadRemote();workspaceEpoch.value+=1;assetUrls.prune();draftStatus.value='本机草稿已清除';sourceFingerprint=storyFingerprint(archive.value);legacyCompatible.value=!loadedAdvancedProject;publishCompatibility()}
+async function clearDraft(){if(!confirm('确定删除这个故事在本浏览器保存的全部修改吗？'))return;if(!confirm('再次确认：此操作无法从浏览器恢复，已下载 SSP 不受影响。'))return;saveDraft.cancel();draftGeneration+=1;await deleteLocalStoryDraft(draftWorkspace.key);draftWorkspace.cleared();archive.value=await loadRemote();workspaceEpoch.value+=1;assetUrls.prune();draftStatus.value='本机草稿已清除';sourceFingerprint=storyFingerprint(archive.value);legacyCompatible.value=!loadedAdvancedProject;publishCompatibility()}
 async function syncStorySource(payload:{record:{client:string;data:string;name?:string;updated_at?:string};sourceKey:string;sourceRevision?:string}){if(!archive.value)return;try{let text='';if(payload.record.client==='Parquet'){const bytes=Uint8Array.from(atob(payload.record.data),c=>c.charCodeAt(0));const file=await asyncBufferFrom({file:new File([bytes],'source.parquet'),byteLength:bytes.byteLength});const rows=await parquetReadObjects({file,compressors});text=JSON.stringify({items:rows.map(row=>({...row,id:Number(row.id),time:Number(row.time),commandId:Number(row.commandId)})),version:105})}else{text=strFromU8(unzlibSync(Uint8Array.from(atob(payload.record.data),c=>c.charCodeAt(0))))}const parsed=logMan.parse(await applyRKey(text));if(!parsed)throw new Error('源日志无法解析');const assets=new Map<string,Uint8Array>();const incoming=storyFromLogItems(parsed.items,[...parsed.charInfo.values()],{title:payload.record.name,sourceKey:payload.sourceKey,sourceRevision:payload.record.updated_at||payload.sourceRevision,assets});const merged=mergeStorySource(archive.value.document,incoming);onChange({document:merged.document,assets:new Map([...archive.value.assets,...assets])})}catch(error){alert(error instanceof Error?error.message:'同步源日志失败')}}
 function saveShortcut(event:KeyboardEvent){if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='s'){event.preventDefault();download()}}
 
-onMounted(async()=>{window.addEventListener('keydown',saveShortcut);window.addEventListener("pagehide",flushDraft);window.addEventListener("beforeunload",guardPendingDraft);document.addEventListener("visibilitychange",onVisibilityChange);window.addEventListener('lorana-story-discard-for-legacy',discardForLegacy);try{archive.value=await loadRemote();sourceFingerprint=storyFingerprint(archive.value);legacyCompatible.value=!loadedAdvancedProject;const draft=await loadLocalStoryDraft(draftKey);if(draft){const normalized={...draft,document:normalizeStoryDocument(draft.document)};if(storyFingerprint(normalized)===sourceFingerprint)await deleteLocalStoryDraft(draftKey);else if(confirm('检测到这个故事在当前浏览器保存的修改，是否恢复？')){archive.value=normalized;legacyCompatible.value=false}}publishCompatibility()}catch(error){console.error(error);errorText.value=error instanceof Error?error.message:'无法加载故事';archive.value=undefined}finally{loading.value=false}});
+onMounted(async()=>{window.addEventListener('keydown',saveShortcut);window.addEventListener("pagehide",flushDraft);window.addEventListener("beforeunload",guardPendingDraft);document.addEventListener("visibilitychange",onVisibilityChange);window.addEventListener('lorana-story-discard-for-legacy',discardForLegacy);try{archive.value=await loadRemote();sourceFingerprint=storyFingerprint(archive.value);legacyCompatible.value=!loadedAdvancedProject;const draft=await loadLocalStoryDraft(draftWorkspace.restoreKey);if(draft){const normalized={...draft,document:normalizeStoryDocument(draft.document)};if(storyFingerprint(normalized)!==sourceFingerprint&&confirm('检测到这个故事在当前浏览器保存的修改，是否恢复？')){archive.value=normalized;legacyCompatible.value=false;if(draftWorkspace.key!==draftWorkspace.restoreKey){await saveLocalStoryDraft(draftWorkspace.key,normalized);draftWorkspace.saved(draftWorkspace.key)}}}publishCompatibility()}catch(error){console.error(error);errorText.value=error instanceof Error?error.message:'无法加载故事';archive.value=undefined}finally{loading.value=false}});
 onBeforeUnmount(()=>{window.removeEventListener('keydown',saveShortcut);window.removeEventListener('lorana-story-discard-for-legacy',discardForLegacy);flushDraft();window.removeEventListener("pagehide",flushDraft);window.removeEventListener("beforeunload",guardPendingDraft);document.removeEventListener("visibilitychange",onVisibilityChange);validateRaw.cancel();assetUrls.dispose()});
 </script>
 
