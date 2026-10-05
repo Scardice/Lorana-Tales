@@ -16,6 +16,9 @@ assert.match(workspace, /minimumReleaseAgeStrict:\s*true/);
 assert.match(workspace, /minimumReleaseAgeIgnoreMissingTime:\s*false/);
 assert.match(workspace, /trustPolicy:\s*no-downgrade/);
 assert.match(workspace, /blockExoticSubdeps:\s*true/);
+assert.match(workspace, /patchedDependencies:\s*\r?\n\s+braces@3\.0\.3: patches\/braces@3\.0\.3\.patch/);
+assert.doesNotMatch(workspace, /(?:auditConfig|ignoreGhsas|ignoreCves|ignore-unfixable|ignore-registry-errors):/);
+assert.match(manifest.scripts["audit:dependencies"], /^node scripts\/audit-dependencies\.mjs$/);
 
 for (const unsafeSource of [/\btarball:/, /\bgit\+/, /\b(?:https?|git|ssh):\/\//]) {
 	assert.doesNotMatch(lockfile, unsafeSource, "lockfile contains an exotic dependency source");
@@ -37,6 +40,7 @@ for (const workflow of [".github/workflows/nightly-release.yml", ".github/workfl
 	}
 	assert.match(source, /actions\/checkout@[a-f0-9]{40}[\s\S]{0,180}persist-credentials:\s*false/);
 	assert.match(source, /pnpm install --frozen-lockfile/);
+	assert.match(source, /pnpm audit:dependencies/);
 }
 
 console.log("Supply-chain policy checks passed");

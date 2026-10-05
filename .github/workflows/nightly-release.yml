@@ -44,7 +44,7 @@ jobs:
 
       - name: Audit dependencies and security boundaries
         run: |
-          pnpm audit
+          pnpm audit:dependencies
           pnpm test:security
 
       - name: Verify story format

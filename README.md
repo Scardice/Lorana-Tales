@@ -434,7 +434,13 @@ python3 migrate_storage.py resource-index --source-driver sqlite --source ./data
 - 按硬盘容量设置日志、账号工程和资源配额，定期备份 SQLite/PostgreSQL、资源索引及资源目录，并实际演练恢复。
 - 首次登录后立即更换引导管理员凭据；管理员必须同时具有 `admin` 角色并处于 `admin` 组。
 - 分享地址是公开只读播放器链接，不支持永久有效；链接只能跟随工程到期或设置为更短的固定期限，删除/到期的工程无法再通过分享访问。
-- 上线前运行 `pnpm audit`、`pnpm test:security`、`pnpm lint`、`pnpm test:story-format`、`pnpm test:account-groups` 与 `pnpm build`。
+- 上线前运行 `pnpm audit:dependencies`、`pnpm test:security`、`pnpm lint`、`pnpm test:story-format`、`pnpm test:account-groups` 与 `pnpm build`。
+
+#### 构建依赖的本地安全补丁
+
+`braces@3.0.3` 的 [GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm) 目前没有上游修复版。它由 Tailwind 和组件导入插件间接引入，不在发布包的生产依赖中。本仓库使用 `patches/braces@3.0.3.patch` 为解析器及 compile/expand/stringify 遍历添加不可关闭的 128 层深度上限；异常输入会抛出带 `BRACES_MAX_DEPTH` 代码的受控错误，不再耗尽递归调用栈。
+
+`pnpm audit:dependencies` 仍运行完整 `pnpm audit --json`，不忽略开发依赖、注册表错误或其他漏洞。只有这一个 GHSA、精确版本 3.0.3、仅构建依赖的告警，且所有实际加载路径的源码 SHA-256 与攻击/兼容测试都通过后，才标记为“本地补丁已验证”。补丁缺失/被修改、其他版本、出现生产依赖路径、新漏洞或审计异常都会阻止发布；上游公布修复版本后也会要求重新处理。原始 `pnpm audit` 仍会报告这条已打本地补丁的版本告警，这是按版本审计的局限，不应通过添加全局忽略项消除它。Nightly 与正式 Release 使用同一门禁。
 
 ### 备用API（可选）
 

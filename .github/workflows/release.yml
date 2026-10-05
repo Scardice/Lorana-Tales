@@ -70,7 +70,7 @@ jobs:
 
       - name: Check source and story format
         run: |
-          pnpm audit
+          pnpm audit:dependencies
           pnpm lint
           pnpm test:security
           pnpm test:story-format

@@ -1,0 +1,2 @@
+# Unified patches contain significant context whitespace; keep their hashes portable.
+patches/*.patch text eol=lf -whitespace
