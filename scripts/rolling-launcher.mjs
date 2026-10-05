@@ -39,7 +39,7 @@ function readConfiguration() {
 		: ["localhost", "127.0.0.1", "::1"];
 	const frontendHost = normalizeConfiguredHost(value.app?.frontend_url);
 	if (frontendHost && !allowedHosts.includes(frontendHost)) allowedHosts.push(frontendHost);
-	return { host: String(value.server?.host || "0.0.0.0"), port: Number(value.server?.port || 3000), trustProxy: Boolean(value.server?.trust_proxy), trustedProxyCidrs, allowedHosts, channel, intervalSeconds: Math.max(60, Number(value.auto_update?.check_interval_seconds || 300)), dataPath: path.resolve(launcherRoot, String(value.auto_update?.staging_path || "./data/updates")) };
+	return { host: String(value.server?.host || "0.0.0.0"), port: Number(value.server?.port || 3000), trustProxy: Boolean(value.server?.trust_proxy), trustedProxyCidrs, allowedHosts, channel, intervalSeconds: updateIntervalMs(value.auto_update?.check_interval_seconds) / 1000, githubToken: updaterToken(value.auto_update), dataPath: path.resolve(launcherRoot, String(value.auto_update?.staging_path || "./data/updates")) };
 }
 
 export function normalizedHostHeader(value) {
@@ -139,7 +139,7 @@ function spawnWorker(entry, port, marker) {
 function waitForExit(child) { return new Promise((resolve) => child.once("exit", resolve)); }
 async function readBoundedBody(response, maxBytes) {
 	const declared = Number(response.headers.get("content-length") || 0);
-	if (declared > maxBytes) throw new Error("远端响应超过大小上限");
+	if (declared > maxBytes) { await response.body?.cancel().catch(() => undefined); throw new Error("远端响应超过大小上限"); }
 	if (!response.body) throw new Error("远端响应缺少正文");
 	const chunks = [];
 	let total = 0;
@@ -151,12 +151,150 @@ async function readBoundedBody(response, maxBytes) {
 	}
 	return Buffer.concat(chunks, total);
 }
-async function requestJson(url) {
-	const target = new URL(url);
-	if (target.protocol !== "https:" || target.hostname !== "api.github.com" || !target.pathname.startsWith(`/repos/${OFFICIAL_REPOSITORY}/`)) throw new Error("拒绝非官方 GitHub API 地址");
-	const response = await fetch(target, { headers: { Accept: "application/vnd.github+json", "User-Agent": "Lorana-Tales-Updater", "X-GitHub-Api-Version": "2022-11-28" }, redirect: "error", signal: AbortSignal.timeout(20_000) });
-	if (!response.ok) throw new Error(`GitHub API ${response.status}`);
-	return JSON.parse((await readBoundedBody(response, MAX_API_BYTES)).toString("utf8"));
+const MAX_TIMER_MS = 2_147_483_647;
+export function updateIntervalMs(seconds) {
+	const value = Number(seconds);
+	return Math.min(MAX_TIMER_MS, Math.max(60_000, (Number.isFinite(value) && value > 0 ? value : 300) * 1000));
+}
+export function updaterToken(settings = {}, environment = process.env) {
+	// Do not accidentally consume a broad CI/deployment GITHUB_TOKEN.
+	return String(environment.LORANA_GITHUB_TOKEN ?? settings.github_token ?? "").trim();
+}
+export function redactUpdaterDiagnostic(value, token = "") {
+	let text = String(value || "");
+	if (token) text = text.split(token).join("[redacted]");
+	return text.replace(/(?:github_pat_|gh[pousr]_)[A-Za-z0-9_]+/g, "[redacted]")
+		.replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, " ").slice(0, 700);
+}
+function githubDeadline(headers, now) {
+	let deadline = 0;
+	const retry = headers.get("retry-after");
+	if (retry) {
+		const seconds = Number(retry);
+		const time = /^[\d.]+$/.test(retry.trim()) && Number.isFinite(seconds) ? now + seconds * 1000 : Date.parse(retry);
+		if (Number.isFinite(time) && time > now) deadline = time + 1000;
+	}
+	if (headers.get("x-ratelimit-remaining") === "0") {
+		const reset = Number(headers.get("x-ratelimit-reset")) * 1000;
+		if (Number.isFinite(reset) && reset > now) deadline = Math.max(deadline, reset + 1000);
+	}
+	return Math.min(8.64e15, deadline);
+}
+function githubHeaderDetails(headers) {
+	const details = [];
+	for (const [header, label] of [["x-ratelimit-remaining", "remaining"], ["x-ratelimit-limit", "limit"], ["x-ratelimit-reset", "reset"], ["retry-after", "retry-after"], ["x-github-request-id", "request-id"]]) {
+		const value = headers.get(header);
+		if (value) details.push(label + "=" + value.slice(0, 96));
+	}
+	return details.join("; ");
+}
+function githubPollDeadline(headers, now) {
+	const seconds = Number(headers.get("x-poll-interval"));
+	return Math.max(githubDeadline(headers, now), Number.isFinite(seconds) && seconds > 0 ? now + Math.min(seconds, 86400) * 1000 : 0);
+}
+export class GitHubUpdateError extends Error {
+	constructor(message, status, kind, retryAt) {
+		super(message);
+		this.name = "GitHubUpdateError";
+		this.status = status;
+		this.kind = kind;
+		this.retryAt = retryAt;
+	}
+}
+/** One fixed, official API origin. Credentials never follow redirects or enter asset requests. */
+export function createGitHubReleaseClient({ channel, token = "", fetchImpl = fetch, now = Date.now } = {}) {
+	const endpoint = channel === "nightly" ? "releases/tags/nightly" : "releases?per_page=30";
+	const url = "https://api.github.com/repos/" + OFFICIAL_REPOSITORY + "/" + endpoint;
+	let cached, etag = "", failures = 0, retryAt = 0, inFlight;
+	function failure(status, kind, message, headers = new Headers()) {
+		failures += 1;
+		const backoff = Math.min(3_600_000, 60_000 * 2 ** Math.min(failures - 1, 6));
+		retryAt = Math.max(now() + (kind === "authentication" || kind === "configuration" ? 3_600_000 : backoff), githubDeadline(headers, now()));
+		const detail = githubHeaderDetails(headers);
+		const hint = kind === "rate-limit" ? (token ? "请等待限流重置；不要连续重试。" : "共享出口的匿名额度可能已耗尽，可配置 LORANA_GITHUB_TOKEN。")
+			: kind === "authentication" ? "请检查 Token 是否过期或撤销。"
+			: kind === "forbidden" ? "请检查 Token 读取权限或服务器出口限制；403 不一定是限流。" : "";
+		return new GitHubUpdateError(redactUpdaterDiagnostic("GitHub API " + (status || "request failed") + " [" + kind + "; " + (token ? "authenticated" : "anonymous") + "]: " + message + (detail ? "; " + detail : "") + (hint ? "; " + hint : ""), token), status, kind, retryAt);
+	}
+	async function request() {
+		if (now() < retryAt) throw new GitHubUpdateError("GitHub 检查仍处于退避等待，未发出请求", 0, "deferred", retryAt);
+		if (token && !/^[A-Za-z0-9_]{1,512}$/.test(token)) throw failure(0, "configuration", "更新 Token 格式无效，未发出请求");
+		const headers = { Accept: "application/vnd.github+json", "User-Agent": "Lorana-Tales-Updater", "X-GitHub-Api-Version": "2022-11-28" };
+		if (token) headers.Authorization = "Bearer " + token;
+		if (etag && cached) headers["If-None-Match"] = etag;
+		let response;
+		try {
+			response = await fetchImpl(url, { headers, redirect: "error", signal: AbortSignal.timeout(20_000) });
+		} catch {
+			throw failure(0, "network", "连接失败、超时或发生了被禁止的重定向；请检查到 api.github.com 的连接");
+		}
+		if (response.status === 304 && cached) {
+			failures = 0;
+			retryAt = githubPollDeadline(response.headers, now());
+			return cached;
+		}
+		if (!response.ok) {
+			let message = "未收到可用的 GitHub JSON 错误信息（可能是出口网关响应）";
+			try {
+				const body = JSON.parse((await readBoundedBody(response, 8192)).toString("utf8"));
+				if (typeof body?.message === "string") message = body.message;
+			} catch { /* Keep bounded diagnostics, never dump proxy HTML or raw headers. */ }
+			const limited = response.status === 429 || response.status === 403 && (response.headers.get("x-ratelimit-remaining") === "0" || response.headers.has("retry-after") || /rate.limit|secondary.rate|abuse.detection/i.test(message));
+			const kind = limited ? "rate-limit" : response.status === 401 ? "authentication" : response.status === 403 ? "forbidden" : response.status === 404 ? "not-found" : "http";
+			throw failure(response.status, kind, message, response.headers);
+		}
+		let body;
+		try {
+			body = JSON.parse((await readBoundedBody(response, MAX_API_BYTES)).toString("utf8"));
+			if (channel === "nightly" ? !body || body.tag_name !== "nightly" || Array.isArray(body) : !Array.isArray(body)) throw new Error("invalid release response");
+		} catch {
+			throw failure(response.status, "invalid-response", "Release 响应过大、不是 JSON 或结构不符合预期", response.headers);
+		}
+		cached = channel === "nightly" ? [body] : body;
+		const receivedTag = response.headers.get("etag") || "";
+		etag = /^(?:W\/)?"[\x21\x23-\x7e]{1,512}"$/.test(receivedTag) ? receivedTag : "";
+		failures = 0;
+		retryAt = githubPollDeadline(response.headers, now());
+		return cached;
+	}
+	return {
+		get retryAt() { return retryAt; },
+		getReleases() {
+			if (!inFlight) inFlight = request().finally(() => { inFlight = undefined; });
+			return inFlight;
+		},
+	};
+}
+/** Serial, cancellable checks: an API outage must never stop the serving worker. */
+export function createUpdatePoller(check, { intervalMs = 300_000, now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout, notBefore = () => 0, log = message => console.error(message) } = {}) {
+	const interval = updateIntervalMs(intervalMs / 1000);
+	let stopped = false, started = false, timer, failures = 0, dueAt = 0;
+	function arm() {
+		timer = setTimer(run, Math.min(MAX_TIMER_MS, Math.max(0, dueAt - now())));
+		timer?.unref?.();
+	}
+	async function run() {
+		timer = undefined;
+		if (stopped) return;
+		if (now() < dueAt) { arm(); return; }
+		let delay = interval;
+		try { await check(); failures = 0; }
+		catch (error) {
+			failures += 1;
+			const retryAt = Number(error?.retryAt);
+			delay = Math.max(interval, Math.min(3_600_000, 60_000 * 2 ** Math.min(failures - 1, 6)), Number.isFinite(retryAt) ? retryAt - now() : 0);
+			try { log("[updater] " + redactUpdaterDiagnostic(error instanceof Error ? error.message : "更新检查失败") + "; 保持当前服务，至少 " + Math.ceil(delay / 1000) + " 秒后重试"); } catch { /* Logging must not break serving or scheduling. */ }
+		}
+		if (stopped) return;
+		const earliest = Number(notBefore());
+		dueAt = Math.max(now() + delay, Number.isFinite(earliest) ? earliest : 0);
+		arm();
+	}
+	return {
+		start(delayMs = 10_000) { if (started || stopped) return; started = true; dueAt = now() + Math.max(0, delayMs); arm(); },
+		stop() { stopped = true; if (timer !== undefined) clearTimer(timer); },
+		get nextCheckAt() { return dueAt; },
+	};
 }
 function availablePort() { return new Promise((resolve, reject) => { const probe=http.createServer();probe.once("error",reject);probe.listen(0,"127.0.0.1",()=>{const address=probe.address();const port=typeof address==="object"&&address?address.port:0;probe.close(error=>error?reject(error):resolve(port))}) }); }
 export function healthCheckHost(allowedHosts) { return Array.isArray(allowedHosts) && allowedHosts.length ? String(allowedHosts[0]) : "127.0.0.1"; }
@@ -211,7 +349,7 @@ export function validateDownloadUrl(rawUrl, tagName, assetName, initial) {
 	}
 	return target;
 }
-async function fetchReleaseAsset(url, tagName, assetName) {
+export async function fetchReleaseAsset(url, tagName, assetName) {
 	let target = validateDownloadUrl(url, tagName, assetName, true);
 	for (let redirects = 0; redirects <= 5; redirects += 1) {
 		const response = await fetch(target, { headers: { "User-Agent": "Lorana-Tales-Updater" }, redirect: "manual", signal: AbortSignal.timeout(120_000) });
@@ -303,9 +441,10 @@ async function main(){
 	proxy.headersTimeout=15_000;proxy.requestTimeout=120_000;proxy.keepAliveTimeout=5_000;proxy.maxHeadersCount=100;
 	proxy.on("clientError",(_error,socket)=>socket.end("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n"));
 	proxy.listen(config.port,config.host,()=>console.log(`[updater] Rolling proxy listening at http://${config.host}:${config.port}; channel=${config.channel}`));
-	let updating=false;
-	const check=async()=>{if(updating)return;updating=true;try{
-		const releases=await requestJson(`https://api.github.com/repos/${OFFICIAL_REPOSITORY}/releases?per_page=30`);
+	const releaseClient=createGitHubReleaseClient({channel:config.channel,token:config.githubToken});
+	const check=async()=>{if(stopping)return;
+		const releases=await releaseClient.getReleases();
+		if(stopping)return;
 		if(!Array.isArray(releases))throw new Error("GitHub Release 响应格式无效");
 		const release=selectRelease(releases,config.channel,currentVersion,currentCommit);if(!release)return;
 		const nightly=config.channel==="nightly";
@@ -331,17 +470,20 @@ async function main(){
 			try{await extractTar(archivePath,temporary);await validatePackageRoot(temporary,release,version,nightly?"Nightly":release.prerelease?"Test Release":"Release");await fsp.rename(temporary,extracted)}catch(error){await fsp.rm(temporary,{recursive:true,force:true});throw error}
 		}
 		const {nextRoot,nextMarker}=await validatePackageRoot(extracted,release,version,nightly?"Nightly":release.prerelease?"Test Release":"Release");
-		const nextPort=await availablePort();const nextWorker=spawnWorker(path.join(nextRoot,"dist/bin/scardice-story-painter.js"),nextPort,nextMarker);
+		if(stopping)return;
+		const nextPort=await availablePort();if(stopping)return;const nextWorker=spawnWorker(path.join(nextRoot,"dist/bin/scardice-story-painter.js"),nextPort,nextMarker);
 		if(!await healthy(nextPort,nextMarker,internalHealthHost)){nextWorker.kill("SIGTERM");throw new Error("新版本健康检查失败，继续使用旧版本")}
+		if(stopping){nextWorker.kill("SIGTERM");return}
 		if(nextWorker.exitCode!==null)throw new Error("新版本在切换前意外退出，继续使用旧版本");
 		const previous=worker,previousPort=activePort,previousVersion=currentVersion,previousCommit=currentCommit;
 		let retirement=null;
 		nextWorker.once("exit",(code,signal)=>{if(stopping||worker!==nextWorker)return;if(previous.exitCode===null&&!previous.killed){worker=previous;activePort=previousPort;currentVersion=previousVersion;currentCommit=previousCommit;if(retirement)clearTimeout(retirement);console.error(`[updater] New version exited during rollback window (${code??signal}); restored ${currentVersion}+${currentCommit.slice(0,7)}`)}else{console.error(`[updater] Active worker exited (${code??signal}); public listener remains available with 503 responses`)}});
 		worker=nextWorker;activePort=nextPort;currentVersion=String(nextMarker.version);currentCommit=String(nextMarker.commit);console.log(`[updater] Switched to ${currentVersion}+${currentCommit.slice(0,7)} without closing public listener`);
 		const retirementStarted=Date.now();const retirePrevious=()=>{if(previous.exitCode!==null||previous.killed)return;const active=activeRequestsByPort.get(previousPort)||0;if(active===0||Date.now()-retirementStarted>=5*60_000){previous.kill("SIGTERM");return}retirement=setTimeout(retirePrevious,1000);retirement.unref()};retirement=setTimeout(retirePrevious,60_000);retirement.unref()
-	}catch(error){console.error("[updater]",error)}finally{updating=false}};
-	const timer=setInterval(check,config.intervalSeconds*1000);timer.unref();setTimeout(check,10_000).unref();
-	const stop=signal=>{if(stopping)return;stopping=true;clearInterval(timer);proxy.close(()=>worker.kill(signal));setTimeout(()=>worker.kill(signal),5000).unref()};process.on("SIGTERM",()=>stop("SIGTERM"));process.on("SIGINT",()=>stop("SIGINT"));
+	};
+	const poller=createUpdatePoller(check,{intervalMs:config.intervalSeconds*1000,notBefore:()=>releaseClient.retryAt,log:message=>console.error(redactUpdaterDiagnostic(message,config.githubToken))});
+	poller.start();
+	const stop=signal=>{if(stopping)return;stopping=true;poller.stop();proxy.close(()=>worker.kill(signal));setTimeout(()=>worker.kill(signal),5000).unref()};process.on("SIGTERM",()=>stop("SIGTERM"));process.on("SIGINT",()=>stop("SIGINT"));
 }
 export function isLauncherEntry(argvEntry, pmExecPath, modulePath = fileURLToPath(import.meta.url)) {
 	const candidate = String(pmExecPath || argvEntry || "").trim();

@@ -625,8 +625,9 @@ async function hydrateStoryAssets(source: StoryArchive): Promise<{ archive: Stor
   return { archive, failed };
 }
 
-async function syncStorySource(payload: { record: { client: string; data: string; name?: string; updated_at?: string }; sourceKey: string; sourceRevision?: string }) {
-  if (!storyArchive.value) return;
+async function syncStorySource(payload: { record: { client: string; data: string; name?: string; updated_at?: string }; sourceKey: string; sourceRevision?: string; expectedDocument: StoryArchive['document'] }) {
+  if (!storyArchive.value || toRaw(storyArchive.value.document) !== payload.expectedDocument || storyArchive.value.document.source.key !== payload.sourceKey) return;
+  const original = storyArchive.value;
   try {
     let rawText = "";
     if (payload.record.client === "Parquet") {
@@ -638,6 +639,7 @@ async function syncStorySource(payload: { record: { client: string; data: string
       rawText = strFromU8(unzlibSync(Uint8Array.from(atob(payload.record.data), (char) => char.charCodeAt(0))));
     }
     rawText = await applyQQImageRKey(rawText);
+    if (storyArchive.value !== original) return;
     const parsed = logMan.parse(rawText);
     if (!parsed) throw new Error("源日志格式无法解析");
     const incomingAssets = new Map<string, Uint8Array>();
@@ -646,6 +648,7 @@ async function syncStorySource(payload: { record: { client: string; data: string
     onStoryChange({ document: result.document, assets: new Map([...storyArchive.value.assets, ...incomingAssets]) });
     message.success(`同步完成：新增 ${result.added}、更新 ${result.updated}、移除 ${result.removed}${result.conflicts ? `，保留 ${result.conflicts} 个冲突` : ""}`);
   } catch (error) {
+    if (storyArchive.value !== original) return;
     console.error("同步源日志失败", error);
     message.error(error instanceof Error ? error.message : "同步源日志失败");
   }

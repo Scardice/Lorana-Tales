@@ -120,6 +120,26 @@ pm2 save
 
 自动更新的信任根是官方 GitHub 仓库及其 Release 权限，因此维护者账号必须启用强验证，并建议为 Release Action 配置受保护环境与人工审批。普通前后端功能会无停机切换；若 Release 修改的是启动器本身的安全逻辑，仍应在维护窗口重启一次服务管理器，使新的启动器代码成为下一轮更新基线。
 
+#### GitHub 403 / 429 与更新认证
+
+更新检查失败不会关闭现有工作进程。新版启动器会输出脱敏后的 GitHub 错误原因、请求 ID、剩余额度、重置时间及下一次重试等待秒数，而不是只输出 `GitHub API 403`：
+
+- `rate-limit`：遵守 `Retry-After` 与 `X-RateLimit-Reset`，缺少提示时使用至少一分钟、逐次增加到一小时的退避；重试也不会早于配置的检查间隔。
+- `authentication`：Token 已失效或被撤销，至少等待一小时再试；请更换凭据后重启启动器。
+- `forbidden`：可能是读取权限或出口限制，不能仅凭 403 当作限流；检查日志中的 GitHub 原因。HTML 网关错误不会整页写入日志。
+
+Nightly 只检查官方 `nightly` Release；测试／稳定通道查询 Release 列表。使用 ETag 条件请求复用未变化的数据，减少响应体和重复请求成本；认证请求返回 304 时不消耗主限流额度，规则见 [GitHub API 最佳实践](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api)。403 并不会触发不受信任的镜像回退，也不会跳过摘要、提交号或归档校验。
+
+共享公网出口可能很快耗尽匿名额度。可在现有 `[auto_update]` 段中添加：
+
+```toml
+github_token = "" # 可选，填入你自己的只读 GitHub Token；不要提交真实值
+```
+
+更推荐在 PM2／服务管理器中注入 `LORANA_GITHUB_TOKEN`。它优先于配置文件，显式空值可关闭认证；不会自动读取通用 `GITHUB_TOKEN` 或 `GH_TOKEN`，避免误用部署凭据。仅访问公开 Release，不需要写权限；细粒度 Token 的接口权限说明见 [GitHub Releases 文档](https://docs.github.com/en/rest/releases/releases#list-releases)。Token 只发送到固定的官方 `api.github.com` 端点，禁止 API 重定向，资产下载及 CDN 重定向不携带 Token。
+
+**旧启动器若已因 403 无法更新，不能等待它自动装上这份修复。** 下载经核验的新官方包，备份原部署目录下的 `scripts/rolling-launcher.mjs`，把新包内这个文件放回原部署目录的同名位置，保留原 `config.toml`、数据库和资源目录，再在维护窗口重启一次 PM2 项目（修改环境变量时同时刷新 PM2 环境）。仅重启旧文件或仅让新后端工作进程上线，都不会更新仍在内存中的旧启动器；这一次重启可能短暂中断访问，之后正常滚动更新仍使用原有健康检查与切流机制。
+
 ## 配置
 
 ### config.toml（主要配置方式）

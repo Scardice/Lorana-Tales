@@ -163,6 +163,7 @@ const DEFAULT_CONFIG = {
 	auto_update: {
 		channel: "nightly",
 		check_interval_seconds: 300,
+		github_token: "",
 		staging_path: "./data/updates",
 	},
 };

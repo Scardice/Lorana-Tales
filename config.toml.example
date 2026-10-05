@@ -38,6 +38,10 @@ channel = "nightly"
 # 检查间隔不低于 60 秒。新包会先校验 GitHub 摘要、SHA-256、提交号和归档结构，
 # 再在内部端口通过版本健康检查后无停机切流；切换后 30 秒内崩溃会回退旧工作进程。
 check_interval_seconds = 300
+# 可选：GitHub 只读 Token，提高 API 请求额度；环境变量 LORANA_GITHUB_TOKEN 优先（空值可禁用）。
+# 仅获取公开 Release，不需要写权限。不要提交真实 Token；不会发送到下载重定向地址。
+# 403/429 会记录脱敏原因并按 Retry-After / 限流重置时间退避，不影响当前服务。
+github_token = ""
 # 新版本包的暂存目录；应放在持久磁盘，且不要与其他程序共用。
 staging_path = "./data/updates"
 
